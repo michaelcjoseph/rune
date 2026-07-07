@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PROJECT_ROOT } from '../config.js';
 import type { GitRunner } from './sandbox-runtime.js';
 import type {
   FinalizerEffects,
@@ -50,7 +51,7 @@ const mockRunFinalizer = vi.hoisted(() =>
 const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({ ok: true })));
 type MockValidationCommandListResult =
   | { ok: true }
-  | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean } };
+  | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean; outputTail: string } };
 const mockRunValidationCommands = vi.hoisted(() =>
   vi.fn(async (
     _commands: readonly string[],
@@ -1218,14 +1219,14 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
-    it('fails closeout validation without committing, ticking the task, or emitting closeout progress', async () => {
-      const runId = 'mut-closeout-validation-fails';
-      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-fails-'));
+    it('repairs a failed closeout validation by re-running the task workflow and proceeding', async () => {
+      const runId = 'mut-closeout-validation-repairs';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-repairs-'));
       const productsFile = join(artifactsDir, 'products.json');
       const repoPath = join(artifactsDir, 'canonical-repo');
       const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
       const gitCalls: string[][] = [];
-      let tasksAtDestroy = '';
+      let capturedRunnerArgs: Record<string, unknown> | undefined;
 
       mkdirSync(repoPath, { recursive: true });
       writeFileSync(
@@ -1242,10 +1243,19 @@ describe('orchestratedWorkApplier', () => {
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      // ONE red validation; the beforeEach default restores {ok:true} for the
+      // repair attempt's confirming re-run.
       mockRunValidationCommands.mockResolvedValueOnce({
         ok: false,
         command: 'npm test',
-        result: { exitCode: 1, timedOut: false },
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail:
+            'FAIL src/streak.test.ts > renders the card\n' +
+            'AssertionError: expected 3 to be 2\n' +
+            ` at ${PROJECT_ROOT}/src/streak.test.ts:42`,
+        },
       });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
@@ -1253,7 +1263,7 @@ describe('orchestratedWorkApplier', () => {
         if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
         if (gitArgs[0] === 'rev-list') return { stdout: '', stderr: '' };
         if (gitArgs[0] === 'diff') return { stdout: '', stderr: '' };
-        if (gitArgs[0] === 'rev-parse') return { stdout: 'unexpected-closeout-sha\n', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-sha\n', stderr: '' };
         return { stdout: '', stderr: '' };
       });
 
@@ -1269,8 +1279,134 @@ describe('orchestratedWorkApplier', () => {
           wtDir = dir;
           return sandbox;
         },
-        destroyWorktree: async (sandbox) => {
-          tasksAtDestroy = readFileSync(join(sandbox.worktree, 'docs', 'projects', 'demo', 'tasks.md'), 'utf8');
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runGit,
+        createTaskWorkflowRunner: (runnerArgs) => {
+          capturedRunnerArgs = runnerArgs as unknown as Record<string, unknown>;
+          return async (task) => ({
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+            findingsLedger: [],
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes: [`completed ${task.text}`],
+            reviewerVerdict: { pass: true, objections: [] },
+          });
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, runId),
+          ctx,
+        ));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+        // The product's validationCommands reach the task-workflow runner (the
+        // coder's full-suite self-gate), not only the closeout gate.
+        expect(capturedRunnerArgs?.['validationCommands']).toEqual(['npm test']);
+
+        // The single red validation is repaired, not terminal: the run completes.
+        expect(terminal?.kind).toBe('completed');
+        // The repair re-run surfaces as attempt-start #2 on the first task.
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({ event: 'attempt-start', attemptNumber: 2 }),
+          }),
+        ]));
+        // Both tasks land normal closeout commits.
+        expect(gitCalls).toEqual(expect.arrayContaining([
+          ['commit', '-m', 'rune(rune): closeout — Build the streak core'],
+          ['commit', '-m', 'rune(rune): closeout — Render the streak card'],
+        ]));
+
+        // The failure artifact records exactly ONE entry, and the activity event fired.
+        const artifactPath = join(artifactsDir, runId, 'closeout-validation-failure.txt');
+        expect(existsSync(artifactPath)).toBe(true);
+        const artifact = readFileSync(artifactPath, 'utf8');
+        expect(artifact.match(/=== closeout validation failure @/g)?.length).toBe(1);
+        expect(artifact).toContain('FAIL src/streak.test.ts > renders the card');
+        expect(artifact).not.toContain(PROJECT_ROOT);
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'closeout-validation-failed',
+              taskId: 'build-the-streak-core',
+              line: expect.stringContaining('closeout-validation-failure.txt'),
+            }),
+          }),
+        ]));
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('exhausts closeout repair, WIP-commits the worktree, and parks blocked-on-human with the worktree preserved', async () => {
+      const runId = 'mut-closeout-validation-exhausts';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-exhausts-'));
+      const productsFile = join(artifactsDir, 'products.json');
+      const repoPath = join(artifactsDir, 'canonical-repo');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      const gitCalls: string[][] = [];
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(
+        productsFile,
+        JSON.stringify({
+          rune: {
+            repoPath,
+            baseBranch: 'main',
+            credentialsFile: '',
+            egressAllowlist: [],
+            validationCommands: ['npm test'],
+          },
+        }),
+        'utf8',
+      );
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      // Persistently red: every attempt (initial + repairs) fails validation.
+      mockRunValidationCommands.mockResolvedValue({
+        ok: false,
+        command: 'npm test',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail: 'FAIL src/streak.test.ts > renders the card',
+        },
+      });
+
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        gitCalls.push([...gitArgs]);
+        // Dirty tree so the WIP commit has something to preserve.
+        if (gitArgs[0] === 'status') return { stdout: ' M src/streak.ts\n', stderr: '' };
+        if (gitArgs[0] === 'rev-list') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'diff') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'wipsha1234567\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          writeValidProjectContext(dir);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
           destroyed = true;
         },
         workRunsDir: artifactsDir,
@@ -1294,18 +1430,60 @@ describe('orchestratedWorkApplier', () => {
           ctx,
         ));
         const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
-        const progress = events.filter((event) => {
-          const data = (event.data ?? {}) as Record<string, unknown>;
-          return event.kind === 'progress' && data['event'] === 'closeout-commit';
-        });
+        const terminalData = (terminal?.data ?? {}) as Record<string, unknown>;
 
-        expect(terminal?.kind).toBe('failed');
-        expect(String(((terminal?.data ?? {}) as Record<string, unknown>)['reason'])).toContain('closeout checks failed');
-        expect(gitCalls.some((args) => args[0] === 'commit')).toBe(false);
-        expect(gitCalls.some((args) => args[0] === 'add')).toBe(false);
-        expect(progress).toEqual([]);
-        expect(tasksAtDestroy).toContain('- [ ] Build the streak core');
-        expect(destroyed).toBe(true);
+        // Exhaustion is a PARKED (blocked-on-human) terminal, not a destructive
+        // failure and not a held one: parked keeps the run releasable via the
+        // standard blocked-on-human release path, which is what clears the
+        // preserved worktree so a later Start can re-dispatch.
+        expect(terminal?.kind).toBe('completed');
+        expect(terminalData['parked']).toBe(true);
+        expect(terminalData['held']).toBeUndefined();
+        expect(String(terminalData['reason'])).toMatch(
+          /orchestration parked on "Build the streak core": closeout checks failed after 3 attempts/,
+        );
+        expect(String(terminalData['reason'])).toContain('WIP preserved as wipsha1');
+        expect(terminalData['preserveWorktree']).toBe(true);
+        expect(destroyed).toBe(false);
+        // The supervision row is blocked-on-human — visible to release/approvals.
+        expect(mockUpsertRun).toHaveBeenCalledWith(
+          expect.objectContaining({ id: runId, status: 'blocked-on-human' }),
+          expect.anything(),
+        );
+
+        // Repair attempts surfaced (1..3), then the WIP preservation commit —
+        // and never a closeout commit.
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({ event: 'attempt-start', attemptNumber: 3 }),
+          }),
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'closeout-wip-commit',
+              taskId: 'build-the-streak-core',
+            }),
+          }),
+        ]));
+        const commitMessages = gitCalls
+          .filter((args) => args[0] === 'commit')
+          .map((args) => args[2] ?? '');
+        expect(commitMessages).toEqual([
+          expect.stringContaining('WIP — closeout blocked — Build the streak core'),
+        ]);
+
+        // One artifact entry per failed attempt.
+        const artifact = readFileSync(
+          join(artifactsDir, runId, 'closeout-validation-failure.txt'),
+          'utf8',
+        );
+        expect(artifact.match(/=== closeout validation failure @/g)?.length).toBe(3);
+
+        // The preserved worktree still shows the task unchecked.
+        if (wtDir === null) throw new Error('worktree was never created');
+        const tasksMd = readFileSync(join(wtDir, 'docs', 'projects', 'demo', 'tasks.md'), 'utf8');
+        expect(tasksMd).toContain('- [ ] Build the streak core');
       } finally {
         if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
         else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;

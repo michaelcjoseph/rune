@@ -538,6 +538,13 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(lower).toContain('whole branch');
     expect(lower).toContain('earlier commit on this branch');
     expect(lower).toContain('tree-state evidence');
+    // Test-deletion guardrail: an unjustified deleted/weakened test is an
+    // ordinary fail, judged against the coder's handoff-note justification.
+    expect(lower).toContain('test-deletion guardrail');
+    expect(lower).toContain('deletes or weakens a test');
+    expect(lower).toContain('coder handoff notes');
+    expect(lower).toContain('fail outcome');
+    expect(lower).toContain('not an objection class');
   });
 
   it('instructs the tech-lead diff gate to judge provided tree state, not only absence from a partial diff', async () => {
@@ -573,11 +580,120 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(lowerPrompt).toContain('missing-from-this-diff');
     expect(lowerPrompt).toContain('tree-state/context evidence');
     expect(lowerPrompt).toContain('diff regresses it');
+    expect(lowerPrompt).toContain('test-deletion guardrail');
+    expect(lowerPrompt).toContain('deletes or weakens a test');
+    expect(lowerPrompt).toContain('coder handoff notes');
+    expect(lowerPrompt).toContain('fail outcome');
 
     expect(techLeadMessage).toContain('## Spec');
     expect(techLeadMessage).toContain('BusRunEvent typing');
     expect(techLeadMessage).toContain('## Project context / tree-state evidence');
     expect(techLeadMessage).toContain('already exists in src/transport/notification-bus.ts');
+  });
+
+  it('renders the product validation commands in the coder prompt with the drive-green directive', async () => {
+    const captured: Array<{ systemPrompt: string; prompt: string }> = [];
+    const deps = buildProductionTeamTaskDeps(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        validationCommands: ['npm run build', 'npm test'],
+      },
+      makeSeams({
+        runExecution: async (opts) => {
+          captured.push({ systemPrompt: opts.systemPrompt ?? '', prompt: opts.prompt });
+          return greenExecution();
+        },
+      }),
+    );
+
+    await deps.coder({ task: sizedTask, spec: 'spec', context: 'ctx', tests: ['src/x.test.ts'] });
+
+    expect(captured).toHaveLength(1);
+    const { systemPrompt, prompt } = captured[0]!;
+    expect(prompt).toContain('## Validation commands');
+    expect(prompt).toContain('npm run build');
+    expect(prompt).toContain('npm test');
+    const lower = systemPrompt.toLowerCase();
+    expect(lower).toContain('exit 0');
+    expect(lower).toContain('fix → re-run');
+    expect(lower).toContain('definition of done');
+  });
+
+  it('omits the validation-commands section when the product has none, keeping the skip clause', async () => {
+    const captured: Array<{ systemPrompt: string; prompt: string }> = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async (opts) => {
+        captured.push({ systemPrompt: opts.systemPrompt ?? '', prompt: opts.prompt });
+        return greenExecution();
+      },
+    }));
+
+    await deps.coder({ task: sizedTask, spec: 'spec', context: 'ctx', tests: ['src/x.test.ts'] });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.prompt).not.toContain('## Validation commands');
+    expect(captured[0]!.systemPrompt.toLowerCase()).toContain('if no validation commands are listed');
+  });
+
+  it('forbids the coder from removing a test its implementation fails and requires TEST-REMOVED records', async () => {
+    const systemPrompts: string[] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async (opts) => {
+        systemPrompts.push(opts.systemPrompt ?? '');
+        return greenExecution();
+      },
+    }));
+
+    await deps.coder({ task: sizedTask, spec: 'spec', context: 'ctx', tests: ['src/x.test.ts'] });
+
+    const systemPrompt = systemPrompts[0] ?? '';
+    expect(systemPrompt).toContain('TEST-REMOVED:');
+    const lower = systemPrompt.toLowerCase();
+    expect(lower).toContain('never remove or weaken a test');
+    expect(lower).toContain('manual-live-gate');
+  });
+
+  it('carries the coder handoff notes into the reviewer and tech-lead diff bodies', async () => {
+    const messages: Array<{ role: string; message: string }> = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        messages.push({ role, message });
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+    const note = 'TEST-REMOVED: src/live.test.ts — hits live Stripe API; converted to manual-live-gate';
+
+    await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+      coderHandoffNotes: [note],
+    });
+    await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff', coderHandoffNotes: [note] });
+
+    const reviewerMessage = messages.find((entry) => entry.role === 'reviewer')?.message ?? '';
+    const techLeadMessage = messages.find((entry) => entry.role === 'tech-lead')?.message ?? '';
+    expect(reviewerMessage).toContain('## Coder handoff notes');
+    expect(reviewerMessage).toContain(note);
+    expect(techLeadMessage).toContain('## Coder handoff notes');
+    expect(techLeadMessage).toContain(note);
+
+    // Omitted notes ⇒ no section.
+    messages.length = 0;
+    await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    expect(messages.find((entry) => entry.role === 'reviewer')?.message ?? '').not.toContain('## Coder handoff notes');
   });
 
   it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {

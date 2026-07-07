@@ -375,6 +375,21 @@ function renderWorkTabs(view, activeTab = 'projects') {
   `</section>`;
 }
 
+// BusRunState (src/transport/notification-bus.ts): running|parked are live,
+// completed|no-op|partial|failed are terminal. Derived bus frames never carry
+// 'parked' today, but treat it as live so a parked run keeps its card.
+function isTerminalRunState(state) {
+  return Boolean(state) && state !== 'running' && state !== 'parked';
+}
+
+function runStatePillClass(state) {
+  if (state === 'completed') return 'pill-done';
+  if (state === 'failed') return 'pill-failed';
+  if (state === 'parked' || state === 'partial') return 'pill-warn';
+  if (state === 'running') return 'pill-inprogress';
+  return 'pill-default';
+}
+
 function renderAgents(agents) {
   const rows = list(agents).map(agent =>
     `<li class="${agent.active ? 'active' : ''}">` +
@@ -404,7 +419,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
   return `<article class="deep-live-run" data-run-id="${attr(activeRun.runId)}">` +
     `<div class="deep-row-head">` +
       `<strong>${escHtml(activeRun.runId)}</strong>` +
-      `<span class="status-pill pill-inprogress">${escHtml(state)}</span>` +
+      `<span class="status-pill ${runStatePillClass(state)}">${escHtml(state)}</span>` +
     `</div>` +
     `<div class="deep-run-meta">` +
       `<span>${escHtml(fmtTarget(target))}</span>` +
@@ -1126,6 +1141,7 @@ export function createProductDeepView({
   let streamingMessageIndex = -1;
   let opTicker = null;
   let monitoringPoller = null;
+  let terminalReloadInFlight = false;
 
   function persistSession() {
     session.chatMessages = chatMessages;
@@ -1604,9 +1620,7 @@ export function createProductDeepView({
     // card updates live in the background and is there when they switch to it.
     if (subscription?.applyEvent) {
       subscription.applyEvent(frame);
-      return;
-    }
-    if (frame.runId) {
+    } else if (frame.runId) {
       liveRuns = {
         ...liveRuns,
         [frame.runId]: {
@@ -1619,6 +1633,43 @@ export function createProductDeepView({
         },
       };
       render();
+    }
+    // A run that ends on its own never passes through the Start/Cancel click
+    // handlers, so this frame is the only signal that `current` (runControl,
+    // activeRun) is stale. Server state is already terminal when the frame
+    // reaches the client (mutations.ts persists supervision and clears the
+    // active handle in the same synchronous stretch as the publish), so the
+    // re-fetch cannot read a stale model.
+    if (frame.subKind === 'state' && isTerminalRunState(frame.state)) {
+      markRunAgentsIdle(frame.runId);
+      reconcileTerminatedRun();
+    }
+  }
+
+  // Runs AFTER the frame is routed: the subscription's onState overwrites
+  // liveRuns[runId] with feed state whose roster is still active:true (the
+  // bus never emits an all-idle agents frame), so idle-marking must come last.
+  function markRunAgentsIdle(runId) {
+    const live = liveRuns[runId];
+    const agents = list(live?.agents || (current?.activeRun?.runId === runId ? current.activeRun.agents : []));
+    if (!agents.length) return;
+    liveRuns = {
+      ...liveRuns,
+      [runId]: { ...(live || { runId }), agents: agents.map(agent => ({ ...agent, active: false })) },
+    };
+    render();
+  }
+
+  async function reconcileTerminatedRun() {
+    if (terminalReloadInFlight) return;
+    terminalReloadInFlight = true;
+    try {
+      await reloadProductAndOperations();
+    } catch (_) {
+      // Transient fetch blip: the card already shows terminal state locally
+      // (pill + idle roster); a later frame or manual action retries.
+    } finally {
+      terminalReloadInFlight = false;
     }
   }
 

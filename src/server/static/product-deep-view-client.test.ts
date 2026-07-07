@@ -1939,6 +1939,225 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }
   });
 
+  it('reconciles the product model when a run terminates on its own so Cancel flips back to Start', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      let state = {
+        mutations: {
+          active: [{
+            id: 'mut-live-project',
+            kind: 'work-run',
+            status: 'running',
+            payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+          }] as any[],
+        },
+      };
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') {
+          return state.mutations.active.length ? productView() : productView({ activeRun: undefined });
+        }
+        if (url === '/api/state') return state;
+        if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      let onState: ((state: unknown) => void) | undefined;
+      const createRunFeedSubscription = vi.fn((opts: { onState: (state: unknown) => void }) => {
+        onState = opts.onState;
+        return {
+          connect: vi.fn(async () => {}),
+          close: vi.fn(),
+          applyEvent(event: any) {
+            if (event.subKind === 'state') {
+              onState?.({ ...liveSnapshot, state: event.state, outcome: event.outcome, elapsedMs: event.elapsedMs, ts: event.ts });
+            }
+          },
+        };
+      });
+
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson: vi.fn(), loadOperations: true, createRunFeedSubscription });
+      await view.load();
+      expect(root.innerHTML).toMatch(/data-project-run-action=["']cancel["']/i);
+
+      // The run ends on its own — no operator click, only the terminal frame.
+      state = { mutations: { active: [] } };
+      const terminalFrame = {
+        kind: 'run-event',
+        subKind: 'state',
+        runId: 'run-live-1',
+        product: 'aura',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        state: 'failed',
+        outcome: 'failed',
+        elapsedMs: 200_000,
+        ts: '2026-06-23T12:05:00.000Z',
+      };
+      listeners.get('rune-webview-frame')?.({ detail: terminalFrame });
+      listeners.get('rune-webview-frame')?.({ detail: { ...terminalFrame, ts: '2026-06-23T12:05:01.000Z' } });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      // One initial load + one reconcile — the second frame is deduped by the in-flight guard.
+      expect(fetchJson.mock.calls.filter(call => call[0] === '/api/products/aura').length).toBe(2);
+      expect(root.innerHTML).toMatch(/data-project-run-action=["']start["'][\s\S]{0,120}>Start</i);
+      expect(root.innerHTML).toContain('No active run');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('does not re-fetch the product model on non-terminal run state frames', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView();
+        if (url === '/api/state') return { mutations: { active: [] } };
+        if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      let onState: ((state: unknown) => void) | undefined;
+      const createRunFeedSubscription = vi.fn((opts: { onState: (state: unknown) => void }) => {
+        onState = opts.onState;
+        return {
+          connect: vi.fn(async () => {}),
+          close: vi.fn(),
+          applyEvent(event: any) {
+            if (event.subKind === 'state') {
+              onState?.({ ...liveSnapshot, state: event.state, elapsedMs: event.elapsedMs, ts: event.ts });
+            }
+          },
+        };
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, loadOperations: true, createRunFeedSubscription });
+      await view.load();
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'run-event',
+          subKind: 'state',
+          runId: 'run-live-1',
+          product: 'aura',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          state: 'running',
+          elapsedMs: 140_000,
+          ts: '2026-06-23T12:05:00.000Z',
+        },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(fetchJson.mock.calls.filter(call => call[0] === '/api/products/aura').length).toBe(1);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('marks the run roster idle from the terminal frame even before the product re-fetch lands', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      let terminalPhase = false;
+      const fetchJson = vi.fn((url: string) => {
+        // After the terminal frame, the reconcile re-fetch hangs — the roster
+        // must already read idle from the frame alone.
+        if (terminalPhase && (url === '/api/products/aura' || url === '/api/state')) {
+          return new Promise(() => {});
+        }
+        if (url === '/api/products/aura') return Promise.resolve(productView());
+        if (url === '/api/state') return Promise.resolve({ mutations: { active: [] } });
+        if (url === '/api/work-runs/run-live-1/live') return Promise.resolve(liveSnapshot);
+        return Promise.reject(new Error(`unexpected fetch ${url}`));
+      });
+      let onState: ((state: unknown) => void) | undefined;
+      const createRunFeedSubscription = vi.fn((opts: { onState: (state: unknown) => void }) => {
+        onState = opts.onState;
+        return {
+          connect: vi.fn(async () => {}),
+          close: vi.fn(),
+          applyEvent(event: any) {
+            if (event.subKind === 'state') {
+              onState?.({ ...liveSnapshot, state: event.state, outcome: event.outcome, elapsedMs: event.elapsedMs, ts: event.ts });
+            }
+          },
+        };
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, loadOperations: true, createRunFeedSubscription });
+      await view.load();
+
+      terminalPhase = true;
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'run-event',
+          subKind: 'state',
+          runId: 'run-live-1',
+          product: 'aura',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          state: 'failed',
+          outcome: 'failed',
+          elapsedMs: 200_000,
+          ts: '2026-06-23T12:05:00.000Z',
+        },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const roster = root.innerHTML.match(/<ul class="deep-agents">[\s\S]*?<\/ul>/)?.[0] ?? '';
+      expect(roster).toContain('qa');
+      expect(roster).toContain('coder');
+      expect(roster).not.toContain('>active<');
+      expect(roster.match(/>idle</g)?.length).toBe(2);
+      expect(root.innerHTML).toContain('status-pill pill-failed');
+      expect(root.innerHTML).toMatch(/pill-failed["'][^>]*>failed</i);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('derives the run-card status pill class from live run state', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    for (const [state, pill] of [
+      ['failed', 'pill-failed'],
+      ['completed', 'pill-done'],
+      ['running', 'pill-inprogress'],
+      ['partial', 'pill-warn'],
+    ] as const) {
+      const html = renderProductDeepView(productView(), {
+        activeSidePanel: 'runs',
+        liveRuns: { 'run-live-1': { ...liveSnapshot, state } },
+      });
+      expect(html).toContain(`status-pill ${pill}`);
+    }
+  });
+
   it('renders every Fix state while retaining Plan for bugs and ideas and never exposing Fix on ideas', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

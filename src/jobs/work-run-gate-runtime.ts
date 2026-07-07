@@ -74,11 +74,31 @@ export interface GateRuntimeOpts {
 }
 
 /** Result of one validation command run in the integration worktree. */
+/**
+ * Rolling cap on the captured stdout+stderr tail of a validation command.
+ * Keep-the-end semantics: the failing assertion is at the end of a test run's
+ * output, and a chatty suite must not bloat logs/ artifacts (same magnitude as
+ * TREE_STATE_DIFF_MAX_CHARS in orchestrated-work-runner.ts).
+ */
+export const MAX_VALIDATION_OUTPUT_TAIL_CHARS = 20_000;
+
+/**
+ * After the child's `exit`, wait at most this long for `close` (stream flush)
+ * before finishing with whatever tail was captured. Without this, a grandchild
+ * inheriting the piped fds (e.g. a test-spawned daemon) would hold `close`
+ * hostage until the full command timeout and flip a passing run to a false
+ * `timedOut` — the same wedge work-runner.ts guards with REAP_FORCE_DONE_MS.
+ */
+const VALIDATION_STDIO_DRAIN_MS = 10_000;
+
 export interface ValidationCommandResult {
   /** Process exit code, or null if it was killed (e.g. on timeout). */
   exitCode: number | null;
   /** The command exceeded `commandTimeoutMs` and its process tree was reaped. */
   timedOut: boolean;
+  /** Merged stdout+stderr rolling tail (arrival order), capped at
+   *  MAX_VALIDATION_OUTPUT_TAIL_CHARS. Empty string when no output. */
+  outputTail: string;
 }
 
 /**
@@ -135,15 +155,27 @@ function defaultRunValidationCommand(
     const [bin, ...args] = command.trim().split(/\s+/);
     if (!bin) {
       // An empty command can't pass — treat as a non-zero (red) result.
-      resolve({ exitCode: 1, timedOut: false });
+      resolve({ exitCode: 1, timedOut: false, outputTail: '' });
       return;
     }
-    const child = spawn(bin, args, { cwd, stdio: ['ignore', 'ignore', 'ignore'], detached: true });
+    const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     registerActiveProcess(child);
+
+    // Merged stdout+stderr tail in arrival order, capped as it streams so a
+    // chatty suite can't grow memory unbounded.
+    let outputTail = '';
+    const capture = (chunk: string): void => {
+      outputTail = (outputTail + chunk).slice(-MAX_VALIDATION_OUTPUT_TAIL_CHARS);
+    };
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', capture);
+    child.stderr?.on('data', capture);
 
     let timedOut = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let drainTimer: NodeJS.Timeout | undefined;
     const killGroup = (signal: NodeJS.Signals): void => {
       if (child.pid === undefined) return;
       try {
@@ -167,11 +199,18 @@ function defaultRunValidationCommand(
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (drainTimer) clearTimeout(drainTimer);
       unregisterActiveProcess(child);
-      resolve({ exitCode, timedOut });
+      resolve({ exitCode, timedOut, outputTail });
     };
-    // `close` (not `exit`) for parity with the spawn pattern elsewhere — safe
-    // with `stdio: 'ignore'` and defensively correct if stdio is ever piped.
+    // `close` is load-bearing: it fires only after both piped streams end, so
+    // the captured tail is complete. The `exit`-keyed drain fallback bounds the
+    // case where a grandchild keeps the inherited pipe fds open — finish with
+    // the tail captured so far instead of wedging until the command timeout.
+    child.on('exit', (code) => {
+      drainTimer = setTimeout(() => finish(code), VALIDATION_STDIO_DRAIN_MS);
+      drainTimer.unref();
+    });
     child.on('close', (code) => finish(code));
     child.on('error', () => finish(null));
   });

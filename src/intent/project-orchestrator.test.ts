@@ -22,6 +22,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+  CLOSEOUT_REPAIR_CAP,
   runProjectOrchestration,
   type CloseoutCommit,
   type OrchestrationActivityEvent,
@@ -78,6 +79,15 @@ function readyEvidence(task: SelectedTask): TaskEvidence {
   };
 }
 
+function redCloseout(
+  outputTail = 'FAIL src/streak.test.ts > renders the card\nAssertionError: expected 3 to be 2',
+) {
+  return {
+    ok: false,
+    failure: { command: 'npm test', exitCode: 1, timedOut: false, outputTail },
+  } as const;
+}
+
 function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS): Harness {
   const state = {
     tasksMd,
@@ -116,7 +126,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     writeTasksMd: async (content) => {
       state.tasksMd = content;
     },
-    runCloseoutChecks: async () => true,
+    runCloseoutChecks: async () => ({ ok: true } as const),
     commitCloseout: async (task) => {
       const sha = `sha-${task.id}`;
       state.commits.push(sha);
@@ -1804,18 +1814,169 @@ describe('project-orchestrator — finalizer handoff', () => {
     expect(h.state.commits).toHaveLength(2);
   });
 
-  it('does not finalize or tick the task when closeout checks fail', async () => {
-    const h = makeHarness({ runCloseoutChecks: async () => false });
+});
+
+// ---------------------------------------------------------------------------
+// Closeout repair loop — failed checks feed back to the coder, exhaustion
+// WIP-commits and holds instead of failing destructively
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — closeout repair loop', () => {
+  it('repairs a failed closeout by re-running the workflow with the failing output as coder feedback', async () => {
+    const workflowCtxs: Array<{ taskId: string; feedback: GateRejectionFeedback | undefined }> = [];
+    let closeoutCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task, ctx) => {
+        workflowCtxs.push({ taskId: task.id, feedback: ctx.rejectionFeedback });
+        return readyEvidence(task);
+      },
+      runCloseoutChecks: async () => {
+        closeoutCalls++;
+        return closeoutCalls === 1 ? redCloseout() : ({ ok: true } as const);
+      },
+    });
     const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    // Task 1 ran twice (initial + one repair), task 2 once.
+    expect(workflowCtxs.map((c) => c.taskId)).toEqual([
+      'build-the-streak-core',
+      'build-the-streak-core',
+      'render-the-streak-card',
+    ]);
+    expect(workflowCtxs[0]?.feedback).toBeUndefined();
+    const feedback = workflowCtxs[1]?.feedback;
+    expect(feedback).toMatchObject({
+      rejectingRole: 'qa',
+      counterpartRole: 'coder',
+      rejectedRole: 'coder',
+      artifact: 'implementation-diff',
+      rejectedArtifact: 'implementation-diff',
+    });
+    expect(feedback?.reason).toContain('closeout validation failed');
+    expect(feedback?.reason).toContain('npm test');
+    expect(feedback?.reason).toContain('exited 1');
+    expect(feedback?.reason).toContain('AssertionError: expected 3 to be 2');
+    expect(feedback?.whatFailed).toContain('npm test');
+    // Repair attempts surface as attempt-start events: task 1 attempts 1+2, task 2 attempt 1.
+    const attemptNumbers = eventsByName(h.state.events, 'attempt-start')
+      .map((event) => eventData(event)?.['attemptNumber']);
+    expect(attemptNumbers).toEqual([1, 2, 1]);
+    expect(h.state.commits).toHaveLength(2);
+    expect((h.state.tasksMd.match(/- \[x\]/g) ?? []).length).toBe(2);
+  });
+
+  it('exhausts the repair budget, WIP-commits, and PARKS blocked-on-human with branch and worktree preserved', async () => {
+    let workflowRuns = 0;
+    const commitWip = vi.fn(async () => ({ sha: 'wipsha1234', subject: 'wip subject' }));
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+      runTaskWorkflow: async (task) => {
+        workflowRuns++;
+        return readyEvidence(task);
+      },
+      runCloseoutChecks: async () => redCloseout(),
+      commitWip,
+    });
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(workflowRuns).toBe(1 + CLOSEOUT_REPAIR_CAP);
+    expect(commitWip).toHaveBeenCalledTimes(1);
+    expect(commitWip).toHaveBeenCalledWith(expect.objectContaining({ id: 'build-the-streak-core' }));
+    // Parked, NOT held: a held terminal is invisible to the release path and
+    // its preserved git-registered worktree blocks the project's next Start.
     expect(res).toMatchObject({
       kind: 'blocked',
-      reason: 'closeout checks failed',
+      task: { id: 'build-the-streak-core' },
+      parked: {
+        status: 'blocked-on-human',
+        branch: 'rune-work/14-x',
+        worktreePath: '/tmp/rune-worktrees/aura/14-x',
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
+    });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts; WIP preserved as wipsha1/,
+    );
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+    expect(closeoutProgressEvents(h.state.events)).toEqual([]);
+  });
+
+  it('still parks on exhaustion when no commitWip dep is wired (fixtures compile without it)', async () => {
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+      runCloseoutChecks: async () => redCloseout(),
+    });
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      parked: { status: 'blocked-on-human', preserveWorktree: true },
+    });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts$/,
+    );
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+  });
+
+  it('falls back to a preserved operational hold when no worktreePath is wired', async () => {
+    const h = makeHarness({ runCloseoutChecks: async () => redCloseout() });
+    const res = await runProjectOrchestration(h.deps);
+
+    const raw = res as unknown as Record<string, unknown>;
+    expect(raw['kind']).toBe('held');
+    expect(String(raw['reason'] ?? '')).toMatch(/closeout checks failed after 3 attempts$/);
+    expect(raw['preserveBranch']).toBe(true);
+    expect(raw['preserveWorktree']).toBe(true);
+    expect(raw).not.toHaveProperty('parked');
+  });
+
+  it('routes a non-ready repair attempt through the existing blocked handling', async () => {
+    let calls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        calls++;
+        if (calls === 1) return readyEvidence(task);
+        return {
+          ...readyEvidence(task),
+          outcome: 'blocked',
+          blockedReason: 'coder could not repair',
+        };
+      },
+      runCloseoutChecks: async () => redCloseout(),
+    });
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: 'coder could not repair',
       task: { id: 'build-the-streak-core' },
     });
-    expect(h.state.finalizeCalled).toBe(false);
+    expect(res).not.toHaveProperty('parked');
     expect(h.state.commits).toEqual([]);
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
-    expect(closeoutProgressEvents(h.state.events)).toEqual([]);
+  });
+
+  it('swallows a commitWip throw — the park itself must land', async () => {
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+      runCloseoutChecks: async () => redCloseout(),
+      commitWip: async () => {
+        throw new Error('git broke');
+      },
+    });
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      parked: { status: 'blocked-on-human' },
+    });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts$/,
+    );
   });
 });
 

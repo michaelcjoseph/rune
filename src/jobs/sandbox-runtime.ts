@@ -352,10 +352,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   const worktree = worktreePathFor(opts.product, opts.project, opts.worktreeRoot);
 
   if (existsSync(worktree)) {
-    throw new Error(
-      `createWorktree: target path already exists: ${worktree} ` +
-        `(an orphan from a prior run? run cleanupOrphanWorktrees() or remove manually)`,
-    );
+    await reclaimPreservedWorktree(runGit, product.repoPath, worktree);
   }
 
   // Resolve the branch point + the `git worktree add` args. Three cases:
@@ -705,6 +702,72 @@ export interface DestroyWorktreeOpts {
    *  callers should always pass this; tests opt in. */
   worktreeRoot?: string;
   runGit?: GitRunner;
+}
+
+/**
+ * Handle a createWorktree target path that already exists.
+ *
+ * A held/parked run preserves its worktree, and a preserved worktree is still
+ * git-REGISTERED — `cleanupOrphanWorktrees` deliberately skips registered
+ * dirs — so without this the project's next Start would fail on the existing
+ * path forever (2026-07-07 codex review finding). Reclaim it only when that is
+ * provably safe: registered AND `git status --porcelain` clean — any preserved
+ * work is already committed on the branch, which survives the removal and is
+ * checked back out by the resume path. A dirty tree is never auto-destroyed
+ * (it may hold a finding-hold's uncommitted diff or a human's manual fix); an
+ * unregistered dir keeps the original throw — that is the boot orphan sweep's
+ * job, and the error's `cleanupOrphanWorktrees()` advice actually applies.
+ */
+async function reclaimPreservedWorktree(
+  runGit: GitRunner,
+  repoPath: string,
+  worktree: string,
+): Promise<void> {
+  let registered = false;
+  try {
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: repoPath });
+    registered = parseRegisteredWorktrees(stdout).has(worktree);
+  } catch {
+    // Probe failure → fail closed to the unregistered throw below.
+  }
+  if (!registered) {
+    throw new Error(
+      `createWorktree: target path already exists: ${worktree} ` +
+        `(an orphan from a prior run? run cleanupOrphanWorktrees() or remove manually)`,
+    );
+  }
+
+  let porcelain: string;
+  try {
+    const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktree });
+    porcelain = stdout;
+  } catch (err) {
+    throw new Error(
+      `createWorktree: a preserved worktree exists at ${worktree} but its state is ` +
+        `unreadable (${(err as Error).message}) — remove it manually ` +
+        `(git worktree remove --force) and retry`,
+    );
+  }
+  if (porcelain.trim() !== '') {
+    throw new Error(
+      `createWorktree: preserved worktree at ${worktree} has uncommitted changes — ` +
+        `inspect it and commit the work to its branch or discard it ` +
+        `(git worktree remove --force), then retry; refusing to auto-remove dirty work`,
+    );
+  }
+
+  // Clean + registered → safe to reclaim. `--force` only bypasses git's
+  // untracked/ignored-file refusal (e.g. the node_modules symlink
+  // linkWorktreeDeps creates); cleanliness was verified via porcelain above.
+  try {
+    await runGit(['worktree', 'remove', '--force', worktree], { cwd: repoPath });
+  } catch (err) {
+    throw new Error(
+      `createWorktree: failed to reclaim clean preserved worktree at ${worktree}: ` +
+        `${(err as Error).message} — remove it manually (git worktree remove --force) and retry`,
+    );
+  }
+  log.warn('createWorktree: reclaimed clean preserved worktree', { worktree });
 }
 
 /**

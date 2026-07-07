@@ -18,7 +18,7 @@ Charters load via `composeRoleContext(role, instruction)` (`src/roles/loader.ts`
 
 Two structural facts to hold onto:
 
-- **The green suite is gated twice** — once per task at closeout (C3), once at the final merge (D3). Both run the product's `validationCommands` (for `rune`: `npm run build` + `npm test`). A task whose deliverable is a deliberately-red test suite cannot clear either gate.
+- **The green suite runs three times** — the coder self-gate in-loop (the coder runs the product's `validationCommands` in its worktree and iterates fix → re-run until green before handing back), once per task at closeout (C3, a confirming re-run), and once at the final merge (D3). All three run the product's `validationCommands` (for `rune`: `npm run build` + `npm test`); C3 and D3 are the mechanical gates. A task whose deliverable is a deliberately-red test suite cannot clear either mechanical gate.
 - **Exactly one human gate** in the whole lifecycle: `/approve` (A5). Everything downstream of it is automated and adds zero approval points (project-20 invariant, asserted in tests). The manual live-release gate some project `tasks.md` files carry is a Definition-of-Done note, not a pipeline gate.
 
 ---
@@ -74,13 +74,15 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 | a | reviewer-independence pre-gate | orchestrator | (implicit) | a reviewer provider distinct from the coder's exists → pass; null → terminal `block` (fail-closed, no rounds) |
 | b | QA writes tests | qa | — | tests authored pinning the task contract (or a `no-code-test-rationale`) |
 | c | tech-lead test-intent | tech-lead | **`test-intent`** | verdict `approved===true`; FAIL → loop back to QA (≤ cap) then `block` |
-| d | coder implements | coder | — | diff produced to satisfy the QA tests; executor throw → `failed` |
+| d | coder implements | coder | — | diff produced to satisfy the QA tests AND drive the product `validationCommands` green in the worktree (coder self-gate, prompt-enforced); executor throw → `failed` |
 | e | coder self-review | coder | — | **exactly one** fix-it pass over its own diff (`runSelfReview`); throw → `failed` |
 | f | QA re-validate (conditional) | qa | `implementation-diff` | only if self-review changed diff behavior; `approved===true` else terminal `block` |
 | g | reviewer review | reviewer (cross-provider) | **`reviewer-verdict`** | max finding severity ≤ low (`low`→pass-with-warnings; `medium/high/critical`→fail→objection loop); malformed verdict → terminal `failed` |
 | h | tech-lead diff review | tech-lead | **`implementation-diff`** | pass/pass-with-warnings; runs **every** round regardless of reviewer outcome; fail → objection loop |
 | i | designer review (conditional) | designer | **`design-review`** | only if `task.designerNeeded` — production `toSizedTask` hardcodes this **false**, so the stage is inert in the orchestrated path today |
 | — | round-exit decision | orchestrator | — | all gates pass + all prior ledger findings verified + open severity ≤ low → `ready-for-closeout` |
+
+**Test-deletion guardrail:** gates g and h fail a diff that deletes or weakens a test unless the coder's handoff notes (threaded into both bodies as `## Coder handoff notes`) justify it — a sandbox-impossible external/live dependency or a demonstrated flake, recorded as `TEST-REMOVED: <path> — <reason>`; a test that is red because the implementation fails it may never be removed.
 
 **Objection loop:** findings above `low` thread back as `rejectionFeedback` (+ a severity-sorted findings ledger) into the next coder round, up to 3 rounds (`ORCHESTRATED_ROUND_CAP`; hard budget 4). Terminals: `all-low` or stagnation (severity flat ≥3 rounds, no non-reversible high/critical) → closeout; a non-reversible high/critical residue at cap → **held**; unresolved reversible feedback at cap → **block**. Every rejection also drafts a best-effort gate-learning lesson into the counterpart role's `agents/<role>/memory.md` (never blocks the retry). There is no per-task human park and no PM-wrapup call from `runGated` — per-task terminals are machine-owned `ready-for-closeout` / `block` / `failed`.
 
@@ -89,12 +91,12 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 Ordered so every commit is finalizer-ready:
 
 1. Compute **both** the context update and the checkbox tick (`markSelectedTaskComplete`, ticks exactly the selected task by text+section, refuses a stale match) **before** writing either.
-2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1.**
+2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with the failing output tail, and the scrubbed tail feeds back to the coder as `GateRejectionFeedback` (qa→coder, `implementation-diff`) for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs.
 3. Persist context, then the tick.
 4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
 5. `verifyCleanWorktree` — `git status --porcelain` empty.
 
-Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → `blocked` (stops the run)**; worktree not clean → **hold**.
+Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → bounded coder repair loop** (2 re-runs with the failing output tail as gate feedback), still red after 3 attempts → best-effort WIP commit (`rune(<product>): WIP — closeout blocked — <task>`) + **parked** (`blocked-on-human`; branch + worktree preserved, releasable via the standard release path — release cold-finalizes and removes the worktree so a later Start can re-dispatch); worktree not clean → **hold**.
 
 ## C4 — Advance / loop
 Re-read `tasks.md`; ticked task skipped, next selected. No `- [ ]` remaining = **branch-complete** → Phase D.
@@ -120,9 +122,9 @@ D3 runs entirely in a **throwaway detached integration worktree** at `baseBranch
 | State | Meaning | Trigger |
 |---|---|---|
 | **completed / finalized** | merged to `main`, project marked Done | D3 green + merge/push landed |
-| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, or merge-gate refusal |
-| **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
-| **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, `closeout checks failed`, or loop non-convergence |
+| **held** | branch-complete, branch + worktree preserved, no merge; a later Start auto-reclaims a **clean** preserved worktree (`createWorktree` removes + re-adds it), while a **dirty** one refuses with commit-or-discard guidance — uncommitted work is never auto-destroyed | non-reversible high/critical finding, operational failure, or merge-gate refusal |
+| **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; closeout repair exhaustion (WIP-committed); `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
+| **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, or loop non-convergence |
 | **failed** | hard failure | worktree-create error, orchestration throw, user cancel |
 
 Cross-cutting supervision (`jobs/stall-check-runner.ts`, 30s tick): `checkStalledRuns` kills child-dead runs (5min); `planQuietNudges` then `planQuietCancel` handle alive-but-silent runs (keyed on `lastOutputAt`); `planMaxRuntimeKills` enforces `WORK_RUN_MAX_RUNTIME_MS` regardless of liveness (fail-toward-kill). A system cancel is honored at the next task boundary. → `subsystems.md` for the supervision-store field-merge invariants.
