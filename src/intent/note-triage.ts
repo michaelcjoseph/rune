@@ -244,8 +244,10 @@ const WIKILINK_RE = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
 
 /**
  * Scan the journal for `[[name]]` wikilinks whose target case-insensitively matches a vault
- * `projects/*.md` page name. Returns one hint per distinct page, in first-mention order.
- * `pageNames` are basenames without `.md`; `productNames` are registered product slugs.
+ * `projects/*.md` page name. Both link forms count: the bare `[[relay]]` and the path form
+ * `[[projects/relay|relay]]` the journal digests use. Returns one hint per distinct page, in
+ * first-mention order. `pageNames` are basenames without `.md`; `productNames` are registered
+ * product slugs.
  */
 export function extractProjectPageHints(
   journal: string,
@@ -257,7 +259,7 @@ export function extractProjectPageHints(
   const hints: ProjectPageHint[] = [];
   const seen = new Set<string>();
   for (const match of journal.matchAll(WIKILINK_RE)) {
-    const target = match[1]!.trim().toLowerCase();
+    const target = match[1]!.trim().toLowerCase().replace(/^projects\//, '');
     const page = pagesByLower.get(target);
     if (page === undefined || seen.has(page)) continue;
     seen.add(page);
@@ -282,6 +284,36 @@ export function containsNoteTitle(content: string, title: string): boolean {
   const needle = normalizeNoteTitle(title);
   if (needle === '') return false;
   return content.split('\n').some((line) => normalizeNoteTitle(line).includes(needle));
+}
+
+/**
+ * Collect the titles of items already filed from `date`'s journal in one target file — the
+ * lines carrying a `(journal YYYY-MM-DD)` suffix (product backlogs) or a `[[YYYY_MM_DD]]`
+ * source link (topic files; vault `### Title` blocks via their `*Source:*` line). Injected into
+ * the extraction prompt as a do-not-re-emit list, because LLM re-extraction phrases the same
+ * note under a different title and the normalized-title guard alone can't catch that (observed
+ * live: a forced second pass filed 10 near-duplicate ideas).
+ */
+export function collectFiledTitles(content: string, date: string): string[] {
+  const marks = [`(journal ${date})`, `[[${toSourceLink(date)}]]`];
+  const titles: string[] = [];
+  let lastHeading: string | null = null;
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    const heading = /^###\s+(.+)$/.exec(line);
+    if (heading) lastHeading = heading[1]!.trim();
+    if (!marks.some((m) => line.includes(m))) continue;
+    if (line.startsWith('*Source:')) {
+      if (lastHeading) titles.push(lastHeading);
+      continue;
+    }
+    let text = line.replace(/^- \[[ xX]\] /, '').replace(/^- /, '');
+    const emDash = text.indexOf(' — ');
+    if (emDash > 0) text = text.slice(0, emDash);
+    text = text.replace(/^\*\*(.*)\*\*$/, '$1').trim();
+    if (text !== '') titles.push(text);
+  }
+  return titles;
 }
 
 const IDEAS_HEADING_RE = /^##\s+Ideas\s*$/im;

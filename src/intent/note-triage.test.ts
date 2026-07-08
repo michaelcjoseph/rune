@@ -14,6 +14,7 @@ import {
   extractProjectPageHints,
   normalizeNoteTitle,
   containsNoteTitle,
+  collectFiledTitles,
   appendVaultIdeaBlocks,
   appendTopicLines,
   type NoteTriageItem,
@@ -203,15 +204,16 @@ describe('extractProjectPageHints', () => {
     ]);
   });
 
-  it('matches case-insensitively and handles alias/heading wikilink forms', () => {
+  it('matches case-insensitively and handles alias/heading/path wikilink forms', () => {
     const hints = extractProjectPageHints(
-      'See [[Aura|the app]] and [[rune#Nightly]] notes.',
-      PAGES,
-      PRODUCT_NAMES,
+      'See [[Aura|the app]] and [[rune#Nightly]] notes. Daily [[projects/relay|relay]] digest.',
+      [...PAGES, 'relay'],
+      [...PRODUCT_NAMES, 'relay'],
     );
     expect(hints).toEqual([
       { page: 'aura', product: 'aura' },
       { page: 'rune', product: 'rune' },
+      { page: 'relay', product: 'relay' },
     ]);
   });
 
@@ -237,6 +239,34 @@ describe('normalizeNoteTitle / containsNoteTitle', () => {
     expect(containsNoteTitle(content, 'Pastor AI')).toBe(true);
     expect(containsNoteTitle(content, 'Absent title')).toBe(false);
     expect(containsNoteTitle(content, '—')).toBe(false); // normalizes to empty — never matches
+  });
+});
+
+describe('collectFiledTitles', () => {
+  it('collects date-filed titles across bullet, checkbox, topic, and vault-heading formats', () => {
+    const content = [
+      '- Dark mode — detail (journal 2026-07-08)',
+      '- [ ] Crash on boot — detail (journal 2026-07-08)',
+      '- Old item — detail (journal 2026-07-01)',
+      '- **On taste** — How taste develops. Source: [[2026_07_08]]',
+      '### Pet translator',
+      'Detail.',
+      '*Source: [[2026_07_08]]*',
+      '### Old idea',
+      'x',
+      '*Source: [[2026_01_01]]*',
+    ].join('\n');
+    expect(collectFiledTitles(content, '2026-07-08')).toEqual([
+      'Dark mode',
+      'Crash on boot',
+      'On taste',
+      'Pet translator',
+    ]);
+  });
+
+  it('returns empty for content with no items filed on the date', () => {
+    expect(collectFiledTitles('- Something — else (journal 2026-01-01)\n', '2026-07-08')).toEqual([]);
+    expect(collectFiledTitles('', '2026-07-08')).toEqual([]);
   });
 });
 

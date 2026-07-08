@@ -181,6 +181,13 @@ describe('runNoteTriage — dedupe and idempotency', () => {
     const second = await runNoteTriage(DATE, JOURNAL, { runGit: fakeGit });
     expect(second.status).toBe('skipped');
     expect(second.detail).toContain('duplicates=5');
+    // The second pass's prompt carries the already-filed do-not-re-emit list (the guard
+    // against LLM re-extraction under different titles).
+    const secondPrompt = agentMock.mock.calls[1]![1] as string;
+    expect(secondPrompt).toContain('## Already filed from this journal — do NOT re-emit');
+    expect(secondPrompt).toContain('- Dark mode');
+    expect(secondPrompt).toContain('- On taste');
+    expect(secondPrompt).toContain('- Pet translator');
     expect(readFileSync(join(auraRepo, 'docs/projects/ideas.md'), 'utf8')).toBe(snapshot.aura);
     expect(readFileSync(join(runeRepo, 'docs/projects/bugs.md'), 'utf8')).toBe(snapshot.rune);
     expect(readFileSync(join(mcjRepo, 'docs/rune/writing-ideas.md'), 'utf8')).toBe(snapshot.writing);

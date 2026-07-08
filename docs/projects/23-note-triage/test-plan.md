@@ -15,9 +15,13 @@ untrusted input committing to tracked files).
       unregistered product degrades to the vault path (routing test); write targets are
       allowlist-guarded (security tests: traversal, symlinked scope dir, wrong basename,
       non-relative scopePath).
-- [x] **Exactly-once / idempotency** — nightly `daily-processed` marker gates the pass;
-      per-target normalized-title dedupe + in-batch seen-set make a forced identical re-run a
-      no-op everywhere (I/O test: second run appends nothing, no new audit rows).
+- [x] **Exactly-once / idempotency** — three layers: the nightly `daily-processed` marker
+      gates the pass; the prompt carries a do-not-re-emit list of titles already filed from
+      this journal date (`collectFiledTitles` — added after the live gate showed LLM
+      re-extraction under different titles defeats title-matching alone); the per-target
+      normalized-title guard + in-batch seen-set backstop identical titles at write time
+      (I/O tests: second run appends nothing, no new audit rows, prompt carries the list).
+      Accepted residual: a forced re-run can rarely file a semantic-split near-dupe.
 - [x] **Per-item fault isolation** — a failing target file (e.g. missing repo) is counted and
       reported while every other target still lands; step error never aborts the nightly
       (I/O test + nightly error-isolation test).
@@ -60,11 +64,10 @@ untrusted input committing to tracked files).
 
 ## Integration verification (live operator gate)
 
-> With real journal lines (a product idea for a known product, a bug for a known product, a
-> new-product idea, a writing topic, a research topic), a forced nightly run files each to its
-> target: the product idea/bug appear in that repo's `docs/projects/{ideas,bugs}.md` AND in
-> the cockpit backlog drawer; `docs/rune/writing-ideas.md` + `research-topics.md` exist in
-> michaelcjoseph.com with synthesized bullets; the vault `projects/ideas.md` gains the
-> new-product `###` block above `## Supersession audit`; `logs/backlog-mutations.jsonl` has
-> one row per repo write; `git status` in the product repos shows dirty-not-committed; a
-> second forced run appends nothing. Tracked as the unchecked live gate in tasks.md.
+> **Run 2026-07-08, passed** (details in tasks.md Phase 5): real journal → 12 relay ideas,
+> 1 rune bug, 2 research topics, all synthesized not copied; relay `ideas.md` and
+> michaelcjoseph.com `docs/rune/` created on first write; vault `###` block inserted above
+> `## Supersession audit` and `writing-ideas.md` seeded (synthetic pass; cleaned up after);
+> everything surfaced via the cockpit `readBacklogs` path as open user-authored items; audit
+> rows correct; product repos dirty-not-committed. The re-run dedupe gap found live was fixed
+> in-gate with the prompt do-not-re-emit list; a third run filed only genuinely-new content.

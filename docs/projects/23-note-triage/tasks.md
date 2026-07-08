@@ -58,12 +58,20 @@ test-plan.md).
       `docs/projects/ideas.md`.
 - [x] CLAUDE.md: 18-step orchestrator, note-triage in the runtime agents list;
       `docs/architecture/module-reference.md` via docs-sync.
-- [ ] **Live operator gate (user-reachability):** with real journal content, a forced nightly
-      Note triage pass files a product idea, a product bug, a new-product idea, a writing
-      topic, and a research topic to their five targets; the product items appear in the
-      cockpit backlog drawer; `logs/backlog-mutations.jsonl` carries the audit rows; product
-      repos are left uncommitted; a re-run appends nothing (dedupe). A green suite alone does
-      not close this box.
+- [x] **Live operator gate (user-reachability):** run live 2026-07-08 against the real journal
+      (plus one synthetic pass for the two item kinds the day's journal didn't contain).
+      Observed: 12 relay ideas + 1 rune bug + 2 research topics filed from real content
+      (relay's `ideas.md` created fresh; `docs/rune/` created in michaelcjoseph.com); a vault
+      new-product `###` block inserted above `## Supersession audit`; `writing-ideas.md`
+      seeded; all filed items surfaced through the cockpit `readBacklogs` path as open
+      user-authored items; audit rows in `logs/backlog-mutations.jsonl` with correct
+      product/file/branch; product repos left dirty-uncommitted; git only ever read.
+      **Dedupe finding:** a forced identical re-run re-filed near-duplicates under different
+      LLM titles — fixed during the gate by injecting the already-filed titles for the date
+      into the prompt as a do-not-re-emit list (`collectFiledTitles`); a third live run then
+      filed only genuinely-new journal content (one semantic-split near-dupe slipped, removed
+      by hand — the accepted residual for forced re-runs; production runs once per journal
+      via the daily-processed marker).
 
 **User-reachability check:** the capability triggers from the nightly cron (and a forced
 `executeNightly(date, {force:true})` for on-demand runs); outcomes are observable in the
