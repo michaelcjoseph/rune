@@ -106,6 +106,7 @@ describe('routeNoteItems', () => {
       product: 'aura',
       repoPath: '/ws/aura',
       relPath: 'docs/projects/ideas.md',
+      title: 'Dark mode',
       text: 'Dark mode — Add a toggle. (journal 2026-07-08)',
     }]);
   });
@@ -141,6 +142,7 @@ describe('routeNoteItems', () => {
       product: 'rune',
       repoPath: '/ws/rune',
       relPath: 'docs/projects/bugs.md',
+      title: 'Crash',
       text: 'Crash — On boot. (journal 2026-07-08)',
     }]);
   });

@@ -99,8 +99,8 @@ export interface NoteTriageProductConfig {
 const WRITING_PRODUCT = 'writing';
 
 export type NoteFilePlan =
-  | { kind: 'product-idea'; product: string; repoPath: string; relPath: 'docs/projects/ideas.md'; text: string }
-  | { kind: 'product-bug'; product: string; repoPath: string; relPath: 'docs/projects/bugs.md'; text: string }
+  | { kind: 'product-idea'; product: string; repoPath: string; relPath: 'docs/projects/ideas.md'; title: string; text: string }
+  | { kind: 'product-bug'; product: string; repoPath: string; relPath: 'docs/projects/bugs.md'; title: string; text: string }
   | { kind: 'vault-idea'; relPath: 'projects/ideas.md'; title: string; detail: string; sourceDate: string }
   | { kind: 'topic'; topic: 'writing' | 'research'; product: string; repoPath: string; scopePath: string;
       relPath: string; title: string; detail: string; sourceDate: string };
@@ -199,6 +199,7 @@ export function routeNoteItems(
           product: route.product,
           repoPath: productConfig.repoPath,
           relPath: 'docs/projects/ideas.md',
+          title: item.title,
           text: productBulletText(item, date),
         });
         break;
@@ -216,6 +217,7 @@ export function routeNoteItems(
           product: route.product,
           repoPath: productConfig.repoPath,
           relPath: 'docs/projects/bugs.md',
+          title: item.title,
           text: productBulletText(item, date),
         });
         break;
