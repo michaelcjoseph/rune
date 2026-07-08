@@ -4,7 +4,7 @@ import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
 import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge, assertProjectMcpConfig } from './ai/claude.js';
-import { setMutationBus, registerApplier } from './transport/mutations.js';
+import { setMutationBus, registerApplier, setMutationShutdownInProgress } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
 import { reconcileInterruptedFixAttempts } from './jobs/fix-attempt-store.js';
@@ -17,6 +17,7 @@ import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
 import {
   orchestratedWorkApplier,
+  parkInFlightOrchestratedRuns,
   recoverOrchestratedWorkRuns,
   readTasksMdForRecoveredCursor,
   redispatchRecoveredOrchestratedMutation as redispatchRecoveredOrchestratedWorkMutation,
@@ -262,8 +263,16 @@ log.info('Rune started', {
 });
 
 // Graceful shutdown
+let shuttingDown = false;
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info('Shutting down...');
+  // Arm the applier-side suppression BEFORE killing children: the SIGTERM'd
+  // child would otherwise surface in the orchestrated applier as a failed
+  // terminal + worktree teardown, discarding the exact state the parker below
+  // (and next-boot recovery) exist to preserve.
+  setMutationShutdownInProgress(true);
   stopScheduler();
   stopStallCheck();
   stopMcpWatchdog();
@@ -274,6 +283,16 @@ async function shutdown() {
   stopInFlightTicker();
   killActiveProcesses();
   await waitForActiveProcesses();
+  // Children are dead → worktrees are stable. Park in-flight orchestrated
+  // runs that boot recovery could not resume (no resumable cursor): WIP-commit
+  // the dirty worktree and write a parked blocked-on-human terminal so the
+  // run survives the restart visible-and-releasable instead of orphaned.
+  try {
+    const parkSummary = await parkInFlightOrchestratedRuns();
+    log.info('Orchestrated shutdown park completed', { ...parkSummary });
+  } catch (err) {
+    log.error('Orchestrated shutdown park failed', { error: (err as Error).message });
+  }
   persistSessions();
   persistReviewSessions();
   persistPlanningSessions();
