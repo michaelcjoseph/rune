@@ -44,6 +44,11 @@ vi.mock('../intent/registry.js', () => ({
 vi.mock('./registry-rebuild.js', () => ({
   rebuildRegistry: vi.fn(() => ({ products: 0, projects: 0 })),
 }));
+// Note triage reads products config + spawns the extraction agent; this suite's config mock
+// has no PRODUCTS_CONFIG_FILE, so mock the step surface to keep the summary noise-free.
+vi.mock('./note-triage.js', () => ({
+  runNoteTriage: vi.fn(async () => ({ status: 'skipped', detail: 'No filable notes' })),
+}));
 vi.mock('./meeting-extract.js', () => ({
   extractMeetings: vi.fn(async () => []),
   appendProjectDecisions: vi.fn(() => ({ status: 'skipped', appended: 0, detail: 'no decisions' })),

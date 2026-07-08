@@ -63,6 +63,11 @@ vi.mock('./whoop-sync.js', () => ({ executeActivitySync: vi.fn(() => ({ status: 
 vi.mock('./playbook-extract.js', () => ({
   extractPlaybookDrafts: vi.fn(() => ({ status: 'skipped', detail: 'No #playbook tag' })),
 }));
+// Project 23 — Note triage step. Mock at the runNoteTriage surface (its own behavior is
+// covered by note-triage.test.ts); the pipeline test checks position + result propagation.
+vi.mock('./note-triage.js', () => ({
+  runNoteTriage: vi.fn(async () => ({ status: 'skipped', detail: 'No filable notes' })),
+}));
 // Phase 6 C7 — journal-intent producer step. Mock the producer to return
 // "no new proposals" so the step status is consistent ('skipped'). The
 // pipeline-level test only checks that the step runs in the expected
@@ -144,6 +149,8 @@ const {
 const { runPostMortem } = await import('../intent/postmortem.js');
 const { writeNightlyLearningLesson } = await import('../intent/learning-write-path.js');
 const { writeRoleLesson } = await import('../roles/memory-writer.js');
+const { runNoteTriage } = await import('./note-triage.js');
+const { rebuildRegistry } = await import('./registry-rebuild.js');
 const { executeNightly, runNightly } = await import('./nightly.js');
 
 const captureMock = captureSessions as unknown as ReturnType<typeof vi.fn>;
@@ -170,6 +177,8 @@ const writeProcessedFeedbackIdsMock = writeProcessedFeedbackIds as unknown as Re
 const postMortemMock = runPostMortem as unknown as ReturnType<typeof vi.fn>;
 const writeNightlyLessonMock = writeNightlyLearningLesson as unknown as ReturnType<typeof vi.fn>;
 const writeRoleLessonMock = writeRoleLesson as unknown as ReturnType<typeof vi.fn>;
+const noteTriageMock = runNoteTriage as unknown as ReturnType<typeof vi.fn>;
+const rebuildRegistryMock = rebuildRegistry as unknown as ReturnType<typeof vi.fn>;
 
 function setDefaults() {
   captureMock.mockResolvedValue({ captured: 0 });
@@ -211,6 +220,8 @@ function setDefaults() {
   });
   writeNightlyLessonMock.mockResolvedValue({ committed: false });
   writeRoleLessonMock.mockResolvedValue({ committed: false });
+  noteTriageMock.mockResolvedValue({ status: 'skipped', detail: 'No filable notes' });
+  rebuildRegistryMock.mockReturnValue({ products: 4, projects: 23 });
 }
 
 describe('jobs/nightly', () => {
@@ -220,9 +231,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 17 steps and returns results', async () => {
+    it('runs all 18 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -230,6 +241,7 @@ describe('jobs/nightly', () => {
         'Playbook extract',
         'Registry rebuild',
         'Journal-intent producer',
+        'Note triage',
         'Journal ingest',
         'Meeting extract',
         'Library sync',
@@ -491,8 +503,10 @@ describe('jobs/nightly', () => {
     });
 
     it('aborts the nightly pipeline when daily-content-updater errors', async () => {
-      readMock.mockReturnValue('# Journal\n- 11:30 #idea cool product concept');
-      askMock.mockResolvedValue({ text: '**#idea** → projects/ideas.md\n- Cool concept', error: null });
+      // #diet → nutrition.md is the one markdown target Daily tags still owns (ideas/topics
+      // moved to Note triage, project 23) — it must still route to daily-content-updater.
+      readMock.mockReturnValue('# Journal\n- 12:15 #diet chicken salad');
+      askMock.mockResolvedValue({ text: '**#diet** → health/nutrition.md\n- Lunch (12:15): chicken salad', error: null });
       agentMock.mockResolvedValue({ text: null, error: 'content-updater crashed' });
 
       const result = await executeNightly();
@@ -584,9 +598,9 @@ describe('jobs/nightly', () => {
     });
 
     it('routes to daily-content-updater when analysis targets a markdown content file', async () => {
-      readMock.mockReturnValue('# Journal\n- 11:30 #idea AI estate planning service');
+      readMock.mockReturnValue('# Journal\n- 12:15 #diet chicken salad wrap');
       askMock.mockResolvedValue({
-        text: '**#idea** → projects/ideas.md\n- Title: AI Estate Planning Service\n- Description: AI generates estate plans, $50-100 per plan.\n- Source: [[2026_04_11]]',
+        text: '**#diet** → health/nutrition.md\n- Lunch (12:15): chicken salad wrap',
         error: null,
       });
       agentMock.mockResolvedValue({ text: 'Appended', error: null });
@@ -595,10 +609,55 @@ describe('jobs/nightly', () => {
       const step = result.steps.find((s) => s.step === 'Daily tags')!;
       expect(step.status).toBe('success');
       // daily-content-updater was invoked; json-updater was NOT
-      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.stringContaining('#idea'), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.stringContaining('#diet'), undefined, false);
       const jsonCalls = agentMock.mock.calls.filter((c) => c[0] === 'json-updater');
       expect(jsonCalls).toHaveLength(0);
       expect(step.detail).toContain('daily-content-updater');
+    });
+
+    it('no longer routes ideas/topics analysis to daily-content-updater (moved to Note triage)', async () => {
+      readMock.mockReturnValue('# Journal\n- 11:30 #idea AI estate planning service');
+      askMock.mockResolvedValue({
+        text: '**#idea** → projects/ideas.md\n- Title: AI Estate Planning Service\n\n**Writing topics** → writing/topics.md\n- On taste',
+        error: null,
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Daily tags')!;
+      // The analyzer proposed only retired targets — the step no-ops instead of dispatching.
+      expect(step.status).toBe('skipped');
+      const updaterCalls = agentMock.mock.calls.filter((c) => c[0] === 'daily-content-updater');
+      expect(updaterCalls).toHaveLength(0);
+    });
+
+    // -- Note triage step (project 23) --
+    it('propagates the Note triage result into the step list', async () => {
+      readMock.mockReturnValue('# Journal\n- an idea worth filing');
+      askMock.mockResolvedValue({ text: 'No updates needed.', error: null });
+      noteTriageMock.mockResolvedValue({ status: 'success', detail: 'ideas=1 (aura), writing=1' });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Note triage')!;
+      expect(step.status).toBe('success');
+      expect(step.detail).toBe('ideas=1 (aura), writing=1');
+      expect(noteTriageMock).toHaveBeenCalledWith('2026-04-11', '# Journal\n- an idea worth filing');
+    });
+
+    it('runs Note triage after Registry rebuild (fresh product set) and isolates its failure', async () => {
+      readMock.mockReturnValue('# Journal\n- content');
+      askMock.mockResolvedValue({ text: 'No updates needed.', error: null });
+      noteTriageMock.mockRejectedValue(new Error('triage exploded'));
+
+      const result = await executeNightly();
+      const names = result.steps.map((s) => s.step);
+      expect(names.indexOf('Note triage')).toBeGreaterThan(names.indexOf('Registry rebuild'));
+      expect(rebuildRegistryMock.mock.invocationCallOrder[0]!)
+        .toBeLessThan(noteTriageMock.mock.invocationCallOrder[0]!);
+      // The step errored but the pipeline continued to the end.
+      const step = result.steps.find((s) => s.step === 'Note triage')!;
+      expect(step.status).toBe('error');
+      expect(result.steps.at(-1)!.step).toBe('Mark processed');
+      expect(queueMock).toHaveBeenCalled();
     });
 
     it('routes to both json-updater and daily-content-updater when analysis mentions both target types', async () => {
@@ -1156,7 +1215,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -1185,7 +1244,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -1216,7 +1275,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -1227,23 +1286,23 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       // Order ahead of KB queue: Session capture, Daily tags, Birthday alerts,
-      // Playbook extract, Registry rebuild, Journal-intent producer, Journal
-      // ingest, Meeting extract, Library sync.
-      expect(result.steps[9]!.step).toBe('KB queue');
-      expect(result.steps[9]!.status).toBe('error');
-      expect(result.steps[10]!.step).toBe('KB index repair');
+      // Playbook extract, Registry rebuild, Journal-intent producer, Note
+      // triage, Journal ingest, Meeting extract, Library sync.
+      expect(result.steps[10]!.step).toBe('KB queue');
+      expect(result.steps[10]!.status).toBe('error');
+      expect(result.steps[11]!.step).toBe('KB index repair');
       // Reconciliation is fixed immediately after index repair; Whoop still runs after it.
-      expect(result.steps[11]!.step).toBe('Knowledge reconciliation');
-      expect(result.steps[12]!.step).toBe('Whoop activity');
+      expect(result.steps[12]!.step).toBe('Knowledge reconciliation');
+      expect(result.steps[13]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(17);
+      expect(result.steps).toHaveLength(18);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -1255,7 +1314,7 @@ describe('jobs/nightly', () => {
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
       // Mark processed is last after reconciliation is inserted in the tail.
-      expect(result.steps[16]!.step).toBe('Mark processed');
+      expect(result.steps[17]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {
