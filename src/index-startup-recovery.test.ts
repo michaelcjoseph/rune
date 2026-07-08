@@ -7,6 +7,12 @@ const recoverOrchestratedWorkRuns = vi.hoisted(() =>
     return { resumed: ['mut-orch-resume'], orphaned: [], skipped: [] };
   }),
 );
+const parkInFlightOrchestratedRuns = vi.hoisted(() =>
+  vi.fn(async () => {
+    calls.push('park-orchestrated-runs');
+    return { parked: [], resumable: [], skipped: [] };
+  }),
+);
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -41,8 +47,10 @@ vi.mock('./vault/sessions.js', () => ({
 
 vi.mock('./ai/claude.js', () => ({
   markSessionCreated: vi.fn(),
-  killActiveProcesses: vi.fn(),
-  waitForActiveProcesses: vi.fn(async () => undefined),
+  killActiveProcesses: vi.fn(() => calls.push('kill-active-processes')),
+  waitForActiveProcesses: vi.fn(async () => {
+    calls.push('wait-active-processes');
+  }),
   setBus: vi.fn(() => calls.push('set-claude-bus')),
   rotateStreamLogIfLarge: vi.fn(() => calls.push('rotate-stream-log')),
   assertProjectMcpConfig: vi.fn(() => calls.push('assert-mcp-config')),
@@ -51,6 +59,7 @@ vi.mock('./ai/claude.js', () => ({
 vi.mock('./transport/mutations.js', () => ({
   setMutationBus: vi.fn(() => calls.push('set-mutation-bus')),
   registerApplier: vi.fn((applier: { kind: string }) => calls.push(`register-applier:${applier.kind}`)),
+  setMutationShutdownInProgress: vi.fn(() => calls.push('arm-shutdown-suppression')),
 }));
 
 vi.mock('./transport/in-flight.js', () => ({
@@ -102,6 +111,7 @@ vi.mock('./jobs/gen-eval-loop-runner.js', () => ({
 vi.mock('./jobs/orchestrated-work-runner.js', () => ({
   orchestratedWorkApplier: { kind: 'orchestrated-work' },
   recoverOrchestratedWorkRuns,
+  parkInFlightOrchestratedRuns,
   readTasksMdForRecoveredCursor: vi.fn(async () => ''),
   redispatchRecoveredOrchestratedMutation: vi.fn(() => ({ ok: true })),
 }));
@@ -252,5 +262,31 @@ describe('index startup orchestrated-work recovery', () => {
     expect(calls.indexOf('start-terminal-work-run-reconciler')).toBeLessThan(
       calls.indexOf('start-planning-expiry'),
     );
+  });
+
+  it('SIGTERM arms shutdown suppression before killing children, then parks unresumable orchestrated runs', async () => {
+    // The shutdown parker (bugs.md — orchestrated-run restart safety 1/2):
+    // suppression must be armed BEFORE the child SIGTERMs (so the dying
+    // applier cannot persist a failed terminal or destroy the worktree), and
+    // the park runs AFTER the wait (children dead → worktrees stable).
+    await import('./index.js');
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      // Invoke index.ts's own SIGTERM listener directly — process.emit would
+      // also fire any harness-level signal listeners.
+      const listeners = process.listeners('SIGTERM');
+      expect(listeners.length).toBeGreaterThan(0);
+      (listeners[listeners.length - 1] as () => void)();
+
+      await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+      expect(parkInFlightOrchestratedRuns).toHaveBeenCalledOnce();
+      expect(calls.indexOf('arm-shutdown-suppression')).toBeGreaterThanOrEqual(0);
+      expect(calls.indexOf('arm-shutdown-suppression')).toBeLessThan(calls.indexOf('kill-active-processes'));
+      expect(calls.indexOf('kill-active-processes')).toBeLessThan(calls.indexOf('wait-active-processes'));
+      expect(calls.indexOf('wait-active-processes')).toBeLessThan(calls.indexOf('park-orchestrated-runs'));
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });

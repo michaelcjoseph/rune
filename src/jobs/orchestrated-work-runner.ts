@@ -66,10 +66,15 @@ import type { TaskEvidence } from '../intent/team-task-workflow.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
-import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
-import { activeRuns, redispatchMutation } from '../transport/mutations.js';
+import {
+  activeRuns,
+  redispatchMutation,
+  writeRecoveredTerminalMutation,
+  isMutationShutdownInProgress,
+} from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import { appendMutationLine } from './mutations-log.js';
 import { upsertRun } from './supervision-store.js';
@@ -91,7 +96,7 @@ import {
   type WorkOutcome,
   type WorkProductFacts,
 } from './work-run-classify.js';
-import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
+import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason, RunHandle } from '../transport/mutations.js';
 import { buildRunAgentsEventFromTaskRecords } from '../transport/notification-bus.js';
 import {
   markProjectDoneOnBranch,
@@ -263,6 +268,162 @@ export async function requestOrchestratedRunRecovery(
     return { kind: 'recovered', runId };
   } catch (err) {
     return { kind: 'error', reason: (err as Error).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown park (docs/projects/bugs.md — orchestrated-run restart safety 1/2)
+// ---------------------------------------------------------------------------
+
+export interface ShutdownParkDeps {
+  listActiveRuns: () => RunHandle[];
+  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
+  runGit: GitRunner;
+  worktreeExists: (path: string) => boolean;
+  writeTerminal: (descriptor: MutationDescriptor, event: MutationEvent) => void;
+  resolveBaseBranch: (product: string) => string;
+  resolveWorktreePath: (product: string, project: string) => string;
+}
+
+export interface ShutdownParkResult {
+  parked: string[];
+  resumable: string[];
+  skipped: string[];
+}
+
+export function defaultShutdownParkDeps(): ShutdownParkDeps {
+  return {
+    listActiveRuns: () => [...activeRuns.values()],
+    readRunCursor: async (runId) => readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId),
+    runGit: defaultRunGit,
+    worktreeExists: existsSync,
+    writeTerminal: writeRecoveredTerminalMutation,
+    resolveBaseBranch: (product) => {
+      try {
+        return getProductConfig(product, config.PRODUCTS_CONFIG_FILE).baseBranch;
+      } catch {
+        return 'main';
+      }
+    },
+    resolveWorktreePath: (product, project) => worktreePathFor(product, project, config.WORKTREE_ROOT),
+  };
+}
+
+/**
+ * Park in-flight orchestrated runs that next-boot recovery could NOT resume.
+ *
+ * Called by shutdown() AFTER killActiveProcesses()/waitForActiveProcesses()
+ * (children dead → stable worktrees) and after setMutationShutdownInProgress()
+ * armed the applier-side suppression, so nothing races these writes.
+ *
+ * - A run WITH a resumable cursor is left `running` on disk: boot recovery
+ *   re-dispatches it automatically — parking it would degrade a routine deploy
+ *   restart from hands-off resume to a human-gated release.
+ * - A run WITHOUT a cursor (mid-first-task; recovery would orphan it and the
+ *   diff would be discarded) is parked: best-effort WIP commit onto the run
+ *   branch, then a completed+parked:true terminal + blocked-on-human
+ *   supervision row via writeRecoveredTerminalMutation, so the run survives
+ *   the restart visible-and-releasable in the approvals surfaces.
+ * - A run whose worktree does not exist on disk is skipped — there is nothing
+ *   to preserve, and boot orphaning loses nothing.
+ */
+export async function parkInFlightOrchestratedRuns(
+  deps: ShutdownParkDeps = defaultShutdownParkDeps(),
+): Promise<ShutdownParkResult> {
+  const result: ShutdownParkResult = { parked: [], resumable: [], skipped: [] };
+  for (const handle of deps.listActiveRuns()) {
+    const descriptor = handle.descriptor;
+    if (descriptor.kind !== 'orchestrated-work' || descriptor.status !== 'running') continue;
+    try {
+      handle.cancel('system');
+      const cursor = await deps.readRunCursor(descriptor.id);
+      if (cursor !== null && cursor.resumeMarker === 'resumable') {
+        result.resumable.push(descriptor.id);
+        continue;
+      }
+
+      const payload = descriptor.payload as OrchestratedWorkPayload;
+      const projectSlug = payload.projectSlug;
+      const product = payload.product ?? 'rune';
+      const branch = workBranchName(projectSlug);
+      const baseBranch = deps.resolveBaseBranch(product);
+      const worktreePath = deps.resolveWorktreePath(product, projectSlug);
+      if (!deps.worktreeExists(worktreePath)) {
+        log.warn('orchestrated-work-runner: shutdown park skipped — worktree missing', {
+          id: descriptor.id,
+          project: projectSlug,
+        });
+        result.skipped.push(descriptor.id);
+        continue;
+      }
+
+      const wipSha = await commitWorktreeWip(deps.runGit, worktreePath, {
+        message: `rune(${product}): WIP — shutdown park — ${projectSlug}`,
+        logLabel: 'shutdown WIP commit',
+        product,
+        projectSlug,
+      });
+      const reason =
+        wipSha === null
+          ? 'parked at shutdown: process restart interrupted task execution'
+          : `parked at shutdown: process restart interrupted task execution; WIP preserved as ${wipSha.slice(0, 7)}`;
+      deps.writeTerminal(
+        descriptor,
+        term(descriptor.id, 'completed', {
+          projectSlug,
+          product,
+          parked: true,
+          reason,
+          operatorWorktreePath: worktreePath,
+          branch,
+          baseBranch,
+          preserveBranch: true,
+          preserveWorktree: true,
+        }),
+      );
+      result.parked.push(descriptor.id);
+      log.info('orchestrated-work-runner: parked in-flight run at shutdown', {
+        id: descriptor.id,
+        project: projectSlug,
+        wip: wipSha ?? 'clean',
+      });
+    } catch (err) {
+      // One bad run must not abort parking the rest (or the shutdown itself).
+      log.warn('orchestrated-work-runner: shutdown park failed for run', {
+        id: descriptor.id,
+        error: (err as Error).message,
+      });
+      result.skipped.push(descriptor.id);
+    }
+  }
+  return result;
+}
+
+/** Best-effort WIP commit of a dirty worktree — mirrors the closeout
+ *  `commitWip` dep. Returns the commit sha; null when the tree is clean or on
+ *  any git failure (preservation is best-effort; the caller's own outcome —
+ *  park or resume — must land regardless). Shared by the shutdown parker and
+ *  the recovery-redispatch restart salvage. */
+async function commitWorktreeWip(
+  runGit: GitRunner,
+  cwd: string,
+  args: { message: string; logLabel: string; product: string; projectSlug: string },
+): Promise<string | null> {
+  const message = args.message.slice(0, 200);
+  try {
+    const { stdout } = await runGit(['status', '--porcelain'], { cwd });
+    if (stdout.trim() === '') return null;
+    await runGit(['add', '-A'], { cwd });
+    await runGit(['commit', '-m', message], { cwd });
+    const { stdout: sha } = await runGit(['rev-parse', 'HEAD'], { cwd });
+    return sha.trim();
+  } catch (err) {
+    log.warn(`orchestrated-work-runner: ${args.logLabel} failed`, {
+      product: args.product,
+      project: args.projectSlug,
+      error: (err as Error).message,
+    });
+    return null;
   }
 }
 
@@ -1100,6 +1261,24 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             egressAllowlist,
             resumed: true,
           };
+          // Restart salvage (bugs.md restart safety 2/2): the interrupted task
+          // may have left uncommitted work in the reused worktree. Commit it as
+          // a labeled salvage commit so the re-run task starts from a clean
+          // tree and closeout's `git add -A` cannot silently absorb stale dirt
+          // — the half-work stays inspectable on the branch instead. Best-effort.
+          const salvageSha = await commitWorktreeWip(deps.runGit, recovery.worktreePath, {
+            message: `rune(${product}): WIP — restart salvage — ${projectSlug}`,
+            logLabel: 'restart salvage commit',
+            product,
+            projectSlug,
+          });
+          if (salvageSha !== null) {
+            log.info('orchestrated-work-runner: salvaged uncommitted work from interrupted run', {
+              id: descriptor.id,
+              project: projectSlug,
+              sha: salvageSha,
+            });
+          }
         } else {
           sandbox = await deps.createWorktree({
             product,
@@ -1541,7 +1720,15 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       yield terminal;
     } finally {
       sink?.destroy();
-      if (sandbox && !preserveWorktree && !finalizerOwnedTeardown) {
+      if (sandbox && isMutationShutdownInProgress()) {
+        // Shutdown suppression: the worktree may hold the in-flight task's
+        // uncommitted diff — the shutdown parker WIP-commits and preserves it
+        // (or boot recovery resumes it). Destroying it here would discard the
+        // exact work the park exists to save.
+        log.info('orchestrated-work-runner: shutdown in progress; leaving worktree for parker/boot recovery', {
+          sandbox: sandbox.worktree,
+        });
+      } else if (sandbox && !preserveWorktree && !finalizerOwnedTeardown) {
         try {
           await deps.destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -1839,6 +2026,17 @@ function persistTerminalMutationState(
   descriptor: MutationDescriptor<OrchestratedWorkPayload>,
   terminal: MutationEvent,
 ): void {
+  // Shutdown suppression: once shutdown() arms the flag, this run's on-disk
+  // state is owned by the shutdown parker / next-boot recovery. The SIGTERM'd
+  // child surfaces here as a failed terminal the run never earned — persisting
+  // it would flip a boot-resumable `running` mutation to failed (or clobber a
+  // just-written shutdown park).
+  if (isMutationShutdownInProgress()) {
+    log.info('orchestrated-work-runner: shutdown in progress; skipping terminal persistence', {
+      id: descriptor.id,
+    });
+    return;
+  }
   const terminalStatus = terminal.kind === 'completed' ? 'completed' : 'failed';
   descriptor.status = terminalStatus;
   if (terminal.kind === 'failed' && terminal.data) {

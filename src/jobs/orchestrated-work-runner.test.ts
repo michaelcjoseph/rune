@@ -96,6 +96,8 @@ import {
   __getRuntimeDepsForTest,
   redispatchRecoveredOrchestratedMutation,
   fileTerminalBugsToBacklog,
+  parkInFlightOrchestratedRuns,
+  defaultShutdownParkDeps,
 } from './orchestrated-work-runner.js';
 import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
 import {
@@ -104,6 +106,7 @@ import {
   createMutation,
   registerApplier,
   setMutationBus,
+  setMutationShutdownInProgress,
   type MutationDescriptor,
   type MutationEvent,
 } from '../transport/mutations.js';
@@ -254,7 +257,11 @@ async function waitForUpserts(n: number): Promise<unknown[][]> {
 }
 
 async function waitForCondition(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 20 && !condition(); i++) {
+  // Microtask-only polling (NOT setTimeout — several tests in this file run
+  // under fake timers, where a real-timer wait would hang to the test
+  // timeout). The budget is generous because stub-async paths like the
+  // restart-salvage git sequence add multiple promise hops per iteration.
+  for (let i = 0; i < 500 && !condition(); i++) {
     await Promise.resolve();
   }
   expect(condition()).toBe(true);
@@ -359,6 +366,35 @@ describe('orchestratedWorkApplier', () => {
       });
     }
 
+    it('shutdown suppression: skips terminal persistence and preserves the worktree', async () => {
+      // shutdown() arms setMutationShutdownInProgress before killing children;
+      // the dying child surfaces in the loop as a terminal the run never
+      // earned. The applier must neither persist it (the shutdown parker /
+      // next-boot recovery own the on-disk state) nor destroy the worktree
+      // (it may hold the in-flight task's uncommitted diff).
+      inject({
+        kind: 'blocked',
+        reason: 'child SIGTERM surfaced as block',
+        task: { id: 'task-one', text: 'task one', section: 'Phase 1' },
+      });
+      const descriptor = makeDescriptor();
+      setMutationShutdownInProgress(true);
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(descriptor, ctx));
+        const terminal = events[events.length - 1]!;
+        // The terminal is still yielded (startApply suppresses its own write).
+        expect(terminal.kind).toBe('failed');
+        // Worktree left in place for the parker / boot recovery.
+        expect(destroyed).toBe(false);
+        // persistTerminalMutationState skipped: no mutation line, no supervision write.
+        expect(mockAppendMutationLine).not.toHaveBeenCalled();
+        expect(mockUpsertRun).not.toHaveBeenCalled();
+        expect(descriptor.status).toBe('running');
+      } finally {
+        setMutationShutdownInProgress(false);
+      }
+    });
+
     it('re-dispatches recovered mutations against the existing worktree instead of creating a new one', async () => {
       const projectSlug = '14-product-team-agents';
       const recovered = makeWorktree(projectSlug, [
@@ -384,6 +420,9 @@ describe('orchestratedWorkApplier', () => {
       __setOrchestratedRuntimeForTest({
         createWorktree,
         destroyWorktree,
+        // Hermetic: the recovery path now probes the worktree for restart
+        // salvage; a clean-status stub keeps real git out of this test.
+        runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
         runOrchestration: async (deps) => {
           seenDeps = {
             branch: deps.branch,
@@ -429,6 +468,111 @@ describe('orchestratedWorkApplier', () => {
         }),
         expect.any(Object),
       );
+    });
+
+    it('salvages uncommitted work from a recovered dirty worktree before the orchestration re-runs', async () => {
+      // bugs.md (restart safety 2/2): the interrupted task's uncommitted dirt
+      // must land as a labeled salvage commit BEFORE the re-run — otherwise
+      // closeout's `git add -A` silently absorbs it into the next task's commit.
+      const projectSlug = '14-product-team-agents';
+      const recovered = makeWorktree(projectSlug, '- [ ] Resume boot\n');
+      wtDir = recovered.dir;
+      const gitCalls: Array<{ args: string[]; cwd?: string }> = [];
+      let salvageCommittedBeforeOrchestration = false;
+      const runGit: GitRunner = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+        gitCalls.push({ args: [...gitArgs], cwd: opts?.cwd });
+        if (gitArgs[0] === 'status') return { stdout: ' M src/half-done.ts\n?? src/new.ts\n', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'salvage1234567\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: vi.fn(async () => {
+          throw new Error('should not create a new worktree during recovery redispatch');
+        }),
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async () => {
+          salvageCommittedBeforeOrchestration = gitCalls.some(
+            (c) => c.args[0] === 'commit' && String(c.args[2]).includes('restart salvage'),
+          );
+          return {
+            kind: 'blocked',
+            reason: 'stop after salvage assertion',
+            task: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+          };
+        },
+      });
+
+      registerApplier(orchestratedWorkApplier);
+      const descriptor = makeDescriptor({ projectSlug, product: 'rune' }, 'mut-recovered-salvage');
+      const result = redispatchRecoveredOrchestratedMutation(descriptor, {
+        branch: 'rune-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        reconstruction: { completedTaskIds: [], nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' }, drift: false },
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      });
+
+      expect(result).toEqual({ ok: true });
+      await waitForCondition(() => !activeRuns.has(descriptor.id));
+
+      expect(salvageCommittedBeforeOrchestration).toBe(true);
+      const salvageSeq = gitCalls
+        .filter((c) => c.cwd === recovered.dir)
+        .slice(0, 4)
+        .map((c) => c.args.join(' '));
+      expect(salvageSeq).toEqual([
+        'status --porcelain',
+        'add -A',
+        `commit -m rune(rune): WIP — restart salvage — ${projectSlug}`,
+        'rev-parse HEAD',
+      ]);
+    });
+
+    it('does not salvage-commit on a recovered clean worktree', async () => {
+      const projectSlug = '14-product-team-agents';
+      const recovered = makeWorktree(projectSlug, '- [ ] Resume boot\n');
+      wtDir = recovered.dir;
+      const gitCalls: string[] = [];
+      const runGit: GitRunner = vi.fn(async (gitArgs: string[]) => {
+        gitCalls.push(gitArgs.join(' '));
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: vi.fn(async () => {
+          throw new Error('should not create a new worktree during recovery redispatch');
+        }),
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async () => ({
+          kind: 'blocked',
+          reason: 'stop after clean-tree assertion',
+          task: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+        }),
+      });
+
+      registerApplier(orchestratedWorkApplier);
+      const descriptor = makeDescriptor({ projectSlug, product: 'rune' }, 'mut-recovered-clean');
+      redispatchRecoveredOrchestratedMutation(descriptor, {
+        branch: 'rune-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        reconstruction: { completedTaskIds: [], nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' }, drift: false },
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      });
+      await waitForCondition(() => !activeRuns.has(descriptor.id));
+
+      expect(gitCalls).toContain('status --porcelain');
+      expect(gitCalls.some((c) => c.startsWith('add '))).toBe(false);
+      expect(gitCalls.some((c) => c.startsWith('commit '))).toBe(false);
     });
 
     it('binds the production transcript sink to createTranscriptSink under WORK_RUNS_DIR/<runId>/transcript.jsonl', () => {
@@ -3568,6 +3712,82 @@ describe('orchestratedWorkApplier', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('shutdown park composition (suppression + parker, codex 2026-07-08 BLOCK)', () => {
+  // The production race: shutdown() arms suppression, kills children, waits,
+  // THEN parks. The killed applier's startApply unwind completes during that
+  // wait — if the unwind removed the handle from activeRuns, the parker's
+  // default snapshot would see nothing and the no-cursor run would be left
+  // `running` (orphaned at next boot). This test drives the REAL startApply
+  // (createMutation) and the parker's REAL default listActiveRuns +
+  // writeTerminal (mutations-log and supervision-store are module-mocked).
+  it('a suppressed applier that unwinds before the parker runs is still discoverable and parked', async () => {
+    setMutationShutdownInProgress(true);
+    try {
+      let unwound = false;
+      const fixture = {
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validate: () => ({ ok: true as const }),
+        apply: (descriptor: MutationDescriptor) =>
+          (async function* () {
+            try {
+              // The SIGTERM'd child surfacing as a terminal the run never earned.
+              yield {
+                mutationId: descriptor.id,
+                ts: new Date().toISOString(),
+                kind: 'failed' as const,
+                data: { reason: 'child SIGTERM surfaced as failure' },
+              };
+            } finally {
+              unwound = true;
+            }
+          })(),
+      };
+      registerApplier(fixture as never);
+
+      const created = await createMutation('orchestrated-work', { projectSlug: 'demo', product: 'rune' }, 'webview');
+      expect((created as { ok: boolean }).ok).toBe(true);
+      const descriptor = (created as unknown as { descriptor: MutationDescriptor }).descriptor;
+
+      await waitForCondition(() => unwound);
+      // Real-timer settle so startApply's own finally has definitely run —
+      // asserting retention before it ran would pass spuriously even without
+      // the retention guard. (No fake timers in this describe.)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      // Fully unwound under suppression: still running on disk, and the
+      // handle is STILL in activeRuns for the parker to find.
+      expect(descriptor.status).toBe('running');
+      expect(activeRuns.has(descriptor.id)).toBe(true);
+
+      const parkDeps = {
+        ...defaultShutdownParkDeps(),
+        readRunCursor: async () => null,
+        runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+        worktreeExists: () => true,
+        resolveBaseBranch: () => 'main',
+        resolveWorktreePath: () => '/tmp/orch-park-compose-wt',
+      };
+      const parked = await parkInFlightOrchestratedRuns(parkDeps);
+
+      expect(parked).toEqual({ parked: [descriptor.id], resumable: [], skipped: [] });
+      // The default writeTerminal (writeRecoveredTerminalMutation) really ran:
+      // descriptor terminalized completed+parked, supervision blocked-on-human.
+      expect(descriptor.status).toBe('completed');
+      const supervisionRows = (mockUpsertRun.mock.calls as unknown[][])
+        .map((c) => c[0] as { id: string; status: string })
+        .filter((row) => row.id === descriptor.id);
+      expect(supervisionRows[supervisionRows.length - 1]!.status).toBe('blocked-on-human');
+      const snapshots = (mockAppendMutationLine.mock.calls as unknown[][])
+        .map((c) => c[0] as { id: string; status: string })
+        .filter((line) => line.id === descriptor.id);
+      expect(snapshots[snapshots.length - 1]!.status).toBe('completed');
+    } finally {
+      setMutationShutdownInProgress(false);
+      activeRuns.clear();
+    }
   });
 });
 

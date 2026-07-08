@@ -1180,6 +1180,129 @@ describe('project-orchestrator — durable run state', () => {
     expect(reconstructed.drift).toBe(false);
   });
 
+  it('writes a task-start cursor BEFORE the workflow runs — the mid-first-task window is resumable', async () => {
+    // bugs.md (restart safety 2/2): before this, the cursor only existed after
+    // the first closeout, so a restart during task 1 was orphaned. The
+    // task-start cursor's existence is what boot recovery gates on.
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
+    const calls: string[] = [];
+    const persistedCursors: PersistedRunCursor[] = [];
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        calls.push(`workflow:${task.id}`);
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: 'stop during the first task',
+        };
+      },
+    });
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      writeRunCursor: async (cursor: unknown) => {
+        const c = cursor as PersistedRunCursor;
+        calls.push(`cursor:${c.cursor.currentTaskId ?? 'closeout'}`);
+        persistedCursors.push(c);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('blocked');
+    // The cursor landed before the workflow ever ran.
+    expect(calls).toEqual(['cursor:build-the-streak-core', 'workflow:build-the-streak-core']);
+    expect(persistedCursors[0]).toEqual({
+      runId: 'run-1',
+      product: 'aura',
+      project: '14-x',
+      branch: 'rune-work/14-x',
+      baseBranch: 'main',
+      worktreePath,
+      resumeMarker: 'resumable',
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'build-the-streak-core',
+        nextTaskId: 'build-the-streak-core',
+      },
+    });
+    // Round-trip the exact recovery input for this window: cursor present,
+    // zero records, zero ticked boxes → resume re-selects the same task.
+    const reconstructed = reconstructRun({ tasksMd: h.state.tasksMd, records: [] });
+    expect(reconstructed.completedTaskIds).toEqual([]);
+    expect(reconstructed.nextTask?.id).toBe('build-the-streak-core');
+    expect(reconstructed.drift).toBe(false);
+  });
+
+  it('refreshes the task-start cursor each iteration; closeout cursors keep currentTaskId null', async () => {
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
+    const persistedCursors: PersistedRunCursor[] = [];
+    const h = makeHarness();
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      appendTaskRunRecord: async () => {},
+      writeRunCursor: async (cursor: unknown) => {
+        persistedCursors.push(cursor as PersistedRunCursor);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('finalized');
+    // start(task1) → closeout → start(task2) → closeout.
+    expect(persistedCursors.map((c) => c.cursor.currentTaskId)).toEqual([
+      'build-the-streak-core',
+      null,
+      'render-the-streak-card',
+      null,
+    ]);
+    // The second start-cursor carries the first task's completion.
+    expect(persistedCursors[2]!.cursor.completedTaskIds).toEqual(['build-the-streak-core']);
+    expect(persistedCursors[2]!.cursor.nextTaskId).toBe('render-the-streak-card');
+  });
+
+  it('a task-start cursor write failure is best-effort — the run proceeds and closeout stays fail-closed', async () => {
+    // Fail-closing here would hold a run before any work exists; the worst
+    // case of proceeding is the pre-cursor status quo (park/orphan). The
+    // closeout checkpoint write keeps its fail-closed contract (pinned below
+    // in the operational-recording tests).
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
+    const persistedCursors: PersistedRunCursor[] = [];
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return readyEvidence(task);
+      },
+    });
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      appendTaskRunRecord: async () => {},
+      writeRunCursor: async (cursor: unknown) => {
+        const c = cursor as PersistedRunCursor;
+        if (c.cursor.currentTaskId !== null) {
+          throw new Error('start-write disk failure');
+        }
+        persistedCursors.push(c);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    // Every task-start write threw and was swallowed; both tasks still ran to
+    // closeout and the run finalized. Closeout cursors persisted normally.
+    expect(res.kind).toBe('finalized');
+    expect(workflowCalls).toBe(2);
+    expect(persistedCursors.map((c) => c.cursor.currentTaskId)).toEqual([null, null]);
+  });
+
   it('records pass-with-warnings findings in the TaskRunRecord and finalizer handoff while proceeding', async () => {
     const persistedRecords: TaskRunRecord[] = [];
     const warningFinding = {

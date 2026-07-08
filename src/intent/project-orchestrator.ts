@@ -221,6 +221,10 @@ export async function runProjectOrchestration(
 
     const task = selection.task;
     emitTaskSelected(deps, task);
+    // Task-start cursor: written before any work so a restart mid-task (the
+    // previously-unprotected first-task window) is resumable instead of
+    // orphaned/parked. Best-effort — see persistTaskStartCursorSafely.
+    await persistTaskStartCursorSafely(deps, taskRecords, tasksMd, task);
     const contextMd = await deps.readContextMd();
 
     const spec = await deps.readSpec();
@@ -513,6 +517,7 @@ function buildRunCursor(
   deps: OrchestrationDeps,
   taskRecords: TaskRunRecord[],
   tasksMd: string,
+  currentTask?: SelectedTask,
 ): OrchestrationRunCursor {
   const next = selectNextTask(tasksMd);
   return {
@@ -527,10 +532,35 @@ function buildRunCursor(
       completedTaskIds: taskRecords
         .filter((record) => record.outcome === 'ready-for-closeout')
         .map((record) => record.taskId),
-      currentTaskId: null,
+      // Non-null marks a TASK-START cursor: the named task is in-progress and
+      // its work is untrusted (recovery re-runs it from scratch). Closeout
+      // cursors keep this null. Recovery re-derives position from tasks.md +
+      // records either way; the field is a durable marker, not a selector.
+      currentTaskId: currentTask?.id ?? null,
       nextTaskId: next.kind === 'task' ? next.task.id : null,
     },
   };
+}
+
+/** Best-effort task-start cursor write — its existence is what makes a
+ *  mid-task restart findable by boot recovery (a missing cursor orphans the
+ *  run; the identity fields never change mid-run, so even a stale cursor
+ *  resumes correctly). Follows the commitWipSafely precedent: a failed write
+ *  must not sink a run that has done no work yet — proceeding risks only the
+ *  pre-cursor status quo (shutdown park / orphan). Contrast
+ *  persistRunCheckpoint (closeout), which stays fail-closed because it
+ *  persists the completion facts recovery reconstructs from. */
+async function persistTaskStartCursorSafely(
+  deps: OrchestrationDeps,
+  taskRecords: TaskRunRecord[],
+  tasksMd: string,
+  task: SelectedTask,
+): Promise<void> {
+  try {
+    await deps.writeRunCursor?.(buildRunCursor(deps, taskRecords, tasksMd, task));
+  } catch {
+    /* best-effort: recovery falls back to the shutdown parker / orphan path */
+  }
 }
 
 function emitTaskSelected(deps: OrchestrationDeps, task: SelectedTask): void {
