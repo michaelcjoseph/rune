@@ -16,7 +16,7 @@ A single Node.js process handles everything:
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` and emits bus frames; TG shows a "🤔 · /cancel" tracker, the webview a cancellable pill. → `docs/architecture/subsystems.md`.
 - **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
 - **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`; full `/plan`→merged stage-by-stage map (agents/gates/criteria) → `docs/architecture/project-lifecycle.md`.
-- **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 17-step nightly orchestrator, review nudges.
+- **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 18-step nightly orchestrator, review nudges.
 - **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + PM-led planning conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages); two-layer search (LLM index → ripgrep), no vector DB; exposed locally via the `rune-kb` stdio MCP server.
 
@@ -165,7 +165,7 @@ Loaded from `.env.local` via `--env-file-if-exists`. Defaults in `src/config.ts`
 
 Runtime agents are spawned by Rune via `runAgent()`; dev-tooling agents are used by `/work` and `/review`. Full purposes are in each `.claude/agents/*.md` file.
 
-**Runtime (generic tooling, this repo):** wiki-compiler, kb-query, wiki-linter, morning-prep, session-summarizer, release-notes, content-triager, photo-classifier, system-scanner, project-updater, playbook-proposer, playbook-updater, proposal-updater, worldview-updater, psychology-updater, json-updater, daily-content-updater, intent-scan, workout-generator, lenny-sync, sr-question-generator, sr-grader, project-setup-writer.
+**Runtime (generic tooling, this repo):** wiki-compiler, kb-query, wiki-linter, morning-prep, session-summarizer, release-notes, content-triager, note-triage, photo-classifier, system-scanner, project-updater, playbook-proposer, playbook-updater, proposal-updater, worldview-updater, psychology-updater, json-updater, daily-content-updater, intent-scan, workout-generator, lenny-sync, sr-question-generator, sr-grader, project-setup-writer.
 
 **Vault-resident (personal specifics, `$VAULT_DIR/.claude/agents/`):** journal-scanner, project-scanner, review-writer.
 

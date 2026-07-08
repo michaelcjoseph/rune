@@ -6,10 +6,6 @@ below it.
 
 ## User-authored
 
-- As part of nightly processing, Rune should read vault notes and add items to 
-  - ideas for the correct product
-  - bugs for the correct product
-  - research / writing topics 
 - Default to an ELI5 / first-principles posture when I talk to Rune
   - **Premise:** When I talk to Rune it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
   - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)
@@ -89,4 +85,6 @@ below it.
      The B4.2 reader (`readFiledIdeas` in src/intent/observation-ideas-io.ts)
      parses only the lines under this section header so user-authored ideas above
      never collide with loop-filed dedupe. -->
+
+- **Investigate recurring wiki-linter failures** — wiki-linter fails 26 times in 7 days
 

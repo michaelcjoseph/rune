@@ -12,6 +12,7 @@ import { runKnowledgeSupersessionReconciliation } from '../kb/knowledge-superses
 import { conservativeSupersessionAdjudicator } from '../kb/supersession-adjudicator.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
+import { runNoteTriage } from './note-triage.js';
 import {
   runJournalIntentProducer,
   type JournalIntentQueueEntry,
@@ -133,10 +134,10 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     'career/applications.json — job applications',
     'investments/investments.json — investment tracking',
   ];
+  // Ideas and writing topics moved to the Note triage step (project 23) — Daily tags now
+  // handles only nutrition on the markdown side.
   const KNOWN_MARKDOWN_FILES = [
     'health/nutrition.md — meal notes (#diet tags)',
-    'projects/ideas.md — project ideas (#idea tags)',
-    'writing/topics.md — writing topics / prompts (journal-surfaced blog or essay ideas)',
   ];
 
   if (!content?.trim()) {
@@ -153,7 +154,7 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     ? `\n- **Implicit CRM references**: even without an explicit \`#crm\` tag, any mention of ${config.IMPLICIT_CRM_NAMES.map((n) => `\`[[${n}]]\``).join(' or ')} should produce a CRM update for that contact (append today's journal_ref, add any new context).`
     : '';
 
-  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, #diet, #idea, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
+  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, #diet, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
 
 ## Known targets
 
@@ -178,15 +179,14 @@ For each tag found, output a proposed update in this format:
 - **\`#books\` summaries**: when you propose a \`#books\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.${implicitCrmRule}
 - **\`#study\` status inference**: when the journal describes *starting* a study topic, set \`status: "in_progress"\`. When it describes *finishing* a topic, set \`status: "completed"\`. Use journal wording as the signal ("started reading X", "finished X", "completed X course").
 - **\`#diet\` tags** → \`health/nutrition.md\`. Propose the meal line in the form expected by \`daily-content-updater\`: a date + time + meal description. Multiple \`#diet\` mentions in one journal can share the same date heading.
-- **\`#idea\` tags** → \`projects/ideas.md\`. Propose a short title (3-6 words) and a one-to-two sentence description distilled from the tagged passage. Always include a \`Source: [[${date.replace(/-/g, '_')}]]\` pointer.
-- **Writing topics** → \`writing/topics.md\`. Without requiring an explicit tag, notice phrases like "I should write about X", "good essay idea: Y", "blog post: Z" and propose each as a bulleted topic. Skip if nothing writing-shaped surfaces.
+- **\`#idea\` tags and writing topics are handled by a separate pipeline** — do NOT propose updates for them.
 - **\`#health\` tags do NOT map to any file**. Do not propose an update for them. Instead, after the regular update list, emit a line:
 
   \`Health flags: <brief summary of each #health mention, semicolon-separated>\`
 
   If there are no \`#health\` mentions, omit this line entirely. These flags surface in the nightly summary for later weekly-review discussion.
 
-If no actionable tags are found (no JSON updates AND no markdown updates AND no \`#health\` flags AND no implicit sam/jude references AND no writing topics), say "No updates needed." and briefly summarize what was in the journal.
+If no actionable tags are found (no JSON updates AND no markdown updates AND no \`#health\` flags AND no implicit sam/jude references), say "No updates needed." and briefly summarize what was in the journal.
 
 Be concise. Only propose updates for tags that clearly map to a target above or match the special rules.`;
 
@@ -217,7 +217,7 @@ Be concise. Only propose updates for tags that clearly map to a target above or 
   // (per frontmatter + prompt) limits what it acts on.
   // Match full paths OR bare file names — the analyzer LLM may emit either form.
   const mentionsJson = /\b(books|crm|places|workouts|progress|applications|investments)\.json\b/.test(analysis.text);
-  const mentionsMarkdown = /\b(nutrition|ideas|topics)\.md\b/.test(analysis.text);
+  const mentionsMarkdown = /\bnutrition\.md\b/.test(analysis.text);
 
   const agentPrompt = `Apply the following proposed updates to the appropriate vault files. Read each target file first to understand its structure, then add the new entries.
 
@@ -304,6 +304,14 @@ function stepBirthdayAlerts(date: string): NightlyStepResult {
 async function stepPlaybookExtract(): Promise<NightlyStepResult> {
   const result = await extractPlaybookDrafts();
   return { step: 'Playbook extract', status: result.status, detail: result.detail };
+}
+
+/** Project 23: extract product ideas/bugs + writing/research topics from today's journal and
+ *  file them per target (product repo backlogs, writing product topic files, vault new-product
+ *  ideas). Runs after Registry rebuild so the product set is fresh the same night. */
+async function stepNoteTriage(date: string, content: string | null): Promise<NightlyStepResult> {
+  const result = await runNoteTriage(date, content);
+  return { step: 'Note triage', status: result.status, detail: result.detail };
 }
 
 /** Rebuild the cross-product registry so the cockpit's project list, lifecycle
@@ -802,6 +810,7 @@ export async function executeNightly(
   await run('Playbook extract', stepPlaybookExtract);
   await run('Registry rebuild', stepRebuildRegistry);
   await run('Journal-intent producer', () => stepJournalIntentProducer(todayJournal));
+  await run('Note triage', () => stepNoteTriage(todayDate, todayJournal));
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('Library sync', stepLibrarySync);

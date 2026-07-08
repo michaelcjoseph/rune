@@ -16,6 +16,7 @@ const AGENT_LABELS: Record<string, string> = {
   'release-notes':         'Drafting release notes',
   'lenny-sync':            'Syncing Lenny library',
   'playbook-proposer':     'Drafting playbook entries',
+  'note-triage':           'Triaging journal notes',
   'project-updater':       'Updating projects',
   'playbook-updater':      'Updating playbook',
   'proposal-updater':      'Applying proposals',

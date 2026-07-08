@@ -19,6 +19,7 @@ import { join } from 'node:path';
 
 import {
   assertBacklogWriteAllowed,
+  assertScopedTopicWriteAllowed,
   appendBacklogMutationLog,
 } from './backlog-write-lock.js';
 
@@ -88,6 +89,52 @@ describe('backlog-security — assertBacklogWriteAllowed', () => {
     rmSync(join(repo, 'docs'), { recursive: true, force: true });
     symlinkSync(outside, join(repo, 'docs'));
     expect(() => assertBacklogWriteAllowed(repo, join(repo, 'docs/projects/bugs.md'))).toThrow();
+  });
+});
+
+describe('backlog-security — assertScopedTopicWriteAllowed', () => {
+  const SCOPE = 'docs/rune';
+
+  it('allows the two topic files under the scope path, even when neither file nor dir exists yet', () => {
+    // docs/rune/ intentionally ABSENT — note-triage seeds it on first write, so the guard must
+    // realpath the closest EXISTING ancestor (the repo root here), not the target.
+    const repo = makeRepo();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/writing-ideas.md'))).not.toThrow();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/research-topics.md'))).not.toThrow();
+  });
+
+  it('rejects other basenames under the scope path', () => {
+    const repo = makeRepo();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/notes.md'))).toThrow();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/index.md'))).toThrow();
+  });
+
+  it('rejects an allowed basename outside the scope path', () => {
+    const repo = makeRepo();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'writing-ideas.md'))).toThrow();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/projects/writing-ideas.md'))).toThrow();
+  });
+
+  it('rejects a path-traversal target that escapes the repo', () => {
+    const repo = makeRepo();
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/../../../etc/writing-ideas.md'))).toThrow();
+  });
+
+  it('rejects a non-repo-relative or traversing scope path', () => {
+    const repo = makeRepo();
+    expect(() => assertScopedTopicWriteAllowed(repo, '', join(repo, 'writing-ideas.md'))).toThrow();
+    expect(() => assertScopedTopicWriteAllowed(repo, '/etc', '/etc/writing-ideas.md')).toThrow();
+    expect(() => assertScopedTopicWriteAllowed(repo, '../outside', join(repo, '../outside/writing-ideas.md'))).toThrow();
+  });
+
+  it('rejects an allowed-named file inside a symlinked scope dir that escapes the repo', () => {
+    const repo = makeRepo();
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'topic-sec-dir-')));
+    created.push(outside);
+    writeFileSync(join(outside, 'writing-ideas.md'), 'x');
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    symlinkSync(outside, join(repo, 'docs', 'rune'));
+    expect(() => assertScopedTopicWriteAllowed(repo, SCOPE, join(repo, 'docs/rune/writing-ideas.md'))).toThrow();
   });
 });
 
