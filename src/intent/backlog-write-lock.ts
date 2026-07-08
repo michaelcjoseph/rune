@@ -85,22 +85,16 @@ export function writeFileAtomic(path: string, content: string): void {
 /** The only two relative paths a backlog write may target, per repo. */
 export const ALLOWED_BACKLOG_FILES = ['docs/projects/bugs.md', 'docs/projects/ideas.md'] as const;
 
-/**
- * Assert `absPath` is a permitted backlog write target under `repoPath`: it must resolve to
- * exactly one of the two allowed files, AND the realpath of its closest existing ancestor must
- * stay inside the repo (so a symlinked file — or symlinked `docs/` dir — escaping the repo is
- * rejected). Throws `BacklogWriteError` otherwise.
- *
- * The realpath is taken on the closest EXISTING ancestor (not the target) so a not-yet-created
- * `bugs.md`/`ideas.md` doesn't ENOENT on the happy path.
- */
-export function assertBacklogWriteAllowed(repoPath: string, absPath: string): void {
-  const target = resolve(absPath);
-  const allowed = ALLOWED_BACKLOG_FILES.map((rel) => resolve(join(repoPath, rel)));
-  if (!allowed.includes(target)) {
-    throw new BacklogWriteError(`backlog write rejected: '${target}' is not an allowed backlog file`);
-  }
+/** Basenames the nightly note-triage step may write under a product's scopePath. */
+export const ALLOWED_TOPIC_FILES = ['writing-ideas.md', 'research-topics.md'] as const;
 
+/**
+ * Shared containment tail of the write guards: the realpath of `target`'s closest EXISTING
+ * ancestor must stay inside `repoPath` (so a symlinked file — or a symlinked parent dir —
+ * escaping the repo is rejected). Taking the realpath on the closest existing ancestor (not the
+ * target) means a not-yet-created file doesn't ENOENT on the happy path.
+ */
+function assertResolvesInsideRepo(repoPath: string, target: string): void {
   let canonicalRepo: string;
   try {
     canonicalRepo = realpathSync(repoPath);
@@ -121,6 +115,46 @@ export function assertBacklogWriteAllowed(repoPath: string, absPath: string): vo
   if (!isContainedIn(canonicalRepo, canonicalAncestor)) {
     throw new BacklogWriteError(`backlog write rejected: '${target}' resolves outside the repo`);
   }
+}
+
+/**
+ * Assert `absPath` is a permitted backlog write target under `repoPath`: it must resolve to
+ * exactly one of the two allowed files, AND pass the ancestor-realpath containment check.
+ * Throws `BacklogWriteError` otherwise.
+ */
+export function assertBacklogWriteAllowed(repoPath: string, absPath: string): void {
+  const target = resolve(absPath);
+  const allowed = ALLOWED_BACKLOG_FILES.map((rel) => resolve(join(repoPath, rel)));
+  if (!allowed.includes(target)) {
+    throw new BacklogWriteError(`backlog write rejected: '${target}' is not an allowed backlog file`);
+  }
+  assertResolvesInsideRepo(repoPath, target);
+}
+
+/**
+ * Assert `absPath` is a permitted scoped-topic write target: exactly
+ * `<repoPath>/<scopePath>/<basename>` for one of {@link ALLOWED_TOPIC_FILES}, with the same
+ * ancestor-realpath containment check as {@link assertBacklogWriteAllowed} (the target file —
+ * and the scope dir itself — may not exist yet). `scopePath` must be a non-empty repo-relative
+ * path (the caller binds it from the product's products.json `scopePath`). Deliberately a
+ * separate guard: widening `ALLOWED_BACKLOG_FILES` would legalize these paths in every repo for
+ * every existing call site.
+ */
+export function assertScopedTopicWriteAllowed(
+  repoPath: string,
+  scopePath: string,
+  absPath: string,
+): void {
+  const scope = scopePath.trim();
+  if (scope === '' || scope.startsWith('/') || scope.split('/').includes('..')) {
+    throw new BacklogWriteError(`topic write rejected: scope path '${scopePath}' is not repo-relative`);
+  }
+  const target = resolve(absPath);
+  const allowed = ALLOWED_TOPIC_FILES.map((base) => resolve(join(repoPath, scope, base)));
+  if (!allowed.includes(target)) {
+    throw new BacklogWriteError(`topic write rejected: '${target}' is not an allowed topic file`);
+  }
+  assertResolvesInsideRepo(repoPath, target);
 }
 
 // ---------------------------------------------------------------------------
