@@ -255,7 +255,11 @@ async function waitForUpserts(n: number): Promise<unknown[][]> {
 }
 
 async function waitForCondition(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 20 && !condition(); i++) {
+  // Microtask-only polling (NOT setTimeout — several tests in this file run
+  // under fake timers, where a real-timer wait would hang to the test
+  // timeout). The budget is generous because stub-async paths like the
+  // restart-salvage git sequence add multiple promise hops per iteration.
+  for (let i = 0; i < 500 && !condition(); i++) {
     await Promise.resolve();
   }
   expect(condition()).toBe(true);
@@ -414,6 +418,9 @@ describe('orchestratedWorkApplier', () => {
       __setOrchestratedRuntimeForTest({
         createWorktree,
         destroyWorktree,
+        // Hermetic: the recovery path now probes the worktree for restart
+        // salvage; a clean-status stub keeps real git out of this test.
+        runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
         runOrchestration: async (deps) => {
           seenDeps = {
             branch: deps.branch,
@@ -459,6 +466,111 @@ describe('orchestratedWorkApplier', () => {
         }),
         expect.any(Object),
       );
+    });
+
+    it('salvages uncommitted work from a recovered dirty worktree before the orchestration re-runs', async () => {
+      // bugs.md (restart safety 2/2): the interrupted task's uncommitted dirt
+      // must land as a labeled salvage commit BEFORE the re-run — otherwise
+      // closeout's `git add -A` silently absorbs it into the next task's commit.
+      const projectSlug = '14-product-team-agents';
+      const recovered = makeWorktree(projectSlug, '- [ ] Resume boot\n');
+      wtDir = recovered.dir;
+      const gitCalls: Array<{ args: string[]; cwd?: string }> = [];
+      let salvageCommittedBeforeOrchestration = false;
+      const runGit: GitRunner = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+        gitCalls.push({ args: [...gitArgs], cwd: opts?.cwd });
+        if (gitArgs[0] === 'status') return { stdout: ' M src/half-done.ts\n?? src/new.ts\n', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'salvage1234567\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: vi.fn(async () => {
+          throw new Error('should not create a new worktree during recovery redispatch');
+        }),
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async () => {
+          salvageCommittedBeforeOrchestration = gitCalls.some(
+            (c) => c.args[0] === 'commit' && String(c.args[2]).includes('restart salvage'),
+          );
+          return {
+            kind: 'blocked',
+            reason: 'stop after salvage assertion',
+            task: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+          };
+        },
+      });
+
+      registerApplier(orchestratedWorkApplier);
+      const descriptor = makeDescriptor({ projectSlug, product: 'rune' }, 'mut-recovered-salvage');
+      const result = redispatchRecoveredOrchestratedMutation(descriptor, {
+        branch: 'rune-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        reconstruction: { completedTaskIds: [], nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' }, drift: false },
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      });
+
+      expect(result).toEqual({ ok: true });
+      await waitForCondition(() => !activeRuns.has(descriptor.id));
+
+      expect(salvageCommittedBeforeOrchestration).toBe(true);
+      const salvageSeq = gitCalls
+        .filter((c) => c.cwd === recovered.dir)
+        .slice(0, 4)
+        .map((c) => c.args.join(' '));
+      expect(salvageSeq).toEqual([
+        'status --porcelain',
+        'add -A',
+        `commit -m rune(rune): WIP — restart salvage — ${projectSlug}`,
+        'rev-parse HEAD',
+      ]);
+    });
+
+    it('does not salvage-commit on a recovered clean worktree', async () => {
+      const projectSlug = '14-product-team-agents';
+      const recovered = makeWorktree(projectSlug, '- [ ] Resume boot\n');
+      wtDir = recovered.dir;
+      const gitCalls: string[] = [];
+      const runGit: GitRunner = vi.fn(async (gitArgs: string[]) => {
+        gitCalls.push(gitArgs.join(' '));
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: vi.fn(async () => {
+          throw new Error('should not create a new worktree during recovery redispatch');
+        }),
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async () => ({
+          kind: 'blocked',
+          reason: 'stop after clean-tree assertion',
+          task: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+        }),
+      });
+
+      registerApplier(orchestratedWorkApplier);
+      const descriptor = makeDescriptor({ projectSlug, product: 'rune' }, 'mut-recovered-clean');
+      redispatchRecoveredOrchestratedMutation(descriptor, {
+        branch: 'rune-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        reconstruction: { completedTaskIds: [], nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' }, drift: false },
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      });
+      await waitForCondition(() => !activeRuns.has(descriptor.id));
+
+      expect(gitCalls).toContain('status --porcelain');
+      expect(gitCalls.some((c) => c.startsWith('add '))).toBe(false);
+      expect(gitCalls.some((c) => c.startsWith('commit '))).toBe(false);
     });
 
     it('binds the production transcript sink to createTranscriptSink under WORK_RUNS_DIR/<runId>/transcript.jsonl', () => {

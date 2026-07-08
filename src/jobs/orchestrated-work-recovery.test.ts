@@ -133,6 +133,62 @@ describe('orchestrated-work boot recovery', () => {
     });
   });
 
+  it('re-dispatches a mid-first-task run: task-start cursor present, zero records, zero ticked boxes', async () => {
+    // bugs.md (restart safety 2/2): this exact input used to be orphaned
+    // because no cursor existed before the first closeout. With the
+    // task-start cursor, recovery reconstructs an empty-progress run
+    // (drift: false) and re-dispatches from the first unchecked task.
+    const mutation = runningOrchestratedMutation();
+    const runCursor: OrchestrationRunCursor = {
+      ...cursor(),
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'persist-records-and-cursor',
+        nextTaskId: 'persist-records-and-cursor',
+      },
+    };
+    const tasksMd = [
+      '# Tasks',
+      '',
+      '## Phase 11B',
+      '- [ ] Persist records and cursor',
+      '- [ ] Resume boot',
+    ].join('\n');
+    const reconstruction = {
+      completedTaskIds: [],
+      nextTask: { id: 'persist-records-and-cursor', text: 'Persist records and cursor', section: 'Phase 11B' },
+      drift: false,
+    };
+    mockReconstructRun.mockReturnValue(reconstruction);
+
+    const deps = {
+      readRunningOrchestratedMutations: vi.fn(async () => [mutation]),
+      readRunCursor: vi.fn(async () => runCursor),
+      readTaskRunRecords: vi.fn(async () => []),
+      readTasksMd: vi.fn(async () => tasksMd),
+      redispatchOrchestratedMutation: vi.fn(async () => {}),
+      markOrphaned: vi.fn(async () => {}),
+      writeTerminal: vi.fn(async () => {}),
+    };
+
+    const result = await recoverOrchestratedWorkRuns(deps);
+
+    expect(mockReconstructRun).toHaveBeenCalledWith({ tasksMd, records: [] });
+    expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
+      mutation,
+      expect.objectContaining({
+        branch: runCursor.branch,
+        baseBranch: runCursor.baseBranch,
+        worktreePath: runCursor.worktreePath,
+        reconstruction,
+        resumeFromTaskId: 'persist-records-and-cursor',
+        existingBranch: true,
+      }),
+    );
+    expect(deps.markOrphaned).not.toHaveBeenCalled();
+    expect(result).toEqual({ resumed: ['mut-orch-resume'], orphaned: [], skipped: [] });
+  });
+
   it('does not redispatch a resumable mutation when another process owns its recovery lease', async () => {
     const mutation = runningOrchestratedMutation();
     const runCursor = cursor();

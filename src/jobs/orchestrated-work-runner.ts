@@ -357,7 +357,12 @@ export async function parkInFlightOrchestratedRuns(
         continue;
       }
 
-      const wipSha = await commitShutdownWip(deps.runGit, worktreePath, product, projectSlug);
+      const wipSha = await commitWorktreeWip(deps.runGit, worktreePath, {
+        message: `rune(${product}): WIP — shutdown park — ${projectSlug}`,
+        logLabel: 'shutdown WIP commit',
+        product,
+        projectSlug,
+      });
       const reason =
         wipSha === null
           ? 'parked at shutdown: process restart interrupted task execution'
@@ -394,16 +399,17 @@ export async function parkInFlightOrchestratedRuns(
   return result;
 }
 
-/** Best-effort WIP commit of a dirty shutdown worktree — mirrors the closeout
+/** Best-effort WIP commit of a dirty worktree — mirrors the closeout
  *  `commitWip` dep. Returns the commit sha; null when the tree is clean or on
- *  any git failure (preservation is best-effort; the park itself must land). */
-async function commitShutdownWip(
+ *  any git failure (preservation is best-effort; the caller's own outcome —
+ *  park or resume — must land regardless). Shared by the shutdown parker and
+ *  the recovery-redispatch restart salvage. */
+async function commitWorktreeWip(
   runGit: GitRunner,
   cwd: string,
-  product: string,
-  projectSlug: string,
+  args: { message: string; logLabel: string; product: string; projectSlug: string },
 ): Promise<string | null> {
-  const message = `rune(${product}): WIP — shutdown park — ${projectSlug}`.slice(0, 200);
+  const message = args.message.slice(0, 200);
   try {
     const { stdout } = await runGit(['status', '--porcelain'], { cwd });
     if (stdout.trim() === '') return null;
@@ -412,9 +418,9 @@ async function commitShutdownWip(
     const { stdout: sha } = await runGit(['rev-parse', 'HEAD'], { cwd });
     return sha.trim();
   } catch (err) {
-    log.warn('orchestrated-work-runner: shutdown WIP commit failed', {
-      product,
-      project: projectSlug,
+    log.warn(`orchestrated-work-runner: ${args.logLabel} failed`, {
+      product: args.product,
+      project: args.projectSlug,
       error: (err as Error).message,
     });
     return null;
@@ -1255,6 +1261,24 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             egressAllowlist,
             resumed: true,
           };
+          // Restart salvage (bugs.md restart safety 2/2): the interrupted task
+          // may have left uncommitted work in the reused worktree. Commit it as
+          // a labeled salvage commit so the re-run task starts from a clean
+          // tree and closeout's `git add -A` cannot silently absorb stale dirt
+          // — the half-work stays inspectable on the branch instead. Best-effort.
+          const salvageSha = await commitWorktreeWip(deps.runGit, recovery.worktreePath, {
+            message: `rune(${product}): WIP — restart salvage — ${projectSlug}`,
+            logLabel: 'restart salvage commit',
+            product,
+            projectSlug,
+          });
+          if (salvageSha !== null) {
+            log.info('orchestrated-work-runner: salvaged uncommitted work from interrupted run', {
+              id: descriptor.id,
+              project: projectSlug,
+              sha: salvageSha,
+            });
+          }
         } else {
           sandbox = await deps.createWorktree({
             product,
