@@ -441,3 +441,14 @@ Today `startFixRun` throws `fix-run handoff unavailable`, so a gate-approved Fix
 - **Phase 4 — Acceptance:** a stub-free e2e acceptance test over the load-bearing path, docs-sync if structure changed, and a required live operator gate.
 - **Reuse, not rebuild:** existing orchestrated-work, the team-task reviewer gate, the project-15 finalizer, the transcript, and run observability are reused; no new reviewer, runner, or status system.
 - **Task breakdown & test plan:** see [tasks.md](22-fix-run-dispatch/tasks.md) and [test-plan.md](22-fix-run-dispatch/test-plan.md). Test-first per phase; the live gate is required.
+
+## 23-note-triage — In Progress
+
+[Spec](23-note-triage/spec.md)
+
+Nightly journal → per-product ideas/bugs + writing/research topics.
+
+A new "Note triage" nightly step (position 7, after Registry rebuild) extracts forward-looking items from today's journal via a tool-less JSON agent and files them deterministically: ideas for registered products into that repo's `docs/projects/ideas.md`, bugs into `docs/projects/bugs.md`, new-product ideas into the vault's `projects/ideas.md`, and writing/research topics into michaelcjoseph.com `docs/rune/{writing-ideas,research-topics}.md` (created on first write). Product identification uses journal wikilinks matched against vault `projects/*.md` pages plus LLM inference, always re-validated against `products.json` (fail-closed to the vault path). Supersedes the Daily-tags ideas/topics targets (Daily-tags keeps nutrition only).
+
+- **Trust boundary:** tool-less agent, delimited untrusted journal, 20-item cap, allowlist write guards (new `assertScopedTopicWriteAllowed` for the scoped topic files), title-based dedupe, no product-repo commits.
+- **Task breakdown & test plan:** see [tasks.md](23-note-triage/tasks.md) and [test-plan.md](23-note-triage/test-plan.md). Built + green 2026-07-08; the live operator gate remains open until verified on real journal content.

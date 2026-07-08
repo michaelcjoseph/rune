@@ -6,7 +6,7 @@ below it.
 
 ## User-authored
 
-- As part of nightly processing, Rune should read vault notes and add items to 
+- As part of nightly processing, Rune should read vault notes and add items to → 23-note-triage
   - ideas for the correct product
   - bugs for the correct product
   - research / writing topics 
@@ -89,4 +89,6 @@ below it.
      The B4.2 reader (`readFiledIdeas` in src/intent/observation-ideas-io.ts)
      parses only the lines under this section header so user-authored ideas above
      never collide with loop-filed dedupe. -->
+
+- **Investigate recurring wiki-linter failures** — wiki-linter fails 26 times in 7 days
 
