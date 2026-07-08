@@ -2105,9 +2105,13 @@ describe('orchestratedWorkApplier', () => {
 
     it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
       const runId = 'mut-orch-substrate';
-      const runDir = join(process.cwd(), 'logs', 'work-runs', runId);
-      rmSync(runDir, { recursive: true, force: true });
+      // Isolate the run dir in a temp workRunsDir (like every sibling test) so a
+      // concurrent full-suite run or the live Rune work-run GC can't race the real
+      // logs/work-runs/<runId> and make transcriptExistedAtTerminal flaky.
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-durable-transcript-'));
+      const runDir = join(artifactsDir, runId);
       __setOrchestratedRuntimeForTest({
+        workRunsDir: artifactsDir,
         createWorktree: async () => {
           created = true;
           const { sandbox, dir } = makeWorktree();
@@ -2166,7 +2170,7 @@ describe('orchestratedWorkApplier', () => {
       expect(typeof summary['endedAt']).toBe('string');
       expect(destroyed).toBe(true);
 
-      rmSync(runDir, { recursive: true, force: true });
+      rmSync(artifactsDir, { recursive: true, force: true });
     });
 
     it('a clean branch-complete orchestrated run invokes runFinalizer in gated-merge mode', async () => {
