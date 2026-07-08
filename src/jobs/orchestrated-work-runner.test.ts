@@ -104,6 +104,7 @@ import {
   createMutation,
   registerApplier,
   setMutationBus,
+  setMutationShutdownInProgress,
   type MutationDescriptor,
   type MutationEvent,
 } from '../transport/mutations.js';
@@ -358,6 +359,35 @@ describe('orchestratedWorkApplier', () => {
         runOrchestration: async () => result,
       });
     }
+
+    it('shutdown suppression: skips terminal persistence and preserves the worktree', async () => {
+      // shutdown() arms setMutationShutdownInProgress before killing children;
+      // the dying child surfaces in the loop as a terminal the run never
+      // earned. The applier must neither persist it (the shutdown parker /
+      // next-boot recovery own the on-disk state) nor destroy the worktree
+      // (it may hold the in-flight task's uncommitted diff).
+      inject({
+        kind: 'blocked',
+        reason: 'child SIGTERM surfaced as block',
+        task: { id: 'task-one', text: 'task one', section: 'Phase 1' },
+      });
+      const descriptor = makeDescriptor();
+      setMutationShutdownInProgress(true);
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(descriptor, ctx));
+        const terminal = events[events.length - 1]!;
+        // The terminal is still yielded (startApply suppresses its own write).
+        expect(terminal.kind).toBe('failed');
+        // Worktree left in place for the parker / boot recovery.
+        expect(destroyed).toBe(false);
+        // persistTerminalMutationState skipped: no mutation line, no supervision write.
+        expect(mockAppendMutationLine).not.toHaveBeenCalled();
+        expect(mockUpsertRun).not.toHaveBeenCalled();
+        expect(descriptor.status).toBe('running');
+      } finally {
+        setMutationShutdownInProgress(false);
+      }
+    });
 
     it('re-dispatches recovered mutations against the existing worktree instead of creating a new one', async () => {
       const projectSlug = '14-product-team-agents';
