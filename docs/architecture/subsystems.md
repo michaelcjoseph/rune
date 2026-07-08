@@ -22,7 +22,7 @@ The cockpit Start action dispatches to either the orchestrated or legacy applier
 
 Mutations are logged append-only to `logs/mutations.jsonl`; orphaned `running` entries are flipped to `failed` at startup via `reconcileOrphans()`.
 
-**Shutdown-park suppression:** `setMutationShutdownInProgress(v)`/`isMutationShutdownInProgress()` is armed by `shutdown()` (`src/index.ts`) before `killActiveProcesses()`. While armed, `startApply` suppresses ALL terminal/crash persistence and heartbeat upserts, but ONLY for `orchestrated-work` mutations — a SIGTERM'd child would otherwise surface as a terminal the run never earned, flipping a boot-resumable `running` mutation to `failed` or clobbering a just-written shutdown park. Other mutation kinds keep their existing crash semantics. See the shutdown-park entry below for what owns the suppressed run's on-disk state instead.
+**Shutdown-park suppression:** `setMutationShutdownInProgress(v)`/`isMutationShutdownInProgress()` is armed by `shutdown()` (`src/index.ts`) before `killActiveProcesses()`. While armed, `startApply` suppresses ALL terminal/crash persistence and heartbeat upserts, but ONLY for `orchestrated-work` mutations — a SIGTERM'd child would otherwise surface as a terminal the run never earned, flipping a boot-resumable `running` mutation to `failed` or clobbering a just-written shutdown park. Other mutation kinds keep their existing crash semantics. A suppressed run's `activeRuns` handle is also retained (not deleted in the `startApply` finally) so the parker — which snapshots `activeRuns` only after the children are dead — can still find the run after its applier unwinds. See the shutdown-park entry below for what owns the suppressed run's on-disk state instead.
 
 ### Supervision coupling
 

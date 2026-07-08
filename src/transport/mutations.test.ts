@@ -1046,8 +1046,11 @@ describe('mutations', () => {
       expect(snapshots).not.toContain('completed');
       expect(supervision).not.toContain('failed');
       expect(supervision).not.toContain('completed');
-      // activeRuns cleanup still ran (the finally is not suppressed).
-      expect(activeRuns.size).toBe(0);
+      // The handle stays DISCOVERABLE: the shutdown parker snapshots
+      // activeRuns after the children are dead, and a suppressed unwind that
+      // deleted its handle would hide the run from the parker (left running
+      // with no cursor → orphaned at next boot).
+      expect(activeRuns.has(descriptor.id)).toBe(true);
     });
 
     it('suppresses an orchestrated-work applier crash during shutdown', async () => {
@@ -1072,7 +1075,8 @@ describe('mutations', () => {
       const { snapshots, supervision } = persistedStatuses();
       expect(snapshots).not.toContain('failed');
       expect(supervision).not.toContain('failed');
-      expect(activeRuns.size).toBe(0);
+      // Crash unwind also keeps the handle discoverable for the parker.
+      expect(activeRuns.has(descriptor.id)).toBe(true);
     });
 
     it('a non-orchestrated kind still persists its terminal during shutdown', async () => {
@@ -1095,6 +1099,8 @@ describe('mutations', () => {
       const { snapshots, supervision } = persistedStatuses();
       expect(snapshots).toContain('completed');
       expect(supervision).toContain('completed');
+      // Non-orchestrated kinds also keep normal activeRuns cleanup.
+      expect(activeRuns.size).toBe(0);
     });
   });
 });

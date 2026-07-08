@@ -790,7 +790,14 @@ async function startApply(
       );
     }
   } finally {
-    if (activeRuns.get(descriptor.id) === handle) {
+    // During shutdown a suppressed orchestrated run's handle must STAY in
+    // activeRuns: parkInFlightOrchestratedRuns snapshots the map only after
+    // killActiveProcesses()/waitForActiveProcesses(), and the killed applier's
+    // unwind would otherwise race the parker and hide the run — leaving it
+    // `running` with no cursor, which the next boot orphans (the exact
+    // shutdown-loss case the parker exists to prevent). The process is
+    // exiting, so retaining the handle leaks nothing.
+    if (!shutdownSuppressed() && activeRuns.get(descriptor.id) === handle) {
       activeRuns.delete(descriptor.id);
     }
   }

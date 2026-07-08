@@ -96,6 +96,8 @@ import {
   __getRuntimeDepsForTest,
   redispatchRecoveredOrchestratedMutation,
   fileTerminalBugsToBacklog,
+  parkInFlightOrchestratedRuns,
+  defaultShutdownParkDeps,
 } from './orchestrated-work-runner.js';
 import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
 import {
@@ -3710,6 +3712,82 @@ describe('orchestratedWorkApplier', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('shutdown park composition (suppression + parker, codex 2026-07-08 BLOCK)', () => {
+  // The production race: shutdown() arms suppression, kills children, waits,
+  // THEN parks. The killed applier's startApply unwind completes during that
+  // wait — if the unwind removed the handle from activeRuns, the parker's
+  // default snapshot would see nothing and the no-cursor run would be left
+  // `running` (orphaned at next boot). This test drives the REAL startApply
+  // (createMutation) and the parker's REAL default listActiveRuns +
+  // writeTerminal (mutations-log and supervision-store are module-mocked).
+  it('a suppressed applier that unwinds before the parker runs is still discoverable and parked', async () => {
+    setMutationShutdownInProgress(true);
+    try {
+      let unwound = false;
+      const fixture = {
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validate: () => ({ ok: true as const }),
+        apply: (descriptor: MutationDescriptor) =>
+          (async function* () {
+            try {
+              // The SIGTERM'd child surfacing as a terminal the run never earned.
+              yield {
+                mutationId: descriptor.id,
+                ts: new Date().toISOString(),
+                kind: 'failed' as const,
+                data: { reason: 'child SIGTERM surfaced as failure' },
+              };
+            } finally {
+              unwound = true;
+            }
+          })(),
+      };
+      registerApplier(fixture as never);
+
+      const created = await createMutation('orchestrated-work', { projectSlug: 'demo', product: 'rune' }, 'webview');
+      expect((created as { ok: boolean }).ok).toBe(true);
+      const descriptor = (created as unknown as { descriptor: MutationDescriptor }).descriptor;
+
+      await waitForCondition(() => unwound);
+      // Real-timer settle so startApply's own finally has definitely run —
+      // asserting retention before it ran would pass spuriously even without
+      // the retention guard. (No fake timers in this describe.)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      // Fully unwound under suppression: still running on disk, and the
+      // handle is STILL in activeRuns for the parker to find.
+      expect(descriptor.status).toBe('running');
+      expect(activeRuns.has(descriptor.id)).toBe(true);
+
+      const parkDeps = {
+        ...defaultShutdownParkDeps(),
+        readRunCursor: async () => null,
+        runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+        worktreeExists: () => true,
+        resolveBaseBranch: () => 'main',
+        resolveWorktreePath: () => '/tmp/orch-park-compose-wt',
+      };
+      const parked = await parkInFlightOrchestratedRuns(parkDeps);
+
+      expect(parked).toEqual({ parked: [descriptor.id], resumable: [], skipped: [] });
+      // The default writeTerminal (writeRecoveredTerminalMutation) really ran:
+      // descriptor terminalized completed+parked, supervision blocked-on-human.
+      expect(descriptor.status).toBe('completed');
+      const supervisionRows = (mockUpsertRun.mock.calls as unknown[][])
+        .map((c) => c[0] as { id: string; status: string })
+        .filter((row) => row.id === descriptor.id);
+      expect(supervisionRows[supervisionRows.length - 1]!.status).toBe('blocked-on-human');
+      const snapshots = (mockAppendMutationLine.mock.calls as unknown[][])
+        .map((c) => c[0] as { id: string; status: string })
+        .filter((line) => line.id === descriptor.id);
+      expect(snapshots[snapshots.length - 1]!.status).toBe('completed');
+    } finally {
+      setMutationShutdownInProgress(false);
+      activeRuns.clear();
+    }
   });
 });
 
