@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // --- Mocks before any dynamic imports ---
 
@@ -41,6 +41,7 @@ const {
   cancelMutation,
   activeRuns,
   writeRecoveredTerminalMutation,
+  setMutationShutdownInProgress,
 } = await import('./mutations.ts' as string);
 
 // --- Helpers ---
@@ -995,6 +996,105 @@ describe('mutations', () => {
       const calls = await waitForUpserts(3);
       const final = calls[calls.length - 1]![0] as { status: string };
       expect(final.status).toBe('failed');
+    });
+  });
+
+  describe('shutdown suppression (setMutationShutdownInProgress)', () => {
+    // shutdown() arms the flag before killActiveProcesses(); the SIGTERM'd
+    // child then surfaces in the applier as a terminal/throw the run never
+    // earned. startApply must NOT persist it for orchestrated-work — the
+    // on-disk `running` state is owned by the shutdown parker
+    // (parkInFlightOrchestratedRuns) and next-boot recovery.
+    afterEach(() => {
+      setMutationShutdownInProgress(false);
+    });
+
+    async function settle(ms = 30): Promise<void> {
+      await new Promise((r) => setTimeout(r, ms));
+    }
+
+    function persistedStatuses(): { snapshots: string[]; supervision: string[] } {
+      return {
+        snapshots: (mockAppendMutationLine.mock.calls as unknown[][]).map(
+          (c) => (c[0] as { status: string }).status,
+        ),
+        supervision: (mockUpsertRun.mock.calls as unknown[][]).map(
+          (c) => (c[0] as { status: string }).status,
+        ),
+      };
+    }
+
+    it('suppresses an orchestrated-work terminal during shutdown — mutation stays running for boot recovery', async () => {
+      const applier = makeApplier({
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: failedGen('x'),
+      });
+      registerApplier(applier);
+
+      setMutationShutdownInProgress(true);
+      const result = await createMutation('orchestrated-work', { projectSlug: 'demo' }, 'webview');
+      expect(result.ok).toBe(true);
+      const descriptor = (result as any).descriptor;
+      await settle();
+
+      // The descriptor never flips terminal, and neither writer persists one.
+      expect(descriptor.status).toBe('running');
+      const { snapshots, supervision } = persistedStatuses();
+      expect(snapshots).not.toContain('failed');
+      expect(snapshots).not.toContain('completed');
+      expect(supervision).not.toContain('failed');
+      expect(supervision).not.toContain('completed');
+      // activeRuns cleanup still ran (the finally is not suppressed).
+      expect(activeRuns.size).toBe(0);
+    });
+
+    it('suppresses an orchestrated-work applier crash during shutdown', async () => {
+      async function* throwingGen(): AsyncIterable<any> {
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'starting' } };
+        throw new Error('child SIGTERM surfaced as applier throw');
+      }
+      const applier = makeApplier({
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: throwingGen(),
+      });
+      registerApplier(applier);
+
+      setMutationShutdownInProgress(true);
+      const result = await createMutation('orchestrated-work', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+      await settle();
+
+      expect(descriptor.status).toBe('running');
+      const { snapshots, supervision } = persistedStatuses();
+      expect(snapshots).not.toContain('failed');
+      expect(supervision).not.toContain('failed');
+      expect(activeRuns.size).toBe(0);
+    });
+
+    it('a non-orchestrated kind still persists its terminal during shutdown', async () => {
+      // Legacy work runs keep their existing crash semantics — boot-side
+      // recovery-finalize is designed for their stale rows.
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: completedGen('x'),
+      });
+      registerApplier(applier);
+
+      setMutationShutdownInProgress(true);
+      const result = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+      await settle();
+
+      expect(descriptor.status).toBe('completed');
+      const { snapshots, supervision } = persistedStatuses();
+      expect(snapshots).toContain('completed');
+      expect(supervision).toContain('completed');
     });
   });
 });

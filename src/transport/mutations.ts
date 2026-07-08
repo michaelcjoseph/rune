@@ -393,6 +393,23 @@ const applierRegistry = new Map<MutationKind, MutationApplier<Record<string, unk
 // Active mutations in flight
 export const activeRuns = new Map<string, RunHandle>();
 
+// Armed once by shutdown() BEFORE killActiveProcesses(). While set, startApply
+// suppresses ALL supervision/mutation-log writes for orchestrated-work runs:
+// the child SIGTERM would otherwise surface as a terminal the run never earned,
+// flipping a boot-resumable `running` mutation to failed (or clobbering a
+// just-written shutdown park). Once armed, on-disk state is owned exclusively
+// by the shutdown parker (parkInFlightOrchestratedRuns) and next-boot recovery.
+// Setter (not a one-way latch) so tests can reset it.
+let mutationShutdownInProgress = false;
+
+export function setMutationShutdownInProgress(value: boolean): void {
+  mutationShutdownInProgress = value;
+}
+
+export function isMutationShutdownInProgress(): boolean {
+  return mutationShutdownInProgress;
+}
+
 // Injected bus — set from index.ts at startup
 let _bus: NotificationBus | null = null;
 
@@ -599,6 +616,15 @@ async function startApply(
   let currentOutputAt: string | undefined;
   const HEARTBEAT_THROTTLE_MS = 30_000;
 
+  // Shutdown suppression (see setMutationShutdownInProgress): while shutdown()
+  // is tearing down, an orchestrated run's persistence here would race the
+  // shutdown parker / next-boot recovery. Checked per-write because the flag
+  // flips mid-run. Scoped to orchestrated-work only — other kinds keep their
+  // existing crash semantics (legacy work runs have boot-side recovery-finalize
+  // designed for stale rows).
+  const shutdownSuppressed = (): boolean =>
+    mutationShutdownInProgress && descriptor.kind === 'orchestrated-work';
+
   // Use the real bus if available, else a no-op so appliers always receive a valid object
   const ctx: ApplyContext = {
     bus: _bus ?? noopBus,
@@ -648,7 +674,7 @@ async function startApply(
       // it must keep `lastOutputAt` fresh too — otherwise a run busy in a long
       // tool call or subagent reads as quiet and the P2.7 quiet→cancel backstop
       // can reap a healthy run (docs/projects/bugs.md).
-      if (supervise && (event.kind === 'output' || event.kind === 'activity')) {
+      if (supervise && (event.kind === 'output' || event.kind === 'activity') && !shutdownSuppressed()) {
         const now = Date.now();
         if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
           const nowIso = new Date(now).toISOString();
@@ -667,7 +693,7 @@ async function startApply(
       // gated by a chatty output stream (and vice versa). The upsert
       // preserves the prior lastHeartbeatAt by passing it back through
       // buildSupervisedRun.
-      if (supervise && event.kind === 'keep-alive') {
+      if (supervise && event.kind === 'keep-alive' && !shutdownSuppressed()) {
         const now = Date.now();
         if (now - lastKeepAliveUpsertAt >= HEARTBEAT_THROTTLE_MS) {
           const nowIso = new Date(now).toISOString();
@@ -686,6 +712,9 @@ async function startApply(
       }
 
       if (isTerminalEvent) {
+        if (shutdownSuppressed()) {
+          return;
+        }
         descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
         if (event.kind === 'failed' && event.data) {
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
@@ -734,6 +763,9 @@ async function startApply(
       }
     }
     // Applier exhausted without terminal event — treat as completed
+    if (shutdownSuppressed()) {
+      return;
+    }
     descriptor.status = 'completed';
     appendMutationSnapshot(descriptor);
     if (supervise) {
@@ -743,6 +775,9 @@ async function startApply(
     }
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
+    if (shutdownSuppressed()) {
+      return;
+    }
     descriptor.status = 'failed';
     descriptor.error = (err as Error).message;
     appendMutationSnapshot(descriptor);
