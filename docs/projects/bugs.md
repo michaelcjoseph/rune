@@ -1,6 +1,26 @@
 ## Active
 
-(empty)
+- [ ] Process restart during an orchestrated run discards the run and its uncommitted work — `shutdown()` is orchestration-unaware. **(orchestrated-run restart safety 1/2 — durability; the park-on-shutdown half)** _(Filed 2026-07-08 from the project-21 run failure below.)_
+  - **Issue**
+    - `shutdown()` (`src/index.ts:265`) tears down on SIGTERM by calling `killActiveProcesses()` (`src/ai/claude.ts:278` — SIGTERM to every active Claude/Codex child), waiting `waitForActiveProcesses()` (5s), and `process.exit(0)`. It never parks, checkpoints, or WIP-commits an in-flight orchestrated run. The mutation stays `running` on disk and the worktree stays dirty/uncommitted.
+    - On the next boot, `recoverOrchestratedWorkRuns` (`src/jobs/orchestrated-work-runner.ts:943`) finds the still-`running` mutation, finds no resumable cursor, and orphans it (`markOrphaned('missing resumable orchestrated cursor')`, `:966-969`) → mutation `failed`, the finalizer classifies `dirty-uncommitted`, and the throwaway worktree is GC'd. The agent's diff is discarded.
+    - The machinery to preserve this already exists but only on the closeout-repair-exhaustion path: `commitWipSafely` + park `blocked-on-human` (`src/intent/project-orchestrator.ts:156`/`:260`/`:746`). Shutdown never reaches it.
+    - **Confirmed instance (2026-07-08):** orchestrated run `cbe3ff58-aad5-43d2-a68a-211163d4bab7` (product `rune`, project `21-parallel-product-chats`, base `5e16138`, started 16:22:18Z). Task 1 (`session-scope-key-helper`) coder implementation finished 16:39:04Z; coder self-review completed 16:40:23Z (`revised: true`). At 16:40:53Z `rune.log` records a clean `"Shutting down..."` with orderly component stops — a graceful SIGTERM from launchd (`com.jarvis.daemon`), not a crash. Boot at 16:40:54Z logged `Orchestrated-work startup recovery completed {"resumed":[],"orphaned":["cbe3ff58…"]}`. Final state: mutation `failed` / `missing resumable orchestrated cursor`; summary `dirty-uncommitted`, 0 commits, 8/8 tasks remaining; worktree removed; branch `rune-work/21-parallel-product-chats` sits at base with 0 commits. Task-1 work lost.
+  - **Fix options** (A is the fix; C complements)
+    - A. Add a `parkInFlightOrchestratedRuns()` step to `shutdown()` **before** `killActiveProcesses()`: for each active orchestrated run, WIP-commit the dirty worktree onto the run branch and transition the mutation to `parked`, reusing the existing `commitWip` + `blocked-on-human` path so the run survives the restart visible-and-releasable instead of failed-and-discarded.
+    - B. Bound it by the shutdown grace: if a child won't yield in time, still SIGTERM it, but leave the WIP commit + `parked` marker so boot recovery does not orphan it.
+    - C. (weaker, complementary) Drain-to-boundary — on SIGTERM, if a task is near closeout, wait a bounded grace for the cursor-write boundary before killing. Useless for a long task alone; only complements A.
+    - **Durability ceiling:** none of this survives SIGKILL / power loss mid-write — only git-committed state survives an unclean kill. That makes the WIP-commit in A load-bearing, and argues for committing inside a task, not just at closeout.
+  - **Composes with** the recovery-resumability bug below: this half makes the work durable; that half makes it resumable. Either alone is partial.
+- [ ] Orchestrated recovery can't resume a run whose first task hasn't closed out — the resumable cursor is only written at task-closeout. **(orchestrated-run restart safety 2/2 — resumability; the task-start-cursor half)** _(Filed 2026-07-08 from the project-21 run failure above.)_
+  - **Issue**
+    - The resumable cursor is written only at a task-closeout checkpoint: `persistRunCheckpoint` (`src/intent/project-orchestrator.ts:314`, `writeRunCursor` at `:443`) runs *after* the closeout commit (`:421`). Before the first task closes out, `taskRecords` is empty and no cursor is ever persisted.
+    - So `recoverOrchestratedWorkRuns` (`src/jobs/orchestrated-work-runner.ts:943`) has no resume path for a mid-first-task restart: no cursor → `markOrphaned('missing resumable orchestrated cursor')` (`:966-969`). There is no "resume from the current in-progress task." Even with the worktree preserved (park-on-shutdown bug above), recovery still can't pick it up.
+    - Result: any restart during task 1 — an ~18-minute unprotected window in the confirmed instance above — is structurally unrecoverable, independent of how gracefully the process shuts down.
+  - **Fix options** (A + B are the fix)
+    - A. Write a minimal cursor at task **start** (branch, baseBranch, worktree, current task id, completed ids so far), not only at closeout, so `recoverOrchestratedWorkRuns` re-dispatches from the current task via the existing `redispatchOrchestratedMutation` path (`:990`) instead of orphaning.
+    - B. Teach `reconstructRun` to treat the current task as in-progress and re-run it from scratch (QA then coder). A half-finished task is untrusted; the WIP commit from the bug above is for salvage/inspection, not for the coder to build on blindly.
+    - C. Keep the existing drift guard (`reconstruction.drift` → not-resumable, `orchestrated-work-runner.ts:979-988`) so a task-start cursor that disagrees with `tasks.md` still fails safe rather than resuming onto a mismatched tree.
 
 ## Loop-filed
 
@@ -242,3 +262,4 @@
     - New `src/jobs/registry-rebuild.ts`: scans `policies/products.json`, reads each product repo's `docs/projects/index.md` (lifecycle status) and each project's `tasks.md` (task progress), and writes a fresh registry.
     - Wired to run on daemon startup (`src/index.ts`) — so the "Restart server" button also refreshes the cockpit — and as a nightly step (`Registry rebuild` in `src/jobs/nightly.ts`, before the journal-intent producer).
     - The registry now carries per-project task progress (`RegistryProject.progress`), so the cockpit renders progress bars for **every** product, not just rune. `handleApiCockpit` overlays a live read of rune's own `tasks.md` so rune cards stay real-time.
+- [ ] Intermittent vitest hang unresolved — An intermittent open-handle vitest hang in Rune's orchestrated runs was diagnosed but not reproduced or fixed; the plan is to capture the handle stack the next time it fires. (journal 2026-07-08)
