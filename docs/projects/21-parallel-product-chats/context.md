@@ -37,7 +37,9 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Two product chats run concurrently; each response lands only in its own panel.
-- Inactive-scope output buffers and renders intact/in-order on switch-back.
-- The activity cue shows on the sibling channel + home view and clears on view.
-- The manual live release-gate is completed and recorded in `docs/projects/21-parallel-product-chats/live-acceptance.md` before the project is called done.
+- Implemented scoped websocket dispatch queues for webview messages. Dispatch is now serialized per session scope, so turns in the same product chat stay ordered while different product chats can run in parallel.
+- Exported and reused sessionKeyForScope from src/vault/sessions.ts so dispatch queue keys match session storage and parser semantics.
+- Added regression coverage in src/server/webview.test.ts and src/vault/sessions.test.ts for parallel product dispatch, same-product serialization, and shared session key parsing.
+- Also fixed a path-scrubbing validation blocker in src/utils/sanitize-paths.ts: worktree checkouts now scrub the owning repo path as <project> too.
+- Validation passed: npm run build; npm test.
+- No tests removed.

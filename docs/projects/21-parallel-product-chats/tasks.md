@@ -5,7 +5,7 @@
 ## Phase 1 — parallel chats + correct addressing (shippable unit)
 
 ### Implementation
-- [ ] **session-scope-key-helper** — Export a small `sessionKeyForScope(userId, transport, scope)` helper from `src/vault/sessions.ts` that reuses the existing session-key semantics; use it from tests and `webview.ts` so dispatch and session storage cannot drift.
+- [x] **session-scope-key-helper** — Export a small `sessionKeyForScope(userId, transport, scope)` helper from `src/vault/sessions.ts` that reuses the existing session-key semantics; use it from tests and `webview.ts` so dispatch and session storage cannot drift.
 - [ ] **parallel-dispatch** — Re-key `dispatchQueues` (`src/server/webview.ts:2524-2538`) from `Map<number, Promise<void>>` keyed by `userId` to `Map<string, Promise<void>>` keyed by `sessionKeyForScope(userId,'webview',scope)`, so different product chats dispatch concurrently while same-chat turns stay serialized (double-send guard preserved). Global chat unchanged.
 - [ ] **scoped-frame-contract** — Add `product?: string` (absent = global) to turn-scoped WS frames end to end: `message`, `status`, and any `chunk` frames emitted through the WS path. Do not alter the shared `MessageSender` interface.
 - [ ] **scoped-sender** — At the WS inbound handler (`webview.ts:2517`), wrap `deps.webview` in a per-turn scoped sender that stamps `product` on `send`/`startTyping`/`stopTyping`; pass it to `handleWebviewMessage`. Broadcast stays all-sockets (cross-tab); scope rides on the frame. If a separate chunk emitter is introduced or discovered, stamp scope at that emission point too.

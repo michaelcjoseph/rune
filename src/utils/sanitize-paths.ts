@@ -15,7 +15,20 @@ import config, { PROJECT_ROOT } from '../config.js';
 export function scrubAbsolutePaths(raw: string): string {
   let s = raw;
   if (config.VAULT_DIR) s = s.split(config.VAULT_DIR).join('<vault>');
-  if (PROJECT_ROOT) s = s.split(PROJECT_ROOT).join('<project>');
+  for (const projectPath of projectPathScrubCandidates()) {
+    s = s.split(projectPath).join('<project>');
+  }
   if (config.WORKSPACE_DIR) s = s.split(config.WORKSPACE_DIR).join('<workspace>');
   return s;
+}
+
+function projectPathScrubCandidates(): string[] {
+  const candidates = new Set<string>();
+  if (PROJECT_ROOT) {
+    candidates.add(PROJECT_ROOT);
+    const worktreeMarker = '/.worktrees/';
+    const markerIndex = PROJECT_ROOT.indexOf(worktreeMarker);
+    if (markerIndex > 0) candidates.add(PROJECT_ROOT.slice(0, markerIndex));
+  }
+  return [...candidates].sort((a, b) => b.length - a.length);
 }

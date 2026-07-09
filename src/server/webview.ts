@@ -27,7 +27,7 @@ import {
 } from '../intent/backlog-write-lock.js';
 import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
 import { computeFixAction, withActions } from './backlog-actions.js';
-import { getSession, type SessionScope } from '../vault/sessions.js';
+import { getSession, sessionKeyForScope, type SessionScope } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
@@ -2896,9 +2896,9 @@ export function mountWebviewRoutes(
     });
   }
 
-  // Per-userId inbound dispatch queue — serialises concurrent WS messages to
-  // prevent concurrent handleConversation/createSession calls for the same user.
-  const dispatchQueues = new Map<number, Promise<void>>();
+  // Per-session-scope inbound dispatch queue — serialises concurrent WS messages
+  // within a chat while allowing independent product chats to run in parallel.
+  const dispatchQueues = new Map<string, Promise<void>>();
 
   server.on('upgrade', (req, socket, head) => {
     const pathname = req.url?.split('?')[0] ?? '';
@@ -2935,8 +2935,9 @@ export function mountWebviewRoutes(
             const text = frame.text.trim();
             if (!text) return;
             const scope = productScopeFrom(frame.product);
-            // Chain dispatch promises to serialise inbound frames for the same user
-            const prev = dispatchQueues.get(userId) ?? Promise.resolve();
+            const queueKey = sessionKeyForScope(userId, 'webview', scope ?? { kind: 'global' });
+            // Chain dispatch promises to serialise inbound frames for this session scope.
+            const prev = dispatchQueues.get(queueKey) ?? Promise.resolve();
             const next = prev
               .then(() => (
                 scope
@@ -2946,9 +2947,9 @@ export function mountWebviewRoutes(
               .catch((err: unknown) => {
                 log.error('WS message dispatch error', { error: (err as Error).message });
               });
-            dispatchQueues.set(userId, next);
+            dispatchQueues.set(queueKey, next);
             void next.finally(() => {
-              if (dispatchQueues.get(userId) === next) dispatchQueues.delete(userId);
+              if (dispatchQueues.get(queueKey) === next) dispatchQueues.delete(queueKey);
             });
           }
         } catch {

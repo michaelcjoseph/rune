@@ -69,6 +69,14 @@ vi.mock('./cockpit-run-status.js', () => ({
   readCockpitRunStatus: mockReadCockpitRunStatus,
 }));
 
+const { mockSessionKeyForScope } = vi.hoisted(() => ({
+  mockSessionKeyForScope: vi.fn((
+    userId: number,
+    transport: 'telegram' | 'webview',
+    scope: { kind: 'global'; product?: undefined } | { kind: 'product'; product: string } = { kind: 'global' },
+  ) => (scope.kind === 'product' ? `${scope.product}:${transport}:${userId}` : `${transport}:${userId}`)),
+}));
+
 const mockConfig = {
   HTTP_PORT: 0,
   HTTP_HOST: '127.0.0.1',
@@ -134,6 +142,7 @@ vi.mock('../jobs/scaffold-approval.js', () => ({
 
 vi.mock('../vault/sessions.js', () => ({
   getSession: vi.fn(() => null),
+  sessionKeyForScope: mockSessionKeyForScope,
 }));
 
 vi.mock('./state-snapshot.js', () => ({
@@ -192,7 +201,11 @@ vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSu
 // Import after mocks are wired up
 const { mountWebviewRoutes } = await import('./webview.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
-const { getSession } = await import('../vault/sessions.js');
+const sessionsForWebview = await import('../vault/sessions.js') as unknown as {
+  getSession: ReturnType<typeof vi.fn>;
+  sessionKeyForScope: ReturnType<typeof vi.fn>;
+};
+const { getSession, sessionKeyForScope } = sessionsForWebview;
 const { getStateSnapshot } = await import('./state-snapshot.js');
 const { readRegistry } = await import('../intent/registry.js');
 const {
@@ -280,6 +293,28 @@ function waitForMockCall(mock: ReturnType<typeof vi.fn>, timeoutMs = 1000): Prom
     };
     tick();
   });
+}
+
+function waitForMockCallCount(mock: ReturnType<typeof vi.fn>, count: number, timeoutMs = 1000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (mock.mock.calls.length >= count) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        reject(new Error(`timed out waiting for ${count} mock calls`));
+        return;
+      }
+      setTimeout(tick, 10);
+    };
+    tick();
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function useRuneMcpRegistry(): void {
@@ -514,6 +549,11 @@ describe('server/webview', () => {
     mockConfig.RUNE_MCP_PORT = 65534;
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (sessionKeyForScope as ReturnType<typeof vi.fn>).mockImplementation((
+      userId: number,
+      transport: 'telegram' | 'webview',
+      scope: { kind: 'global'; product?: undefined } | { kind: 'product'; product: string } = { kind: 'global' },
+    ) => (scope.kind === 'product' ? `${scope.product}:${transport}:${userId}` : `${transport}:${userId}`));
     (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
       version: 1,
@@ -1850,6 +1890,94 @@ describe('server/webview', () => {
           { kind: 'product', product: 'aura' },
         );
       } finally {
+        ws.terminate();
+      }
+    });
+
+    it('keys WS dispatch queues by session scope so different products can dispatch in parallel', async () => {
+      const ws = await openWebSocket(port);
+      let releaseAura!: () => void;
+      const auraStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseAura = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  aura slow turn  ', product: 'aura' }));
+        await auraStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  rune should start immediately  ', product: 'rune' }));
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2, 250);
+
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'aura slow turn',
+          { kind: 'product', product: 'aura' },
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'rune should start immediately',
+          { kind: 'product', product: 'rune' },
+        );
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'product', product: 'aura' },
+        );
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'product', product: 'rune' },
+        );
+      } finally {
+        releaseAura?.();
+        ws.terminate();
+      }
+    });
+
+    it('keeps WS turns within the same product scope serialized', async () => {
+      const ws = await openWebSocket(port);
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseFirst = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  first aura turn  ', product: 'aura' }));
+        await firstStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  second aura turn  ', product: 'aura' }));
+        await delay(50);
+
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(1);
+
+        releaseFirst();
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2);
+
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'second aura turn',
+          { kind: 'product', product: 'aura' },
+        );
+      } finally {
+        releaseFirst?.();
         ws.terminate();
       }
     });
