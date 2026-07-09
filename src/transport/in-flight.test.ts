@@ -33,12 +33,13 @@ function makeChildProcess() {
   } as any;
 }
 
-function makeOp(overrides: { userId?: number; kind?: any; label?: string } = {}) {
+function makeOp(overrides: { userId?: number; kind?: any; label?: string; scope?: string } = {}) {
   return {
     kind: overrides.kind ?? ('agent' as const),
     label: overrides.label ?? 'test-agent',
     userId: overrides.userId ?? 42,
     child: makeChildProcess(),
+    ...(overrides.scope ? { scope: overrides.scope } : {}),
   };
 }
 
@@ -91,6 +92,12 @@ describe('in-flight op registry', () => {
       registerOp({ ...makeOp(), agentName: 'wiki-compiler', kind: 'agent', label: 'wiki-compiler', userId: 42 });
       const pub = listOps()[0]!;
       expect(pub.agentName).toBe('wiki-compiler');
+    });
+
+    it('stores product scope in public shape when provided', () => {
+      registerOp(makeOp({ kind: 'chat', label: 'chat', scope: 'aura' }));
+      const pub = listOps()[0]!;
+      expect(pub.scope).toBe('aura');
     });
 
     it('omits agentName from public shape when not provided', () => {
@@ -379,6 +386,36 @@ describe('in-flight op registry', () => {
       expect(event.elapsedMs).toBe(0);
 
       // clean up
+      setInFlightBus(null as any);
+    });
+
+    it('publishes product scope on start, progress, and end op-events', () => {
+      const publishMock = vi.fn();
+      setInFlightBus({ publish: publishMock, on: vi.fn(), off: vi.fn() } as any);
+
+      const op = registerOp(makeOp({ kind: 'chat', label: 'chat', scope: 'aura' }));
+      setOpDetail(op.opId, 'Read: package.json');
+      unregisterOp(op.opId, 'success');
+
+      expect(publishMock).toHaveBeenCalledTimes(3);
+      const [start, progress, end] = publishMock.mock.calls.map(call => call[0]);
+      expect(start).toEqual(expect.objectContaining({
+        kind: 'op-event',
+        subKind: 'start',
+        scope: 'aura',
+      }));
+      expect(progress).toEqual(expect.objectContaining({
+        kind: 'op-event',
+        subKind: 'progress',
+        scope: 'aura',
+      }));
+      expect(end).toEqual(expect.objectContaining({
+        kind: 'op-event',
+        subKind: 'end',
+        scope: 'aura',
+        status: 'success',
+      }));
+
       setInFlightBus(null as any);
     });
 

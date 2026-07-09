@@ -11,6 +11,7 @@ export interface InFlightOp {
   kind: OpKind;
   label: string;
   agentName?: string;
+  scope?: string;
   userId: number;
   startedAt: number;
   startedAtIso: string;
@@ -29,6 +30,7 @@ export interface InFlightOpPublic {
   kind: OpKind;
   label: string;
   agentName?: string;
+  scope?: string;
   userId: number;
   startedAt: string;
   elapsedMs: number;
@@ -55,6 +57,7 @@ function toPublic(op: InFlightOp): InFlightOpPublic {
     kind: op.kind,
     label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agentName: op.agentName } : {}),
+    ...(op.scope ? { scope: op.scope } : {}),
     userId: op.userId,
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
@@ -72,6 +75,7 @@ function publishStart(op: InFlightOp): void {
     opKind: op.kind,
     label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
+    ...(op.scope ? { scope: op.scope } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: 0,
     ...(op.detail ? { detail: op.detail } : {}),
@@ -89,6 +93,7 @@ function publishProgress(op: InFlightOp): void {
     opKind: op.kind,
     label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
+    ...(op.scope ? { scope: op.scope } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
     ...(op.detail ? { detail: op.detail } : {}),
@@ -106,6 +111,7 @@ function publishEnd(op: InFlightOp, status: 'success' | 'error' | 'cancelled', e
     opKind: op.kind,
     label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
+    ...(op.scope ? { scope: op.scope } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
     status,
@@ -142,6 +148,7 @@ export function registerOp(input: {
   kind: OpKind;
   label: string;
   agentName?: string;
+  scope?: string;
   userId: number;
   child: ChildProcess;
 }): InFlightOp {
@@ -151,6 +158,7 @@ export function registerOp(input: {
     kind: input.kind,
     label: input.label,
     ...(input.agentName ? { agentName: input.agentName } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
     userId: input.userId,
     startedAt: now,
     startedAtIso: new Date(now).toISOString(),

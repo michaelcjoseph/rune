@@ -37,7 +37,11 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- tech-lead repaired test intent: src/server/static/home-view-client.test.ts, src/server/static/product-deep-view-client.test.ts
-- Implemented browser-local product chat unread state shared by Home and product deep views. Home now derives product card unread cues from scoped message/chunk frames and clears them on product-viewed events. Product deep view now renders sibling product channel unread cues, marks background product frames unread, clears the active product on load, and supports switching via channel buttons.
-- Added visible unread cue styling in src/server/static/app.css and regression coverage in src/server/static/home-view-client.test.ts and src/server/static/product-deep-view-client.test.ts.
-- Validation passed: npm run build; npm test — 306 files passed, 5093 tests passed, 8 todo. No tests removed.
+- - Product deep view only attaches chat working pills to explicitly matching product op-events.
+- Global app ignores product-scoped op-events, including `/api/state` in-flight hydration.
+
+Validation passed:
+- `npm run build`
+- `npm test` — 306 files passed, 5099 tests passed, 8 todo
+
+No tests removed.

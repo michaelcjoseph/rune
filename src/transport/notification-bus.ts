@@ -63,6 +63,8 @@ export interface BusOpEventBase {
   opKind: OpKind;
   label: string;
   agent?: string;
+  /** Product-chat scope for UI routing. Converted to `product` at the webview boundary. */
+  scope?: string;
   startedAt: string;
   elapsedMs: number;
   /** Short user-facing description of the current activity inside this op,

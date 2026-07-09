@@ -95,8 +95,11 @@ export class WebviewSender implements MessageSender {
    *  so they never reach the wire, matching TelegramSender behaviour. */
   onOpEvent(event: BusOpEvent): void {
     if (event.opKind === 'classifier') return;
-    const { userId, ...rest } = event;
-    this.broadcast(userId, JSON.stringify(rest));
+    const { userId, scope, ...rest } = event;
+    this.broadcast(userId, JSON.stringify({
+      ...rest,
+      ...(scope ? { product: scope } : {}),
+    }));
   }
 
   /** Forward a run-event bus message to all connected WS clients for the given userId.

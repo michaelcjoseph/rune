@@ -433,6 +433,23 @@ describe('WebviewSender', () => {
       const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
       expect('userId' in frame).toBe(false);
     });
+
+    it('stamps product on forwarded op-event frames from bus scope', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      sender.onOpEvent({ ...makeOpEventStart(42), scope: 'aura' } as any);
+
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual(expect.objectContaining({
+        kind: 'op-event',
+        subKind: 'start',
+        product: 'aura',
+      }));
+      expect('scope' in frame).toBe(false);
+      expect('userId' in frame).toBe(false);
+    });
   });
 
   describe('onRunEvent()', () => {

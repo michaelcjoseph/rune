@@ -1119,15 +1119,19 @@ function operationsFromState(state, product) {
   };
 }
 
-// Op-events carry no product field, so they are user-global. Scope the product
-// chat pill to `chat` ops only — product chat + planning turns are chat-kind
-// (claude.ts opLabel:'chat'). Project runs emit no op-events (mutation/run
-// events, already surfaced in the Runs + Operations panels); background `agent`
-// ops (nightly, prep, reviews) are unrelated noise, so they are excluded.
+// Product chat op-events carry `product`; require an explicit matching product
+// so a global chat or another product's turn cannot attach this panel's pill.
+// Scope the product chat pill to `chat` ops only — product chat + planning
+// turns are chat-kind (claude.ts opLabel:'chat'). Project runs emit no op-events
+// (mutation/run events, already surfaced in the Runs + Operations panels);
+// background `agent` ops (nightly, prep, reviews) are unrelated noise, so they
+// are excluded.
 const PRODUCT_VISIBLE_OP_KINDS = new Set(['chat']);
 
-function shouldShowProductOp(frame) {
+function shouldShowProductOp(frame, targetProduct) {
   return frame?.kind === 'op-event' &&
+    typeof targetProduct === 'string' &&
+    targetProduct.length > 0 &&
     frame.opKind !== 'classifier' &&
     PRODUCT_VISIBLE_OP_KINDS.has(frame.opKind);
 }
@@ -1432,8 +1436,8 @@ export function createProductDeepView({
     if (targetSession === session) syncLocalFromSession();
   }
 
-  function handleOpFrame(frame, targetProduct = product) {
-    if (!shouldShowProductOp(frame)) return;
+  function handleOpFrame(frame, targetProduct) {
+    if (!shouldShowProductOp(frame, targetProduct)) return;
     const targetSession = getProductSession(targetProduct);
     const base = {
       opId: frame.opId,
@@ -1702,9 +1706,14 @@ export function createProductDeepView({
   const onWebviewFrame = event => {
     const frame = event?.detail;
     if (!frame || !current) return;
-    const targetProduct = typeof frame.product === 'string' && frame.product
+    const frameProduct = typeof frame.product === 'string' && frame.product
       ? frame.product
-      : product;
+      : null;
+    if (frame.kind === 'op-event') {
+      handleOpFrame(frame, frameProduct);
+      return;
+    }
+    const targetProduct = frameProduct || product;
     const unreadChanged = isProductChatOutputFrame(frame) && markProductUnread(targetProduct);
     if (frame.kind === 'chunk') {
       appendOrUpdateStreamingForSession(targetProduct, frame.text || '');
@@ -1721,10 +1730,6 @@ export function createProductDeepView({
     }
     if (frame.kind === 'status') {
       setStatusForSession(targetProduct, frame.label || null);
-      return;
-    }
-    if (frame.kind === 'op-event') {
-      handleOpFrame(frame, targetProduct);
       return;
     }
     if (frame.kind === 'run-event') {

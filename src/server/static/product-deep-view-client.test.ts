@@ -2817,6 +2817,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'start',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2833,6 +2834,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'progress',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2849,6 +2851,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'end',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2901,6 +2904,87 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
 
       expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
       expect(root.innerHTML).not.toContain('op-classifier-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores unscoped chat op-event frames so global chat does not attach a product working pill', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-global-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-global-chat-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores chat op-event frames for a different product so the working pill stays on the owning panel', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          product: 'rune',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-chat-rune-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-chat-rune-1');
       view.close();
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
@@ -2971,6 +3055,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'start',
           opKind: 'chat',
           opId: 'op-chat-1',

@@ -520,6 +520,7 @@ async function handleConversation(
         allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
         opLabel: 'chat',
         voice: true,
+        ...(scope?.kind === 'product' ? { product: scope.product } : {}),
         ...(workspace
           ? { cwd: workspace.repoRoot, writableRoots: [workspace.workRoot], envMode: 'product-chat' as const }
           : {}),

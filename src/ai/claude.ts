@@ -295,6 +295,7 @@ export interface OpMeta {
   kind: OpKind;
   label: string;
   agentName?: string;
+  scope?: string;
   userId?: number;
 }
 
@@ -457,6 +458,7 @@ function execClaude(
         kind: opMeta.kind,
         label: opMeta.label,
         ...(opMeta.agentName ? { agentName: opMeta.agentName } : {}),
+        ...(opMeta.scope ? { scope: opMeta.scope } : {}),
         userId: opMeta.userId ?? config.TELEGRAM_USER_ID,
         child,
       });
@@ -562,6 +564,7 @@ function askClaudeSession(
   cwd?: string,
   writableRoots?: string[],
   envMode?: ClaudeChildEnvMode,
+  product?: string,
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -577,7 +580,9 @@ function askClaudeSession(
     if (composedSystemPrompt) args.push('--append-system-prompt', composedSystemPrompt);
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
-    const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
+    const opMeta: OpMeta | undefined = opLabel
+      ? { kind: 'chat', label: opLabel, ...(product ? { scope: product } : {}) }
+      : undefined;
     const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots, envMode ?? 'default');
     if (!result.error) createdSessions.add(sessionId);
     return result;
@@ -622,6 +627,8 @@ export interface AskClaudeWithContextOpts {
    *  Non-secret paths (VAULT_DIR, RUNE_WORKSPACE_DIR) are kept so the rune-kb
    *  MCP/KB still resolve. Omit (`default`) for agents/one-shot/global chat. */
   envMode?: ClaudeChildEnvMode;
+  /** Product scope for product-chat op-events. Omit for global chat. */
+  product?: string;
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt. */
@@ -642,6 +649,7 @@ export async function askClaudeWithContext(
     opts.cwd,
     opts.writableRoots,
     opts.envMode,
+    opts.product,
   );
 }
 
