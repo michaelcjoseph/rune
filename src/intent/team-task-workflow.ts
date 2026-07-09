@@ -168,6 +168,18 @@ export type QaResult =
   | { kind: 'tests-written'; testIds: string[] }
   | { kind: 'no-code-test-rationale'; rationale: string };
 
+/** Outcome of the post-repair confirm-red run: the patched tests must still be
+ *  red against the not-yet-written implementation, or the repair is vacuous. */
+export type TestRepairRedCheck =
+  | { kind: 'red'; command: string; exitCode: number | null; outputTail: string }
+  | { kind: 'skipped'; reason: string };
+
+/** The tech-lead's test-intent repair result. `not-repaired` is a soft outcome
+ *  (falls back to the QA bounce), never a task-fatal error. */
+export type TechLeadTestRepairResult =
+  | { kind: 'repaired'; testIds: string[]; redCheck: TestRepairRedCheck }
+  | { kind: 'not-repaired'; reason: string };
+
 /** The coder's output — the diff + factual handoff notes. NO hidden reasoning:
  *  what the reviewer sees is the artifact, not the coder's chain of thought. */
 export interface CoderResult {
@@ -206,7 +218,24 @@ export interface TeamTaskDeps {
   techLeadReviewTests: (input: {
     task: SizedTask;
     qa: QaResult;
-  }) => Promise<{ approved: boolean; notes?: string; suggestedChange?: string }>;
+  }) => Promise<{
+    approved: boolean;
+    notes?: string;
+    suggestedChange?: string;
+    /** false ⇒ the tests need structural rework or expose a spec ambiguity the
+     *  tech-lead cannot resolve alone — skip the repair, bounce straight to QA.
+     *  Absent ⇒ attempt the repair (a failed repair falls back to the bounce). */
+    repairable?: boolean;
+  }>;
+  /** Optional corrective action for a test-intent rejection: the tech-lead
+   *  patches the QA test files directly (add/adjust assertions), guarded to
+   *  test paths, then the workflow re-reviews. Attempted once per task. */
+  techLeadRepairTests?: (input: {
+    task: SizedTask;
+    spec: string;
+    qa: Extract<QaResult, { kind: 'tests-written' }>;
+    rejection: { reason: string; suggestedChange?: string };
+  }) => Promise<TechLeadTestRepairResult>;
   coder: (input: {
     task: SizedTask;
     spec: string;
@@ -305,6 +334,12 @@ export interface TaskEvidence {
   failureReason?: string;
   /** Human/PM acceptance evidence when non-objection disagreement is cleared. */
   acceptance?: PmAcceptance;
+  /** Set when the tech-lead attempted a test-intent repair this task. */
+  testIntentRepair?: {
+    outcome: 'repaired' | 'not-repaired';
+    reason?: string;
+    testIds?: string[];
+  };
 }
 
 /** Run the team-task workflow for one selected task. */
@@ -322,9 +357,19 @@ export async function runTeamTaskWorkflow(
 
   const roles = new RoleLog();
   const handoffNotes: string[] = [];
+  // Mutable collector (same pattern as roles/handoffNotes) so the repair
+  // outcome reaches every terminal — including the outer-catch `failed` path —
+  // from one decoration point.
+  const repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] } = {};
 
   try {
-    return await runGated(task, input, deps, roles, handoffNotes);
+    const evidence = await runGated(task, input, deps, roles, handoffNotes, repairEvidence);
+    return {
+      ...evidence,
+      ...(repairEvidence.testIntentRepair !== undefined
+        ? { testIntentRepair: repairEvidence.testIntentRepair }
+        : {}),
+    };
   } catch (err) {
     // A role seam rejected — surface it as structured `failed` evidence rather
     // than an unhandled rejection, so the Phase 5 loop can decide retry/model-swap.
@@ -337,6 +382,9 @@ export async function runTeamTaskWorkflow(
       failureReason: (err as Error).message,
       findingsLedger: [],
       loopExitReason: 'operational',
+      ...(repairEvidence.testIntentRepair !== undefined
+        ? { testIntentRepair: repairEvidence.testIntentRepair }
+        : {}),
     };
   }
 }
@@ -347,6 +395,7 @@ async function runGated(
   deps: TeamTaskDeps,
   roles: RoleLog,
   handoffNotes: string[],
+  repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] },
 ): Promise<TaskEvidence> {
   // Gate 0: reviewer independence, resolved up-front and fail-closed — block
   // before any coder work rather than risk a same-provider review later.
@@ -376,6 +425,7 @@ async function runGated(
   let qa: QaResult | undefined;
   let noCodeTestRationale: string | undefined;
   let tests: string[] | string | undefined;
+  let repairAttempted = false;
   for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
     roles.add('qa');
     previousRole = emitRoleTransition(input, previousRole, 'qa', 'test', 'qa-tests');
@@ -397,7 +447,7 @@ async function runGated(
       'test-review',
       'tech-lead-test-review',
     );
-    const tlTests = await deps.techLeadReviewTests({ task, qa });
+    let tlTests = await deps.techLeadReviewTests({ task, qa });
     emitRoleVerdict(input, {
       role: 'tech-lead',
       gate: 'test-intent',
@@ -408,13 +458,82 @@ async function runGated(
     });
     if (tlTests.approved) break;
 
+    // Corrective action before the QA bounce: on the first rejection the
+    // tech-lead patches the tests itself (bounded gaps — add/adjust
+    // assertions), then re-reviews. The bounce remains for structural rework
+    // or spec ambiguity (`repairable: false`) and for a failed repair — the
+    // gate must terminate in approve or approve-after-patch, never in
+    // "reject an unfixed state N times".
+    let repairNote: string | undefined;
+    if (
+      !repairAttempted &&
+      deps.techLeadRepairTests !== undefined &&
+      qa.kind === 'tests-written' &&
+      tlTests.repairable !== false
+    ) {
+      repairAttempted = true;
+      emitRoleStage(input, 'tech-lead', 'test-repair');
+      const rejectionReason = tlTests.notes?.trim() || 'tech-lead rejected test intent';
+      let repair: TechLeadTestRepairResult;
+      try {
+        repair = await deps.techLeadRepairTests({
+          task,
+          spec: input.spec,
+          qa,
+          rejection: {
+            reason: rejectionReason,
+            ...(tlTests.suggestedChange !== undefined
+              ? { suggestedChange: tlTests.suggestedChange }
+              : {}),
+          },
+        });
+      } catch (err) {
+        // The repair is best-effort by contract — an internal throw degrades
+        // to the QA bounce, never to a task-fatal `failed`.
+        repair = { kind: 'not-repaired', reason: (err as Error).message };
+      }
+      emitTestRepair(input, repair);
+      if (repair.kind === 'repaired') {
+        qa = { kind: 'tests-written', testIds: repair.testIds };
+        tests = repair.testIds;
+        repairEvidence.testIntentRepair = {
+          outcome: 'repaired',
+          testIds: repair.testIds,
+        };
+        handoffNotes.push(
+          `tech-lead repaired test intent: ${repair.testIds.join(', ')}`,
+        );
+        const reReview = await deps.techLeadReviewTests({ task, qa });
+        emitRoleVerdict(input, {
+          role: 'tech-lead',
+          gate: 'test-intent',
+          verdict: reReview.approved ? 'pass' : 'fail',
+          summary: reReview.notes?.trim() || (reReview.approved
+            ? 'tech-lead approved repaired test intent'
+            : 'tech-lead rejected repaired test intent'),
+        });
+        if (reReview.approved) break;
+        tlTests = reReview;
+        repairNote = 'tech-lead patched the tests but rejected them on re-review';
+      } else {
+        repairEvidence.testIntentRepair = {
+          outcome: 'not-repaired',
+          reason: repair.reason,
+        };
+        repairNote = `tech-lead repair attempted but not applied: ${repair.reason}`;
+      }
+    }
+
     const reason = tlTests.notes?.trim() || 'tech-lead rejected test intent';
     qaFeedback = buildGateRejectionFeedback({
       rejectingRole: 'tech-lead',
       counterpartRole: 'qa',
       artifact: 'test-intent',
       reason,
-      actionableNotes: suggestedChangeNotes(tlTests.suggestedChange),
+      actionableNotes: [
+        ...suggestedChangeNotes(tlTests.suggestedChange),
+        ...(repairNote !== undefined ? [repairNote] : []),
+      ],
     });
     await recordGateRejection(deps, qaFeedback);
     if (qaAttempt === input.cap - 1) {
@@ -1580,6 +1699,31 @@ function emitRoleVerdict(
         verdict: event.verdict,
         summary,
         line: `${event.role}: ${event.gate} ${event.verdict} - ${summary}`,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitTestRepair(
+  input: TeamTaskRunInput,
+  repair: TechLeadTestRepairResult,
+): void {
+  if (input.emit === undefined) return;
+  const summary = repair.kind === 'repaired'
+    ? `patched ${repair.testIds.join(', ')}`
+    : repair.reason;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'test-repair',
+        role: 'tech-lead',
+        gate: 'test-intent',
+        outcome: repair.kind,
+        summary,
+        line: `tech-lead: test-intent repair ${repair.kind} - ${summary}`,
       },
     });
   } catch {

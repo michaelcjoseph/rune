@@ -34,6 +34,7 @@ import {
   type TaskEvidence,
   type CoderResult,
   type QaResult,
+  type TechLeadTestRepairResult,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
 
@@ -306,6 +307,285 @@ describe('team-task-workflow — QA-first', () => {
       rejectedArtifact: 'test-intent',
       actionableNotes: ['add the raw secret absence assertion'],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test-intent repair — the tech-lead patches QA's tests on first rejection
+// instead of bouncing an unfixable state back to the same QA agent.
+// ---------------------------------------------------------------------------
+
+describe('team-task-workflow — test-intent repair', () => {
+  const repaired: TechLeadTestRepairResult = {
+    kind: 'repaired',
+    testIds: ['t1', 't1-negative'],
+    redCheck: { kind: 'red', command: 'npm test', exitCode: 1, outputTail: '1 failed' },
+  };
+
+  it('repairs on first rejection: tech-lead patch + approving re-review reach the coder without a QA retry', async () => {
+    let qaCalls = 0;
+    let reviewCalls = 0;
+    let coderTests: string[] | string | undefined;
+    const repairInputs: unknown[] = [];
+    const deps = makeDeps({
+      qaWriteTests: async () => {
+        qaCalls += 1;
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? {
+              approved: false,
+              notes: 'tests never assert the foreground-suppression case',
+              suggestedChange: 'Assert no cue is raised for the currently-viewed product.',
+            }
+          : { approved: true };
+      },
+      techLeadRepairTests: async (input) => {
+        repairInputs.push(input);
+        return repaired;
+      },
+      coder: async ({ tests }) => {
+        coderTests = tests;
+        return { diff: 'd', handoffNotes: [] };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(qaCalls).toBe(1);
+    expect(reviewCalls).toBe(2);
+    expect(repairInputs).toHaveLength(1);
+    expect(repairInputs[0]).toMatchObject({
+      spec: INPUT.spec,
+      qa: { kind: 'tests-written', testIds: ['t1'] },
+      rejection: {
+        reason: 'tests never assert the foreground-suppression case',
+        suggestedChange: 'Assert no cue is raised for the currently-viewed product.',
+      },
+    });
+    expect(coderTests).toEqual(['t1', 't1-negative']);
+    expect(ev.testIntentRepair).toEqual({
+      outcome: 'repaired',
+      testIds: ['t1', 't1-negative'],
+    });
+  });
+
+  it('bounces to QA with the repair reason in actionableNotes when the repair is not applied', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: GateRejectionFeedback });
+        return { kind: 'tests-written', testIds: [`t${qaInputs.length}`] };
+      },
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? { approved: false, notes: 'missing negative assertion', suggestedChange: 'add it' }
+          : { approved: true };
+      },
+      techLeadRepairTests: async () => ({
+        kind: 'not-repaired',
+        reason: 'patched tests pass with no implementation — vacuous',
+      }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(qaInputs).toHaveLength(2);
+    expect(qaInputs[1]?.rejectionFeedback?.actionableNotes).toEqual([
+      'add it',
+      'tech-lead repair attempted but not applied: patched tests pass with no implementation — vacuous',
+    ]);
+    expect(ev.testIntentRepair).toEqual({
+      outcome: 'not-repaired',
+      reason: 'patched tests pass with no implementation — vacuous',
+    });
+  });
+
+  it('bounces to QA on the re-review reason when the tech-lead rejects its own patch', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: GateRejectionFeedback });
+        return { kind: 'tests-written', testIds: [`t${qaInputs.length}`] };
+      },
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        if (reviewCalls === 1) return { approved: false, notes: 'missing negative assertion' };
+        if (reviewCalls === 2) return { approved: false, notes: 'patch still misses the async path' };
+        return { approved: true };
+      },
+      techLeadRepairTests: async () => repaired,
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(qaInputs).toHaveLength(2);
+    expect(qaInputs[1]?.rejectionFeedback).toMatchObject({
+      reason: 'patch still misses the async path',
+      actionableNotes: ['tech-lead patched the tests but rejected them on re-review'],
+    });
+  });
+
+  it('skips the repair entirely when the rejection is marked repairable: false', async () => {
+    let repairCalled = false;
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? { approved: false, notes: 'tests need structural rework', repairable: false }
+          : { approved: true };
+      },
+      techLeadRepairTests: async () => {
+        repairCalled = true;
+        return repaired;
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(repairCalled).toBe(false);
+    expect(ev.testIntentRepair).toBeUndefined();
+  });
+
+  it('never attempts a repair on a no-code-test rationale', async () => {
+    let repairCalled = false;
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      qaWriteTests: async () => ({ kind: 'no-code-test-rationale', rationale: 'docs only' }),
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? { approved: false, notes: 'rationale too thin' }
+          : { approved: true };
+      },
+      techLeadRepairTests: async () => {
+        repairCalled = true;
+        return repaired;
+      },
+    });
+
+    await runTeamTaskWorkflow(docsTask, INPUT, deps);
+
+    expect(repairCalled).toBe(false);
+  });
+
+  it('attempts the repair exactly once across repeated rejections', async () => {
+    let repairCalls = 0;
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        // Reject the first review AND the post-repair re-review AND the retry
+        // review; approve only on the final attempt's review.
+        return reviewCalls >= 4 ? { approved: true } : { approved: false, notes: 'still missing' };
+      },
+      techLeadRepairTests: async () => {
+        repairCalls += 1;
+        return repaired;
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 3 }, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(repairCalls).toBe(1);
+  });
+
+  it('treats a throwing repair dep as not-repaired instead of failing the task', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: GateRejectionFeedback });
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? { approved: false, notes: 'missing case' }
+          : { approved: true };
+      },
+      techLeadRepairTests: async () => {
+        throw new Error('executor unavailable');
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(qaInputs).toHaveLength(2);
+    expect(qaInputs[1]?.rejectionFeedback?.actionableNotes).toContain(
+      'tech-lead repair attempted but not applied: executor unavailable',
+    );
+    expect(ev.testIntentRepair).toEqual({
+      outcome: 'not-repaired',
+      reason: 'executor unavailable',
+    });
+  });
+
+  it('keeps the round-cap backstop when every review rejects and repair never lands', async () => {
+    let qaCalls = 0;
+    const deps = makeDeps({
+      qaWriteTests: async () => {
+        qaCalls += 1;
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      techLeadReviewTests: async () => ({ approved: false, notes: 'still wrong' }),
+      techLeadRepairTests: async () => ({ kind: 'not-repaired', reason: 'no delta' }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 3 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.loopExitReason).toBe('hard-budget');
+    expect(qaCalls).toBe(3);
+    expect(ev.testIntentRepair).toEqual({ outcome: 'not-repaired', reason: 'no delta' });
+  });
+
+  it('emits a test-repair activity event and a second test-intent verdict for the re-review', async () => {
+    const events: Array<Record<string, unknown>> = [];
+    let reviewCalls = 0;
+    const deps = makeDeps({
+      techLeadReviewTests: async () => {
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? { approved: false, notes: 'missing negative assertion' }
+          : { approved: true, notes: 'repaired tests pin the contract' };
+      },
+      techLeadRepairTests: async () => repaired,
+    });
+
+    await runTeamTaskWorkflow(codeTask, {
+      ...INPUT,
+      emit: (event) => {
+        if (event.data !== undefined) events.push(event.data);
+      },
+    }, deps);
+
+    const repairEvents = events.filter((data) => data['event'] === 'test-repair');
+    expect(repairEvents).toHaveLength(1);
+    expect(repairEvents[0]).toMatchObject({
+      role: 'tech-lead',
+      gate: 'test-intent',
+      outcome: 'repaired',
+    });
+    expect(typeof repairEvents[0]?.['line']).toBe('string');
+    expect(repairEvents[0]?.['line']).not.toBe('');
+
+    const testIntentVerdicts = events.filter(
+      (data) => data['event'] === 'role-verdict' && data['gate'] === 'test-intent',
+    );
+    expect(testIntentVerdicts.map((data) => data['verdict'])).toEqual(['fail', 'pass']);
   });
 });
 
