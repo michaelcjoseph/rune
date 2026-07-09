@@ -73,7 +73,7 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 |---|---|---|---|---|
 | a | reviewer-independence pre-gate | orchestrator | (implicit) | a reviewer provider distinct from the coder's exists → pass; null → terminal `block` (fail-closed, no rounds) |
 | b | QA writes tests | qa | — | tests authored pinning the task contract (or a `no-code-test-rationale`) |
-| c | tech-lead test-intent | tech-lead | **`test-intent`** | verdict `approved===true`; FAIL → loop back to QA (≤ cap) then `block` |
+| c | tech-lead test-intent | tech-lead | **`test-intent`** | verdict `approved===true`; FAIL → tech-lead **repair** first (once per task, unless `repairable:false`), then loop back to QA (≤ cap) then `block` |
 | d | coder implements | coder | — | diff produced to satisfy the QA tests AND drive the product `validationCommands` green in the worktree (coder self-gate, prompt-enforced); executor throw → `failed` |
 | e | coder self-review | coder | — | **exactly one** fix-it pass over its own diff (`runSelfReview`); throw → `failed` |
 | f | QA re-validate (conditional) | qa | `implementation-diff` | only if self-review changed diff behavior; `approved===true` else terminal `block` |
@@ -81,6 +81,8 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 | h | tech-lead diff review | tech-lead | **`implementation-diff`** | pass/pass-with-warnings; runs **every** round regardless of reviewer outcome; fail → objection loop |
 | i | designer review (conditional) | designer | **`design-review`** | only if `task.designerNeeded` — production `toSizedTask` hardcodes this **false**, so the stage is inert in the orchestrated path today |
 | — | round-exit decision | orchestrator | — | all gates pass + all prior ledger findings verified + open severity ≤ low → `ready-for-closeout` |
+
+**Test-intent repair (gate c FAIL path):** on the FIRST rejection the tech-lead patches the tests itself instead of bouncing an unfixable state back to the same QA agent (`deps.techLeadRepairTests`, production: an `execute('tech-lead')` worktree session). Mechanics are fail-safe: the repair delta is computed against a pre-repair `git write-tree` snapshot; any path outside `*.test.ts(x)`/QA's own testIds is reverted on disk; then **confirm-red** runs the product `validationCommands` — a green or timed-out run rolls the patch back (`not-repaired` → QA bounce), a red run threads its output tail into the re-review as `Confirm-red evidence` so the tech-lead judges red-for-the-right-reason. A `repairable:false` verdict (structural rework / spec ambiguity) skips the repair entirely; every internal failure degrades to the QA bounce, never a task-fatal throw. Evidence lands as `TaskEvidence.testIntentRepair`; the attempt emits a `test-repair` activity event.
 
 **Test-deletion guardrail:** gates g and h fail a diff that deletes or weakens a test unless the coder's handoff notes (threaded into both bodies as `## Coder handoff notes`) justify it — a sandbox-impossible external/live dependency or a demonstrated flake, recorded as `TEST-REMOVED: <path> — <reason>`; a test that is red because the implementation fails it may never be removed.
 

@@ -36,7 +36,7 @@ import { join } from 'node:path';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { PROJECT_ROOT } from '../config.js';
+import config, { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
@@ -61,8 +61,12 @@ import {
   type TaskEvidence,
   type CoderResult,
   type TeamTaskDeps,
+  type TechLeadTestRepairResult,
+  type TestRepairRedCheck,
   type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
+import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { runValidationCommands } from './work-run-gate-runtime.js';
 import {
   runExecutionAgent,
   type ExecutionAgentIO,
@@ -194,6 +198,10 @@ export interface TeamTaskSeams {
     opts: ExecutionAgentOpts,
     io?: Partial<ExecutionAgentIO>,
   ) => Promise<ExecutionAgentResult>;
+  /** Git runner for the test-intent repair's snapshot/delta/guard mechanics. */
+  runGit: GitRunner;
+  /** Validation-command runner for the post-repair confirm-red check. */
+  runRepairValidation: typeof runValidationCommands;
 }
 
 /** Production judgment call: SOUL on the system channel, one throwaway
@@ -240,6 +248,8 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
 const defaultSeams: TeamTaskSeams = {
   judgmentCall: defaultJudgmentCall,
   runExecution: runExecutionAgent,
+  runGit: defaultRunGit,
+  runRepairValidation: runValidationCommands,
 };
 
 // ---------------------------------------------------------------------------
@@ -328,12 +338,31 @@ const TL_TEST_REVIEW_INSTRUCTION = [
   'INTENT before the coder starts: do the tests (or the no-code-test rationale)',
   'actually pin the task\'s contract?',
   'If you reject the test intent, include `suggestedChange`: the concrete test',
-  'or rationale change that would clear the rejection.',
+  'or rationale change that would clear the rejection. Also include `repairable`:',
+  'set it to false ONLY when the tests need structural rework or expose a spec',
+  'ambiguity you cannot resolve alone; a bounded gap (a missing or weak',
+  'assertion) is repairable — you will patch it yourself.',
   '',
   'Respond with EXACTLY ONE fenced ```tl-test-review block containing JSON:',
   '```tl-test-review',
-  '{"approved": true, "notes": "<short reason>", "suggestedChange": "<concrete change if approved is false>"}',
+  '{"approved": true, "notes": "<short reason>", "suggestedChange": "<concrete change if approved is false>", "repairable": true}',
   '```',
+].join('\n');
+
+const TL_TEST_REPAIR_INSTRUCTION = [
+  'You are the tech lead. You rejected QA\'s test intent for the task below —',
+  'repair the TESTS yourself: add or adjust the assertions named in your',
+  'rejection so the tests pin the task\'s contract.',
+  '',
+  'Edit ONLY test files (*.test.ts / *.test.tsx). Do NOT implement the product',
+  'feature, do NOT touch product source, and do not commit — any change outside',
+  'the test files is reverted mechanically.',
+  '',
+  'The coder has not run yet, so the tests must still FAIL against the current',
+  'tree; do not weaken them into passing vacuously.',
+  '',
+  'If the tests need structural rework or the spec is ambiguous, change nothing',
+  'and print one paragraph explaining why.',
 ].join('\n');
 
 const TL_DIFF_REVIEW_INSTRUCTION = [
@@ -636,12 +665,13 @@ const reviewerOutcomeRank: Record<GateOutcome, number> = {
   fail: 2,
 };
 
-/** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */
+/** Fail-closed boolean-flag parser shared by the tl-test-review and
+ *  qa-diff-revalidation verdicts. */
 function parseFlagVerdict(
   text: string,
   tag: string,
   flag: string,
-): { value: boolean; notes?: string; suggestedChange?: string } {
+): { value: boolean; notes?: string; suggestedChange?: string; repairable?: boolean } {
   const parsed = extractFencedJson(text, tag);
   if (!parsed || typeof parsed !== 'object') {
     return { value: false, notes: `unparseable ${tag} verdict — failing closed` };
@@ -655,6 +685,7 @@ function parseFlagVerdict(
     value: v[flag] === true,
     ...(notes !== undefined ? { notes } : {}),
     ...(suggestedChange !== undefined ? { suggestedChange } : {}),
+    ...(typeof v['repairable'] === 'boolean' ? { repairable: v['repairable'] } : {}),
   };
 }
 
@@ -751,6 +782,27 @@ function filesFromDiff(diff: string): string[] {
     files.add(match[1]!);
   }
   return [...files];
+}
+
+/** Keep-the-end cap on the confirm-red output tail carried into the re-review
+ *  prompt (the failure summary lives at the end of a test-runner's output). */
+const REPAIR_RED_TAIL_MAX_CHARS = 4_000;
+
+/** Parse `git diff-tree -r -z --name-status --no-renames` output:
+ *  NUL-separated `<status>\0<path>` pairs. */
+function parseNameStatusZ(stdout: string): Array<{ status: string; path: string }> {
+  const parts = stdout.split('\0').filter((part) => part !== '');
+  const entries: Array<{ status: string; path: string }> = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    entries.push({ status: parts[i]!, path: parts[i + 1]! });
+  }
+  return entries;
+}
+
+/** The repair guard's allowlist: test files, plus paths QA itself created
+ *  (covers QA-authored fixtures/helpers that aren't `*.test.ts`). */
+function isAllowedRepairPath(path: string, qaTestIds: readonly string[]): boolean {
+  return /\.test\.tsx?$/.test(path) || qaTestIds.includes(path);
 }
 
 /** A compact handoff note from the executor's textual output — the tail only,
@@ -878,6 +930,10 @@ export function buildProductionTeamTaskDeps(
   // content rather than bare file paths (QaResult carries only testIds).
   // Deps are built per task invocation, so this never leaks across tasks.
   let lastQaDiff = '';
+  // Confirm-red evidence from the last test-intent repair, rendered into the
+  // re-review body so the tech-lead judges red-for-the-right-reason. Cleared
+  // on the next QA attempt — a fresh QA diff invalidates repair evidence.
+  let lastRepairRedCheck: TestRepairRedCheck | undefined;
 
   const learnFromGateRejection = async (rejection: GateRejectionFeedback): Promise<void> => {
     try {
@@ -932,7 +988,7 @@ export function buildProductionTeamTaskDeps(
   // instruction) rides the executor's system channel; memory reference + task
   // body ride the prompt. (codex degrades to prepend — see ExecutionAgentOpts.)
   const execute = async (
-    role: 'qa' | 'coder',
+    role: 'qa' | 'coder' | 'tech-lead',
     binding: RoleModelBinding,
     instruction: string,
     body: string,
@@ -956,6 +1012,7 @@ export function buildProductionTeamTaskDeps(
     // runTeamTaskWorkflow's outer catch turns the throw into structured
     // `failed` evidence with failureReason. That is the error-flow contract.
     qaWriteTests: async ({ task, spec, rejectionFeedback }) => {
+      lastRepairRedCheck = undefined;
       const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
       const body = [
         `## Task\n\n${task.text}`,
@@ -978,15 +1035,25 @@ export function buildProductionTeamTaskDeps(
     },
 
     techLeadReviewTests: async ({ task, qa }) => {
+      const redCheckSection = lastRepairRedCheck === undefined
+        ? undefined
+        : lastRepairRedCheck.kind === 'red'
+          ? '## Confirm-red evidence (post-repair)\n\nThe patched tests were run before ' +
+            `this review: \`${lastRepairRedCheck.command}\` exited ` +
+            `${lastRepairRedCheck.exitCode} (red, as required pre-implementation — judge ` +
+            'whether the failure is the expected one). Output tail:\n\n' +
+            lastRepairRedCheck.outputTail
+          : `## Confirm-red evidence (post-repair)\n\nRed-check skipped: ${lastRepairRedCheck.reason}`;
       const body = [
         `## Task\n\n${task.text}`,
         '',
         qa.kind === 'tests-written'
           ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
           : `## QA no-code-test rationale\n\n${qa.rationale}`,
+        ...(redCheckSection !== undefined ? ['', redCheckSection] : []),
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body);
-      const { value, notes, suggestedChange } = parseFlagVerdict(
+      const { value, notes, suggestedChange, repairable } = parseFlagVerdict(
         reply,
         'tl-test-review',
         'approved',
@@ -995,7 +1062,153 @@ export function buildProductionTeamTaskDeps(
         approved: value,
         ...(notes !== undefined ? { notes } : {}),
         ...(suggestedChange !== undefined ? { suggestedChange } : {}),
+        ...(repairable !== undefined ? { repairable } : {}),
       };
+    },
+
+    techLeadRepairTests: async ({ task, spec, qa, rejection }) => {
+      const cwd = sandbox.worktree;
+      const git = (gitArgs: string[]) => seams.runGit(gitArgs, { cwd });
+      const notRepaired = (reason: string): TechLeadTestRepairResult => ({
+        kind: 'not-repaired',
+        reason,
+      });
+      // Revert a set of delta entries back to the pre-repair snapshot: paths
+      // the repair ADDED are removed (they don't exist in the snapshot tree);
+      // everything else is restored from it. Load-bearing, not cosmetic:
+      // closeout later stages `git add -A`, so a stray write that survives
+      // here would be committed with the task.
+      const revertEntries = async (
+        preTree: string,
+        entries: Array<{ status: string; path: string }>,
+      ): Promise<void> => {
+        for (const entry of entries) {
+          if (entry.status === 'A') {
+            await git(['rm', '-f', '--', entry.path]);
+          } else {
+            await git(['restore', '--source', preTree, '--staged', '--worktree', '--', entry.path]);
+          }
+        }
+        await git(['add', '-A']);
+      };
+
+      // The whole repair is best-effort by contract: every failure degrades to
+      // `not-repaired` (the workflow falls back to the QA bounce), never a
+      // task-fatal throw.
+      try {
+        // 1. Snapshot BEFORE spending an executor call. `write-tree` after
+        //    `add -A` captures untracked files too (`git stash create` would
+        //    not), and QA's uncommitted work stays untouched in the worktree.
+        await git(['add', '-A']);
+        const preTree = (await git(['write-tree'])).stdout.trim();
+        if (preTree === '') {
+          return notRepaired('pre-repair snapshot produced no tree');
+        }
+
+        // 2. The tech-lead patches the tests in the worktree.
+        const body = [
+          `## Task\n\n${task.text}`,
+          '',
+          `## Spec\n\n${spec}`,
+          '',
+          `## QA test files\n\n${qa.testIds.join('\n')}`,
+          '',
+          `## Your rejection\n\n${rejection.reason}`,
+          ...(rejection.suggestedChange !== undefined
+            ? ['', `## Suggested change\n\n${rejection.suggestedChange}`]
+            : []),
+          '',
+          `## Current QA test diff\n\n${lastQaDiff}`,
+        ].join('\n');
+        const result = await execute(
+          'tech-lead',
+          models.techLead,
+          TL_TEST_REPAIR_INSTRUCTION,
+          body,
+        );
+
+        // 3. The repair delta is computed with git against the snapshot — the
+        //    executor's returned diff is scrubbed AND includes QA's uncommitted
+        //    changes, so it cannot drive the guard.
+        await git(['add', '-A']);
+        const postTree = (await git(['write-tree'])).stdout.trim();
+        const delta = postTree === preTree
+          ? []
+          : parseNameStatusZ(
+              (await git([
+                'diff-tree', '-r', '-z', '--name-status', '--no-renames', preTree, postTree,
+              ])).stdout,
+            );
+        if (!result.ok) {
+          await revertEntries(preTree, delta);
+          return notRepaired(`tech-lead repair execution failed: ${result.error}`);
+        }
+        if (delta.length === 0) {
+          return notRepaired('tech-lead made no changes');
+        }
+
+        // 4. Path guard: revert anything outside the test allowlist.
+        const violations = delta.filter(
+          (entry) => !isAllowedRepairPath(entry.path, qa.testIds),
+        );
+        const surviving = delta.filter(
+          (entry) => isAllowedRepairPath(entry.path, qa.testIds),
+        );
+        if (violations.length > 0) {
+          await revertEntries(preTree, violations);
+        }
+        if (surviving.length === 0) {
+          return notRepaired('repair touched only non-test paths — reverted');
+        }
+
+        // 5. Confirm-red: the patched tests must still fail against the
+        //    not-yet-written implementation, or the gate would approve a
+        //    vacuous/green test.
+        let redCheck: TestRepairRedCheck;
+        if (validationCommands.length === 0) {
+          redCheck = { kind: 'skipped', reason: 'no validation commands configured' };
+        } else {
+          const validation = await seams.runRepairValidation(
+            validationCommands,
+            cwd,
+            config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+          );
+          if (validation.ok) {
+            await revertEntries(preTree, surviving);
+            return notRepaired(
+              'patched tests pass with no implementation — vacuous or behavior-pinning; routing back to QA',
+            );
+          }
+          if (validation.result.timedOut) {
+            await revertEntries(preTree, surviving);
+            return notRepaired(`confirm-red run timed out on: ${validation.command}`);
+          }
+          redCheck = {
+            kind: 'red',
+            command: validation.command,
+            exitCode: validation.result.exitCode,
+            outputTail: redactSecrets(
+              scrubPathsInText(validation.result.outputTail.slice(-REPAIR_RED_TAIL_MAX_CHARS)),
+            ),
+          };
+        }
+
+        // 6. Land the repair in the seam state: the re-review and
+        //    qaRevalidateDiff read `lastQaDiff`, so it must reflect the
+        //    patched tests (same capture + scrubbing as the execution agent).
+        const diffResult = await git(['diff', 'HEAD']);
+        lastQaDiff = redactSecrets(scrubPathsInText(diffResult.stdout));
+        lastRepairRedCheck = redCheck;
+        const testIds = [
+          ...new Set([
+            ...qa.testIds,
+            ...surviving.filter((entry) => entry.status !== 'D').map((entry) => entry.path),
+          ]),
+        ];
+        return { kind: 'repaired', testIds, redCheck };
+      } catch (err) {
+        return notRepaired(`tech-lead repair failed: ${(err as Error).message}`);
+      }
     },
 
     coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger }) => {

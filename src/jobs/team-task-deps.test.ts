@@ -20,7 +20,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +49,7 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
+import { defaultRunGit } from './sandbox-runtime.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -121,7 +124,17 @@ const greenExecution = async (): Promise<ExecutionAgentResult> => ({
 const GATE_VERDICT_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 
 function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeams> {
-  return { judgmentCall: greenJudgment, runExecution: greenExecution, ...overrides };
+  return {
+    judgmentCall: greenJudgment,
+    runExecution: greenExecution,
+    // Fail-deterministic: a fixture that doesn't inject runGit must never
+    // reach the real git CLI — the test-intent repair path degrades to
+    // not-repaired (the legacy QA bounce) instead of touching the host.
+    runGit: async () => {
+      throw new Error('runGit not injected in this fixture');
+    },
+    ...overrides,
+  };
 }
 
 function buildDeps(
@@ -177,12 +190,13 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildProductionTeamTaskDeps (Phase 8)', () => {
-  it('binds all eight role seams as functions', () => {
+  it('binds all role seams as functions, including the test-intent repair seam', () => {
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()));
 
     const seamNames: Array<keyof TeamTaskDeps> = [
       'qaWriteTests',
       'techLeadReviewTests',
+      'techLeadRepairTests',
       'coder',
       'reviewer',
       'techLeadReviewDiff',
@@ -1576,5 +1590,529 @@ describe('no-stub regression (Phase 8)', () => {
     expect(evidence.rolesInvoked).toEqual([]);
     expect(evidence.blockedReason).toMatch(/manual\/live release gate/i);
     expect(evidence.blockedReason).toMatch(/operator evidence/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test-intent repair — the production techLeadRepairTests seam
+// ---------------------------------------------------------------------------
+
+describe('techLeadRepairTests (production seam)', () => {
+  const repairQa = { kind: 'tests-written' as const, testIds: ['src/x.test.ts'] };
+  const repairRejection = {
+    reason: 'tests miss the negative case',
+    suggestedChange: 'assert no cue for the viewed product',
+  };
+
+  type GitFakeOpts = {
+    preTree?: string;
+    postTree?: string;
+    delta?: Array<{ status: string; path: string }>;
+    diffHead?: string;
+  };
+
+  /** Scripted git fake for the snapshot → delta → guard mechanics. Records
+   *  every invocation so tests can assert exact revert/delete calls. */
+  function makeRepairGitFake(opts: GitFakeOpts = {}) {
+    const calls: string[][] = [];
+    let writeTreeCalls = 0;
+    const runGit = async (args: string[]): Promise<{ stdout: string; stderr: string }> => {
+      calls.push(args);
+      if (args[0] === 'write-tree') {
+        writeTreeCalls += 1;
+        return {
+          stdout: writeTreeCalls === 1 ? (opts.preTree ?? 'tree-pre') : (opts.postTree ?? 'tree-post'),
+          stderr: '',
+        };
+      }
+      if (args[0] === 'diff-tree') {
+        const z = (opts.delta ?? []).map((e) => `${e.status}\0${e.path}`).join('\0');
+        return { stdout: z === '' ? '' : `${z}\0`, stderr: '' };
+      }
+      if (args[0] === 'diff') {
+        return { stdout: opts.diffHead ?? '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+    return { runGit, calls };
+  }
+
+  const redValidation = async (): Promise<
+    { ok: false; command: string; result: { exitCode: number; timedOut: boolean; outputTail: string } }
+  > => ({
+    ok: false,
+    command: 'npm test',
+    result: { exitCode: 1, timedOut: false, outputTail: 'FAIL src/x.test.ts — 1 failed' },
+  });
+
+  function buildRepairDeps(
+    seams: Partial<TeamTaskSeams>,
+    validationCommands?: string[],
+  ): TeamTaskDeps {
+    return buildProductionTeamTaskDeps(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        ...(validationCommands !== undefined ? { validationCommands } : {}),
+      },
+      makeSeams(seams),
+    );
+  }
+
+  it('returns not-repaired without spawning the executor when the snapshot fails', async () => {
+    let executorCalls = 0;
+    const deps = buildRepairDeps({
+      runGit: async () => {
+        throw new Error('git exploded');
+      },
+      runExecution: async () => {
+        executorCalls += 1;
+        return { ok: true, diff: '', output: '' };
+      },
+    });
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({
+      kind: 'not-repaired',
+      reason: 'tech-lead repair failed: git exploded',
+    });
+    expect(executorCalls).toBe(0);
+  });
+
+  it('runs the tech-lead executor with the rejection context and repairs on a red check', async () => {
+    const executions: Array<{ prompt: string; systemPrompt: string | undefined; model: unknown }> = [];
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+      diffHead: 'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+patched assertion\n',
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runExecution: async (opts) => {
+          executions.push({
+            prompt: opts.prompt,
+            systemPrompt: opts.systemPrompt,
+            model: opts.model,
+          });
+          return { ok: true, diff: 'scrubbed-executor-diff', output: 'patched' };
+        },
+        runRepairValidation: redValidation,
+      },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'the spec body',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'repaired',
+      testIds: ['src/x.test.ts'],
+      redCheck: {
+        kind: 'red',
+        command: 'npm test',
+        exitCode: 1,
+        outputTail: 'FAIL src/x.test.ts — 1 failed',
+      },
+    });
+    expect(executions).toHaveLength(1);
+    expect(executions[0]?.prompt).toContain('tests miss the negative case');
+    expect(executions[0]?.prompt).toContain('assert no cue for the viewed product');
+    expect(executions[0]?.prompt).toContain('the spec body');
+    expect(executions[0]?.prompt).toContain('src/x.test.ts');
+    expect(executions[0]?.systemPrompt).toContain('Edit ONLY test files');
+    expect(executions[0]?.model).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+  });
+
+  it('reverts a product-source write from the delta and proceeds with the surviving test patch', async () => {
+    const git = makeRepairGitFake({
+      delta: [
+        { status: 'M', path: 'src/x.test.ts' },
+        { status: 'M', path: 'src/prod.ts' },
+        { status: 'A', path: 'src/new-helper.ts' },
+      ],
+      diffHead: '+++ b/src/x.test.ts\n+patched\n',
+    });
+    const deps = buildRepairDeps(
+      { runGit: git.runGit, runRepairValidation: redValidation },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({ kind: 'repaired', testIds: ['src/x.test.ts'] });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/prod.ts',
+    ]);
+    expect(git.calls).toContainEqual(['rm', '-f', '--', 'src/new-helper.ts']);
+    // The surviving test patch must NOT be reverted.
+    expect(git.calls).not.toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/x.test.ts',
+    ]);
+  });
+
+  it('rolls back and returns not-repaired when the repair touched only non-test paths', async () => {
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/prod.ts' }],
+    });
+    const deps = buildRepairDeps(
+      { runGit: git.runGit, runRepairValidation: redValidation },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({
+      kind: 'not-repaired',
+      reason: 'repair touched only non-test paths — reverted',
+    });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/prod.ts',
+    ]);
+  });
+
+  it('returns not-repaired when the executor made no changes', async () => {
+    const git = makeRepairGitFake({ preTree: 'tree-same', postTree: 'tree-same' });
+    const deps = buildRepairDeps(
+      { runGit: git.runGit, runRepairValidation: redValidation },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({ kind: 'not-repaired', reason: 'tech-lead made no changes' });
+  });
+
+  it('rolls the patch back and returns not-repaired when the suite is green pre-implementation', async () => {
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runRepairValidation: async () => ({ ok: true }),
+      },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({
+      kind: 'not-repaired',
+      reason:
+        'patched tests pass with no implementation — vacuous or behavior-pinning; routing back to QA',
+    });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/x.test.ts',
+    ]);
+  });
+
+  it('rolls the patch back and returns not-repaired when the confirm-red run times out', async () => {
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runRepairValidation: async () => ({
+          ok: false,
+          command: 'npm test',
+          result: { exitCode: null, timedOut: true, outputTail: '' },
+        }),
+      },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({
+      kind: 'not-repaired',
+      reason: 'confirm-red run timed out on: npm test',
+    });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/x.test.ts',
+    ]);
+  });
+
+  it('skips the red check when no validation commands are configured', async () => {
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+    });
+    let validationCalls = 0;
+    const deps = buildRepairDeps({
+      runGit: git.runGit,
+      runRepairValidation: async () => {
+        validationCalls += 1;
+        return { ok: true };
+      },
+    });
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'repaired',
+      redCheck: { kind: 'skipped', reason: 'no validation commands configured' },
+    });
+    expect(validationCalls).toBe(0);
+  });
+
+  it('merges new test files into testIds and drops nothing QA authored', async () => {
+    const git = makeRepairGitFake({
+      delta: [
+        { status: 'M', path: 'src/x.test.ts' },
+        { status: 'A', path: 'src/x-negative.test.ts' },
+      ],
+    });
+    const deps = buildRepairDeps({ runGit: git.runGit });
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'repaired',
+      testIds: ['src/x.test.ts', 'src/x-negative.test.ts'],
+    });
+  });
+
+  it('feeds the patched diff and confirm-red evidence into the next tech-lead review', async () => {
+    const reviewBodies: string[] = [];
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+      diffHead: '+++ b/src/x.test.ts\n+the patched negative assertion\n',
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runRepairValidation: redValidation,
+        judgmentCall: async ({ message }) => {
+          reviewBodies.push(message);
+          return GREEN_JUDGMENT_REPLY;
+        },
+      },
+      ['npm test'],
+    );
+
+    await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+    await deps.techLeadReviewTests({ task: sizedTask, qa: repairQa });
+
+    expect(reviewBodies).toHaveLength(1);
+    expect(reviewBodies[0]).toContain('the patched negative assertion');
+    expect(reviewBodies[0]).toContain('Confirm-red evidence (post-repair)');
+    expect(reviewBodies[0]).toContain('`npm test` exited 1');
+    expect(reviewBodies[0]).toContain('FAIL src/x.test.ts — 1 failed');
+  });
+
+  it('clears stale confirm-red evidence when QA writes fresh tests', async () => {
+    const reviewBodies: string[] = [];
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runRepairValidation: redValidation,
+        judgmentCall: async ({ message }) => {
+          reviewBodies.push(message);
+          return GREEN_JUDGMENT_REPLY;
+        },
+      },
+      ['npm test'],
+    );
+
+    await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+    await deps.qaWriteTests({ task: sizedTask, spec: 'spec' });
+    await deps.techLeadReviewTests({ task: sizedTask, qa: repairQa });
+
+    expect(reviewBodies).toHaveLength(1);
+    expect(reviewBodies[0]).not.toContain('Confirm-red evidence');
+  });
+
+  it('parses repairable out of the tl-test-review verdict and omits it when absent', async () => {
+    const replies = [
+      '```tl-test-review\n{"approved": false, "notes": "structural", "repairable": false}\n```',
+      '```tl-test-review\n{"approved": false, "notes": "bounded gap", "repairable": true}\n```',
+      '```tl-test-review\n{"approved": false, "notes": "no flag"}\n```',
+    ];
+    let call = 0;
+    const deps = buildRepairDeps({
+      judgmentCall: async () => replies[call++]!,
+    });
+
+    const first = await deps.techLeadReviewTests({ task: sizedTask, qa: repairQa });
+    const second = await deps.techLeadReviewTests({ task: sizedTask, qa: repairQa });
+    const third = await deps.techLeadReviewTests({ task: sizedTask, qa: repairQa });
+
+    expect(first).toMatchObject({ approved: false, repairable: false });
+    expect(second).toMatchObject({ approved: false, repairable: true });
+    expect(third.repairable).toBeUndefined();
+    expect(third.approved).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test-intent repair — guard mechanics against a REAL temp git worktree
+// ---------------------------------------------------------------------------
+
+describe('techLeadRepairTests (real git integration)', () => {
+  it('restores a product-source write on disk and keeps the test patch', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'repair-guard-'));
+    try {
+      const git = (args: string[]) => defaultRunGit(args, { cwd: dir });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'prod.ts'), 'export const original = true;\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+      // QA's earlier session left uncommitted test work in the worktree.
+      await writeFile(join(dir, 'src', 'x.test.ts'), 'test("qa", () => {});\n');
+
+      const deps = buildProductionTeamTaskDeps(
+        {
+          sandbox: { ...makeSandbox(), worktree: dir },
+          productsConfigPath: '/nonexistent/products.json',
+          models: resolveTeamRoleModels(loadRealPolicy()),
+        },
+        makeSeams({
+          runGit: defaultRunGit,
+          // The "tech-lead" patches the test file but ALSO rewrites product
+          // source and drops a stray helper — both must be reverted on disk.
+          runExecution: async () => {
+            await writeFile(
+              join(dir, 'src', 'x.test.ts'),
+              'test("qa", () => {});\ntest("negative", () => {});\n',
+            );
+            await writeFile(join(dir, 'src', 'prod.ts'), 'export const hacked = true;\n');
+            await writeFile(join(dir, 'src', 'new-helper.ts'), 'export const stray = 1;\n');
+            return { ok: true, diff: 'ignored', output: 'patched' };
+          },
+        }),
+      );
+
+      const result = await deps.techLeadRepairTests!({
+        task: sizedTask,
+        spec: 'spec',
+        qa: { kind: 'tests-written', testIds: ['src/x.test.ts'] },
+        rejection: { reason: 'missing negative assertion' },
+      });
+
+      expect(result).toMatchObject({
+        kind: 'repaired',
+        testIds: ['src/x.test.ts'],
+        redCheck: { kind: 'skipped' },
+      });
+      // Product source restored byte-for-byte; the stray helper is gone.
+      expect(await readFile(join(dir, 'src', 'prod.ts'), 'utf8')).toBe(
+        'export const original = true;\n',
+      );
+      expect(existsSync(join(dir, 'src', 'new-helper.ts'))).toBe(false);
+      // The test patch survives — QA's line plus the tech-lead's addition.
+      expect(await readFile(join(dir, 'src', 'x.test.ts'), 'utf8')).toBe(
+        'test("qa", () => {});\ntest("negative", () => {});\n',
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls the whole repair back on disk when it touched only product source', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'repair-rollback-'));
+    try {
+      const git = (args: string[]) => defaultRunGit(args, { cwd: dir });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'prod.ts'), 'export const original = true;\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+
+      const deps = buildProductionTeamTaskDeps(
+        {
+          sandbox: { ...makeSandbox(), worktree: dir },
+          productsConfigPath: '/nonexistent/products.json',
+          models: resolveTeamRoleModels(loadRealPolicy()),
+        },
+        makeSeams({
+          runGit: defaultRunGit,
+          runExecution: async () => {
+            await writeFile(join(dir, 'src', 'prod.ts'), 'export const hacked = true;\n');
+            return { ok: true, diff: 'ignored', output: 'patched' };
+          },
+        }),
+      );
+
+      const result = await deps.techLeadRepairTests!({
+        task: sizedTask,
+        spec: 'spec',
+        qa: { kind: 'tests-written', testIds: ['src/x.test.ts'] },
+        rejection: { reason: 'missing negative assertion' },
+      });
+
+      expect(result).toEqual({
+        kind: 'not-repaired',
+        reason: 'repair touched only non-test paths — reverted',
+      });
+      expect(await readFile(join(dir, 'src', 'prod.ts'), 'utf8')).toBe(
+        'export const original = true;\n',
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
