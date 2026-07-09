@@ -1911,8 +1911,9 @@ describe('server/webview', () => {
         ws.send(JSON.stringify({ kind: 'message', text: '  aura slow turn  ', product: 'aura' }));
         await auraStarted;
 
-        ws.send(JSON.stringify({ kind: 'message', text: '  rune should start immediately  ', product: 'rune' }));
+        ws.send(JSON.stringify({ kind: 'message', text: '  watt should start immediately  ', product: 'watt' }));
         await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2, 250);
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(2);
 
         expect(handleWebviewMessage).toHaveBeenNthCalledWith(
           1,
@@ -1925,8 +1926,8 @@ describe('server/webview', () => {
           2,
           expect.objectContaining({ name: 'webview' }),
           mockConfig.TELEGRAM_USER_ID,
-          'rune should start immediately',
-          { kind: 'product', product: 'rune' },
+          'watt should start immediately',
+          { kind: 'product', product: 'watt' },
         );
         expect(sessionKeyForScope).toHaveBeenCalledWith(
           mockConfig.TELEGRAM_USER_ID,
@@ -1936,7 +1937,7 @@ describe('server/webview', () => {
         expect(sessionKeyForScope).toHaveBeenCalledWith(
           mockConfig.TELEGRAM_USER_ID,
           'webview',
-          { kind: 'product', product: 'rune' },
+          { kind: 'product', product: 'watt' },
         );
       } finally {
         releaseAura?.();
@@ -1975,6 +1976,54 @@ describe('server/webview', () => {
           mockConfig.TELEGRAM_USER_ID,
           'second aura turn',
           { kind: 'product', product: 'aura' },
+        );
+      } finally {
+        releaseFirst?.();
+        ws.terminate();
+      }
+    });
+
+    it('keeps WS global chat turns serialized under the global webview session key', async () => {
+      const ws = await openWebSocket(port);
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseFirst = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  first global turn  ' }));
+        await firstStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  second global turn  ' }));
+        await delay(50);
+
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(1);
+
+        releaseFirst();
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2);
+
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'global' },
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'first global turn',
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'second global turn',
         );
       } finally {
         releaseFirst?.();
