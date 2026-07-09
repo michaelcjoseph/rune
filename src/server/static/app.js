@@ -119,6 +119,11 @@
       const inProductView = typeof document !== 'undefined'
         && document.body?.dataset?.view === 'product';
 
+      const scopedChatFrame = (frame.kind === 'message' || frame.kind === 'chunk' || frame.kind === 'status')
+        && typeof frame.product === 'string'
+        && frame.product.length > 0;
+      if (scopedChatFrame) return;
+
       if (frame.kind === 'message') {
         if (inProductView) return;
         // Reply arrived. If an op is still attached we leave the pill alone —

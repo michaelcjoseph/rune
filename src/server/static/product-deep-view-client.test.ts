@@ -414,6 +414,31 @@ const mcpMonitoringPayload = {
   },
 };
 
+function installFrameBusWindow() {
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
+  const previousWindow = (globalThis as any).window;
+  (globalThis as any).window = {
+    runeSendWebviewMessage: vi.fn(() => true),
+    addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+      const set = listeners.get(type) ?? new Set<(event: unknown) => void>();
+      set.add(listener);
+      listeners.set(type, set);
+    }),
+    removeEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+      listeners.get(type)?.delete(listener);
+    }),
+  };
+  return {
+    emit(type: string, detail: unknown) {
+      for (const listener of listeners.get(type) ?? []) listener({ detail });
+    },
+    restore() {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    },
+  };
+}
+
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   // Per-product chat/planning state is retained at module scope (so it survives
   // navigate-away-and-back). Clear it between tests so they stay isolated.
@@ -3408,6 +3433,99 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('routes scoped streamed product frames to their owning session and replays inactive buffers in arrival order', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const auraRoot = makeRoot();
+      const relayRoot = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView({ name: 'aura', activeRun: undefined });
+        if (url === '/api/products/relay') return productView({ name: 'relay', activeRun: undefined });
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const aura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await aura.load();
+      aura.close();
+
+      const relay = createProductDeepView({ root: relayRoot, product: 'relay', fetchJson });
+      await relay.load();
+
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'aura chunk one. ' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'relay', text: 'relay visible answer' });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'aura chunk two. ' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'aura final answer' });
+
+      expect(relayRoot.innerHTML).toContain('relay visible answer');
+      expect(relayRoot.innerHTML).not.toContain('aura chunk one');
+      expect(relayRoot.innerHTML).not.toContain('aura chunk two');
+      expect(relayRoot.innerHTML).not.toContain('aura final answer');
+
+      relay.close();
+      const auraAgain = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await auraAgain.load();
+
+      const html = auraRoot.innerHTML;
+      expect(html).toContain('aura chunk one');
+      expect(html).toContain('aura chunk two');
+      expect(html).toContain('aura final answer');
+      expect(html.indexOf('aura chunk one')).toBeLessThan(html.indexOf('aura chunk two'));
+      expect(html.indexOf('aura chunk two')).toBeLessThan(html.indexOf('aura final answer'));
+      auraAgain.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('keeps product chat status pills scoped and restores an inactive product pill on switch-back', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const auraRoot = makeRoot();
+      const relayRoot = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView({ name: 'aura', activeRun: undefined });
+        if (url === '/api/products/relay') return productView({ name: 'relay', activeRun: undefined });
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const relay = createProductDeepView({ root: relayRoot, product: 'relay', fetchJson });
+      await relay.load();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'status',
+        product: 'aura',
+        label: 'Aura is thinking',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-chat-1',
+        label: 'webview chat',
+        startedAt: '2026-07-09T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+
+      expect(relayRoot.innerHTML).not.toContain('Aura is thinking');
+      expect(relayRoot.innerHTML).not.toContain('op-aura-chat-1');
+      expect(relayRoot.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+
+      relay.close();
+      const aura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await aura.load();
+
+      expect(auraRoot.innerHTML).toContain('Aura is thinking');
+      expect(auraRoot.innerHTML).toContain('op-aura-chat-1');
+      expect(auraRoot.innerHTML).toMatch(/data-product-chat-op-status/i);
+      aura.close();
+    } finally {
+      bus.restore();
     }
   });
 

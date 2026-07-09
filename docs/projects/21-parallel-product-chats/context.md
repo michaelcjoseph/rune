@@ -37,5 +37,8 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Implemented a product-scoped WebSocket turn sender so product chat replies, streaming chunks, status frames, and approval sidecars are stamped through the scoped WebviewSender methods.
-- Validation passed: `npm run build`; `npm test` — 305 files passed, 5085 tests passed, 8 todo. No tests removed.
+- Implemented scoped product chat frame routing so product-scoped message, chunk, status, and chat op frames are stored against the owning product session and replayed in arrival order when switching back.
+- Updated the global app frame handler so product-scoped chat frames do not render into the Home/global transcript or status pill.
+- Added browser-local unread product chat cues to Home product cards through the Home render options.
+- Validation passed: `npm run build`; `npm test` — 306 files passed, 5089 tests passed, 8 todo.
+- No tests removed.
