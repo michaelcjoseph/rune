@@ -37,8 +37,7 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Implemented scoped product chat frame routing so product-scoped message, chunk, status, and chat op frames are stored against the owning product session and replayed in arrival order when switching back.
-- Updated the global app frame handler so product-scoped chat frames do not render into the Home/global transcript or status pill.
-- Added browser-local unread product chat cues to Home product cards through the Home render options.
-- Validation passed: `npm run build`; `npm test` — 306 files passed, 5089 tests passed, 8 todo.
-- No tests removed.
+- tech-lead repaired test intent: src/server/static/home-view-client.test.ts, src/server/static/product-deep-view-client.test.ts
+- Implemented browser-local product chat unread state shared by Home and product deep views. Home now derives product card unread cues from scoped message/chunk frames and clears them on product-viewed events. Product deep view now renders sibling product channel unread cues, marks background product frames unread, clears the active product on load, and supports switching via channel buttons.
+- Added visible unread cue styling in src/server/static/app.css and regression coverage in src/server/static/home-view-client.test.ts and src/server/static/product-deep-view-client.test.ts.
+- Validation passed: npm run build; npm test — 306 files passed, 5093 tests passed, 8 todo. No tests removed.

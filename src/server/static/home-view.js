@@ -116,6 +116,27 @@ function unreadProductSet(value) {
   return new Set();
 }
 
+const PRODUCT_CHAT_UNREAD_KEY = '__runeProductChatUnreadProducts';
+
+function browserUnreadProducts() {
+  if (typeof window === 'undefined') return new Set();
+  if (window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) return window[PRODUCT_CHAT_UNREAD_KEY];
+  const next = new Set(Array.isArray(window[PRODUCT_CHAT_UNREAD_KEY]) ? window[PRODUCT_CHAT_UNREAD_KEY] : []);
+  window[PRODUCT_CHAT_UNREAD_KEY] = next;
+  return next;
+}
+
+function productFromEvent(event) {
+  const product = event?.detail?.product;
+  return typeof product === 'string' && product ? product : '';
+}
+
+function isProductChatOutputFrame(frame) {
+  return (frame?.kind === 'message' || frame?.kind === 'chunk') &&
+    typeof frame.product === 'string' &&
+    frame.product.length > 0;
+}
+
 function renderProductCard(product, unreadProducts = new Set()) {
   const counts = product.counts || {};
   const warnings = counts.backlogWarnings || 0;
@@ -361,9 +382,10 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
   let currentPulse = null;
   let operations = null;
   let approvalErrors = {};
+  let unreadProducts = browserUnreadProducts();
 
   function render() {
-    root.innerHTML = renderHomeView(currentPulse, { operations });
+    root.innerHTML = renderHomeView(currentPulse, { operations, unreadProducts });
   }
 
   function approvalsWithErrors(approvals) {
@@ -436,8 +458,24 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     if (currentPulse) render();
   };
 
+  const onWebviewFrame = event => {
+    const frame = event?.detail;
+    if (!isProductChatOutputFrame(frame)) return;
+    unreadProducts.add(frame.product);
+    if (currentPulse) render();
+  };
+
+  const onProductChatViewed = event => {
+    const product = productFromEvent(event);
+    if (!product || !unreadProducts.has(product)) return;
+    unreadProducts.delete(product);
+    if (currentPulse) render();
+  };
+
   if (typeof window !== 'undefined') {
     window.addEventListener?.('rune-connection-status', onConnectionStatus);
+    window.addEventListener?.('rune-webview-frame', onWebviewFrame);
+    window.addEventListener?.('rune-product-chat-viewed', onProductChatViewed);
   }
 
   root.addEventListener?.('click', event => {
@@ -495,6 +533,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     },
     render(pulse, opts = {}) {
       currentPulse = pulse;
+      if ('unreadProducts' in opts) unreadProducts = unreadProductSet(opts.unreadProducts);
       operations = {
         ...(opts.operations || operations || {}),
         connectionStatus: opts.operations?.connectionStatus || operations?.connectionStatus || currentConnectionStatus(),
@@ -504,6 +543,8 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     close() {
       if (typeof window !== 'undefined') {
         window.removeEventListener?.('rune-connection-status', onConnectionStatus);
+        window.removeEventListener?.('rune-webview-frame', onWebviewFrame);
+        window.removeEventListener?.('rune-product-chat-viewed', onProductChatViewed);
       }
     },
   };

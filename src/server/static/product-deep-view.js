@@ -907,6 +907,58 @@ function isSpecArtifact(value) {
     typeof value.spec === 'string';
 }
 
+const PRODUCT_CHAT_UNREAD_KEY = '__runeProductChatUnreadProducts';
+
+function unreadProductSet(value) {
+  if (value instanceof Set) return value;
+  if (Array.isArray(value)) return new Set(value);
+  return new Set();
+}
+
+function browserUnreadProducts() {
+  if (typeof window === 'undefined') return new Set();
+  if (window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) return window[PRODUCT_CHAT_UNREAD_KEY];
+  const next = new Set(Array.isArray(window[PRODUCT_CHAT_UNREAD_KEY]) ? window[PRODUCT_CHAT_UNREAD_KEY] : []);
+  window[PRODUCT_CHAT_UNREAD_KEY] = next;
+  return next;
+}
+
+function isProductChatOutputFrame(frame) {
+  return (frame?.kind === 'message' || frame?.kind === 'chunk') &&
+    typeof frame.product === 'string' &&
+    frame.product.length > 0;
+}
+
+function productChannelName(channel) {
+  return typeof channel?.name === 'string' && channel.name
+    ? channel.name
+    : typeof channel?.product === 'string' && channel.product
+      ? channel.product
+      : typeof channel?.slug === 'string' && channel.slug
+        ? channel.slug
+        : '';
+}
+
+function renderProductChannels(view, unreadProducts = new Set()) {
+  const channels = list(view?.productChannels).filter(channel => productChannelName(channel));
+  if (channels.length === 0) return '';
+  const activeProduct = view?.name || '';
+  return `<nav class="product-channels" aria-label="Product chats">` +
+    channels.map(channel => {
+      const name = productChannelName(channel);
+      const label = channel?.label || name;
+      const active = name === activeProduct;
+      const unread = !active && unreadProducts.has(name);
+      return `<button type="button" data-product-channel="${attr(name)}" data-product="${attr(name)}" ` +
+        `class="product-channel${active ? ' product-channel--active' : ''}${unread ? ' product-channel--unread' : ''}" ` +
+        `aria-current="${active ? 'page' : 'false'}"${unread ? ' data-product-chat-unread="true"' : ''}>` +
+          `<span>${escHtml(label)}</span>` +
+          (unread ? '<span class="product-channel-unread-cue" data-product-chat-unread>New chat output</span>' : '') +
+      `</button>`;
+    }).join('') +
+  `</nav>`;
+}
+
 export function renderProductDeepView(view, options = {}) {
   const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
   const defaultSidePanel = view?.repoBacked === false ? 'runs' : 'operations';
@@ -917,6 +969,7 @@ export function renderProductDeepView(view, options = {}) {
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
+  const unreadProducts = unreadProductSet(options.unreadProducts);
   if (!view) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
@@ -938,6 +991,7 @@ export function renderProductDeepView(view, options = {}) {
     `<header class="deep-header">` +
       `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2>` +
         `${view.repoBacked === false ? '<span>limited - not repo-backed</span>' : ''}</div>` +
+      `${renderProductChannels(view, unreadProducts)}` +
       `<nav aria-label="Product surfaces">` +
         navSurfaces.map(surface =>
           `<button type="button" data-surface-jump="${attr(surface.id)}">${escHtml(surface.label)}</button>`
@@ -1114,6 +1168,9 @@ function getProductSession(product) {
 /** Test seam: clear all retained per-product chat/planning state. */
 export function __resetProductSessions() {
   productSessions.clear();
+  if (typeof window !== 'undefined' && window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) {
+    window[PRODUCT_CHAT_UNREAD_KEY].clear();
+  }
 }
 
 export function createProductDeepView({
@@ -1146,6 +1203,7 @@ export function createProductDeepView({
   let statusLabel = session.statusLabel || null;
   let opActivity = list(session.opActivity);
   let streamingMessageIndex = Number.isFinite(session.streamingMessageIndex) ? session.streamingMessageIndex : -1;
+  let unreadProducts = browserUnreadProducts();
   let opTicker = null;
   let monitoringPoller = null;
   let terminalReloadInFlight = false;
@@ -1250,6 +1308,7 @@ export function createProductDeepView({
       planning,
       activeOp: activeOp || (statusLabel ? { label: statusLabel } : null),
       monitoring,
+      unreadProducts,
     });
     restoreChatScroll(chatScroll, options);
     restoreChatInput(chatInput);
@@ -1504,6 +1563,20 @@ export function createProductDeepView({
     renderIfCurrent(targetProduct);
   }
 
+  function markProductUnread(targetProduct) {
+    if (!targetProduct || targetProduct === product || unreadProducts.has(targetProduct)) return false;
+    unreadProducts.add(targetProduct);
+    return true;
+  }
+
+  function announceProductViewed(targetProduct) {
+    if (!targetProduct) return;
+    unreadProducts.delete(targetProduct);
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    const EventCtor = typeof window.CustomEvent === 'function' ? window.CustomEvent : CustomEvent;
+    window.dispatchEvent(new EventCtor('rune-product-chat-viewed', { detail: { product: targetProduct } }));
+  }
+
   function restoreTemporarilyDisabledPlanActions() {
     current = clone(current);
     for (const kind of ['bugs', 'ideas']) {
@@ -1632,8 +1705,10 @@ export function createProductDeepView({
     const targetProduct = typeof frame.product === 'string' && frame.product
       ? frame.product
       : product;
+    const unreadChanged = isProductChatOutputFrame(frame) && markProductUnread(targetProduct);
     if (frame.kind === 'chunk') {
       appendOrUpdateStreamingForSession(targetProduct, frame.text || '');
+      if (unreadChanged && targetProduct !== product) render();
       return;
     }
     if (frame.kind === 'message') {
@@ -1641,6 +1716,7 @@ export function createProductDeepView({
       setStatusForSession(targetProduct, null);
       const targetSession = getProductSession(targetProduct);
       if (!targetSession.activeOp) renderIfCurrent(targetProduct);
+      if (unreadChanged && targetProduct !== product) render();
       return;
     }
     if (frame.kind === 'status') {
@@ -1799,6 +1875,14 @@ export function createProductDeepView({
       }
       root.querySelector?.(`[data-surface="${surface}"]`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
       if (surface === 'chat') focusChatInput();
+      return;
+    }
+
+    const productChannel = event.target?.closest?.('[data-product-channel]');
+    if (productChannel) {
+      event.preventDefault?.();
+      const nextProduct = productChannel.dataset?.product || productChannel.dataset?.productChannel;
+      if (nextProduct && nextProduct !== product) router?.goProduct?.(nextProduct);
       return;
     }
 
@@ -2027,6 +2111,7 @@ export function createProductDeepView({
       // mid-session must not yank the user off whatever tab they're reading.
       if (current?.activeRun?.runId) activeSidePanel = 'runs';
       render();
+      announceProductViewed(product);
       if (focusRunId) {
         activeSidePanel = 'runs';
         syncMonitoringPoll();
@@ -2046,6 +2131,7 @@ export function createProductDeepView({
       if (opts.chatMessages) chatMessages = opts.chatMessages;
       if ('activeOp' in opts) activeOp = opts.activeOp;
       if (opts.monitoring) monitoring = opts.monitoring;
+      if ('unreadProducts' in opts) unreadProducts = unreadProductSet(opts.unreadProducts);
       currentOperations = opts.operations || currentOperations;
       render();
       syncMonitoringPoll();

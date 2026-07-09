@@ -10,7 +10,7 @@
 - [x] **scoped-frame-contract** — Add `product?: string` (absent = global) to turn-scoped WS frames end to end: `message`, `status`, and any `chunk` frames emitted through the WS path. Do not alter the shared `MessageSender` interface.
 - [x] **scoped-sender** — At the WS inbound handler (`webview.ts:2517`), wrap `deps.webview` in a per-turn scoped sender that stamps `product` on `send`/`startTyping`/`stopTyping`; pass it to `handleWebviewMessage`. Broadcast stays all-sockets (cross-tab); scope rides on the frame. If a separate chunk emitter is introduced or discovered, stamp scope at that emission point too.
 - [x] **frontend-scope-routing-buffering** — Make the webview transcript, streaming state, and status pill per-scope (`src/server/static/app.js`, `product-deep-view.js`). Route each inbound frame by `frame.product`; `app.js` renders only global frames into the global transcript, and `product-deep-view.js` updates the matching product session even when another product is active. Buffer inactive scopes and render intact + in arrival order on switch-back.
-- [ ] **unread-activity-cue** — Maintain browser-local per-product unread/activity state. When a backgrounded scope produces output, raise a visual cue on the sibling product channel/switcher AND in the home view; clear it when the operator views that chat. No server-persisted unread API is introduced in this phase.
+- [x] **unread-activity-cue** — Maintain browser-local per-product unread/activity state. When a backgrounded scope produces output, raise a visual cue on the sibling product channel/switcher AND in the home view; clear it when the operator views that chat. No server-persisted unread API is introduced in this phase.
 
 ## Phase 2 — live activity indicator (separable polish)
 
