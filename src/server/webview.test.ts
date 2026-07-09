@@ -563,8 +563,17 @@ const mockWebviewSender = {
   register: vi.fn(),
   unregister: vi.fn(),
   send: vi.fn(async (_userId: number, _message: string, _opts?: { approval?: unknown }) => undefined),
+  sendScoped: vi.fn(async (
+    _userId: number,
+    _message: string,
+    _product?: string,
+    _opts?: { approval?: unknown },
+  ) => undefined),
   startTyping: vi.fn(),
+  startTypingScoped: vi.fn(),
   stopTyping: vi.fn(),
+  stopTypingScoped: vi.fn(),
+  sendChunk: vi.fn(),
   shutdown: vi.fn(),
 };
 
@@ -1976,6 +1985,62 @@ describe('server/webview', () => {
         firstTab.terminate();
         secondTab.terminate();
         await routeServer.close();
+      }
+    });
+
+    it('passes a product-scoped per-turn sender into WS product chat dispatch', async () => {
+      const ws = await openWebSocket(port);
+      const approvalOpts = {
+        approval: {
+          prompt: 'ok?',
+          options: [{ value: 'y', label: 'Yes' }],
+        },
+      };
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        const chunkSender = sender as typeof sender & { sendChunk(userId: number, text: string): void };
+        sender.startTyping(userId, 'Working aura');
+        chunkSender.sendChunk(userId, 'Aura chunk ');
+        await sender.send(userId, 'Aura final');
+        await sender.send(userId, 'Aura approval', approvalOpts);
+        sender.stopTyping(userId);
+      });
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  stream aura chunks  ', product: 'aura' }));
+        await waitForMockCallCount(mockWebviewSender.sendScoped, 2, 250);
+
+        expect(mockWebviewSender.startTypingScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Working aura',
+          'aura',
+        );
+        expect(mockWebviewSender.sendChunk).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura chunk ',
+          'aura',
+        );
+        expect(mockWebviewSender.sendScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura final',
+          'aura',
+          undefined,
+        );
+        expect(mockWebviewSender.sendScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura approval',
+          'aura',
+          approvalOpts,
+        );
+        expect(mockWebviewSender.stopTypingScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'aura',
+        );
+
+        expect(mockWebviewSender.startTyping).not.toHaveBeenCalled();
+        expect(mockWebviewSender.send).not.toHaveBeenCalled();
+        expect(mockWebviewSender.stopTyping).not.toHaveBeenCalled();
+      } finally {
+        ws.terminate();
       }
     });
 

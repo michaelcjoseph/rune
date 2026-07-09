@@ -2874,11 +2874,9 @@ export interface WebviewDeps {
   isReady: () => boolean;
 }
 
-type WebviewScopedSender = MessageSender & {
-  sendChunk(userId: number, text: string): void;
-};
+type WebviewScopedSender = MessageSender & Pick<WebviewSender, 'sendChunk'>;
 
-function senderForScope(sender: WebviewSender, scope?: SessionScope): MessageSender {
+function senderForScope(sender: WebviewSender, scope?: SessionScope): WebviewScopedSender {
   if (!scope || scope.kind === 'global') return sender;
   const { product } = scope;
   const scopedSender = {

@@ -37,10 +37,5 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Fixed QA helper typing so the suite builds.
-
-Validation passed:
-- `npm run build`
-- `npm test` — 305 files passed, 5084 tests passed, 8 todo
-
-No tests removed. Note: `src/server/webview.test.ts` was already staged before this task; it now has unstaged compile fixes on top of that staged QA change.
+- Implemented a product-scoped WebSocket turn sender so product chat replies, streaming chunks, status frames, and approval sidecars are stamped through the scoped WebviewSender methods.
+- Validation passed: `npm run build`; `npm test` — 305 files passed, 5085 tests passed, 8 todo. No tests removed.
