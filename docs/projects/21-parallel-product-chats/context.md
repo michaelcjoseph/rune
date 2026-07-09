@@ -37,10 +37,10 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Product chats can run concurrently while same-product and global turns remain serialized.
+- Fixed QA helper typing so the suite builds.
 
 Validation passed:
 - `npm run build`
-- `npm test` — 305 files passed, 5082 tests passed, 8 todo
+- `npm test` — 305 files passed, 5084 tests passed, 8 todo
 
-Current worktree has a staged test-only change in `src/server/webview.test.ts`; no unstaged diff. No tests removed.
+No tests removed. Note: `src/server/webview.test.ts` was already staged before this task; it now has unstaged compile fixes on top of that staged QA change.

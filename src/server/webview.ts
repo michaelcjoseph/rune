@@ -30,6 +30,7 @@ import { computeFixAction, withActions } from './backlog-actions.js';
 import { getSession, sessionKeyForScope, type SessionScope } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
+import type { MessageSender, SendOpts } from '../transport/sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
 import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
@@ -2873,6 +2874,23 @@ export interface WebviewDeps {
   isReady: () => boolean;
 }
 
+type WebviewScopedSender = MessageSender & {
+  sendChunk(userId: number, text: string): void;
+};
+
+function senderForScope(sender: WebviewSender, scope?: SessionScope): MessageSender {
+  if (!scope || scope.kind === 'global') return sender;
+  const { product } = scope;
+  const scopedSender = {
+    name: 'webview' as const,
+    send: (userId: number, text: string, opts?: SendOpts) => sender.sendScoped(userId, text, product, opts),
+    startTyping: (userId: number, label?: string) => sender.startTypingScoped(userId, label, product),
+    stopTyping: (userId: number) => sender.stopTypingScoped(userId, product),
+    sendChunk: (userId: number, text: string) => sender.sendChunk(userId, text, product),
+  } satisfies WebviewScopedSender;
+  return scopedSender;
+}
+
 /**
  * Attach webview routes to an existing HTTP server.
  * Returns a request handler for webview-specific paths; caller should invoke it
@@ -2938,11 +2956,12 @@ export function mountWebviewRoutes(
             const queueKey = sessionKeyForScope(userId, 'webview', scope ?? { kind: 'global' });
             // Chain dispatch promises to serialise inbound frames for this session scope.
             const prev = dispatchQueues.get(queueKey) ?? Promise.resolve();
+            const sender = senderForScope(deps.webview, scope ?? { kind: 'global' });
             const next = prev
               .then(() => (
                 scope
-                  ? handleWebviewMessage(deps.webview, userId, text, scope)
-                  : handleWebviewMessage(deps.webview, userId, text)
+                  ? handleWebviewMessage(sender, userId, text, scope)
+                  : handleWebviewMessage(sender, userId, text)
               ))
               .catch((err: unknown) => {
                 log.error('WS message dispatch error', { error: (err as Error).message });

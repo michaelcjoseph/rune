@@ -200,6 +200,7 @@ vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSu
 
 // Import after mocks are wired up
 const { mountWebviewRoutes } = await import('./webview.js');
+const { WebviewSender } = await import('../transport/webview-sender.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const sessionsForWebview = await import('../vault/sessions.js') as unknown as {
   getSession: ReturnType<typeof vi.fn>;
@@ -267,6 +268,60 @@ function openWebSocket(port: number): Promise<WebSocket> {
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
+}
+
+function collectJsonFrames(ws: WebSocket, count: number, timeoutMs = 1000): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const frames: any[] = [];
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for ${count} websocket frames; got ${frames.length}`));
+    }, timeoutMs);
+    const onMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
+      let raw: string;
+      if (Array.isArray(data)) raw = Buffer.concat(data).toString('utf8');
+      else if (Buffer.isBuffer(data)) raw = data.toString('utf8');
+      else raw = Buffer.from(new Uint8Array(data)).toString('utf8');
+      try {
+        frames.push(JSON.parse(raw));
+      } catch (err) {
+        cleanup();
+        reject(err);
+        return;
+      }
+      if (frames.length >= count) {
+        cleanup();
+        resolve(frames);
+      }
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off('message', onMessage);
+    };
+    ws.on('message', onMessage);
+  });
+}
+
+async function startWebviewRouteServer(
+  webview: InstanceType<typeof WebviewSender>,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  let handler!: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  const routeServer = http.createServer(async (req, res) => {
+    const handled = await handler(req, res);
+    if (!handled) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found (fallthrough)' }));
+    }
+  });
+  handler = mountWebviewRoutes(routeServer, { webview, isReady: () => true });
+  await new Promise<void>((resolve) => routeServer.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (routeServer.address() as any).port,
+    close: async () => {
+      webview.shutdown();
+      await new Promise<void>((resolve) => routeServer.close(() => resolve()));
+    },
+  };
 }
 
 async function getReleasedLocalPort(): Promise<number> {
@@ -1891,6 +1946,65 @@ describe('server/webview', () => {
         );
       } finally {
         ws.terminate();
+      }
+    });
+
+    it('stamps product scope onto turn-scoped status and message frames broadcast through the WS path', async () => {
+      const liveSender = new WebviewSender();
+      const routeServer = await startWebviewRouteServer(liveSender);
+      const firstTab = await openWebSocket(routeServer.port);
+      const secondTab = await openWebSocket(routeServer.port);
+      const firstFrames = collectJsonFrames(firstTab, 3);
+      const secondFrames = collectJsonFrames(secondTab, 3);
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        sender.startTyping(userId, 'Working aura');
+        await sender.send(userId, 'Aura scoped answer');
+        sender.stopTyping(userId);
+      });
+
+      try {
+        firstTab.send(JSON.stringify({ kind: 'message', text: '  stream aura  ', product: 'aura' }));
+
+        const expectedFrames = [
+          { kind: 'status', label: 'Working aura', product: 'aura' },
+          { kind: 'message', text: 'Aura scoped answer', product: 'aura' },
+          { kind: 'status', label: null, product: 'aura' },
+        ];
+        await expect(firstFrames).resolves.toEqual(expectedFrames);
+        await expect(secondFrames).resolves.toEqual(expectedFrames);
+      } finally {
+        firstTab.terminate();
+        secondTab.terminate();
+        await routeServer.close();
+      }
+    });
+
+    it('leaves turn-scoped WS status and message frames unscoped for the global chat', async () => {
+      const liveSender = new WebviewSender();
+      const routeServer = await startWebviewRouteServer(liveSender);
+      const ws = await openWebSocket(routeServer.port);
+      const framesPromise = collectJsonFrames(ws, 3);
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        sender.startTyping(userId, 'Asking Claude');
+        await sender.send(userId, 'Global answer');
+        sender.stopTyping(userId);
+      });
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  global question  ' }));
+
+        const frames = await framesPromise;
+        expect(frames).toEqual([
+          { kind: 'status', label: 'Asking Claude' },
+          { kind: 'message', text: 'Global answer' },
+          { kind: 'status', label: null },
+        ]);
+        for (const frame of frames) {
+          expect(frame).not.toHaveProperty('product');
+        }
+      } finally {
+        ws.terminate();
+        await routeServer.close();
       }
     });
 
