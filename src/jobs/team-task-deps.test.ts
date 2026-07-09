@@ -1791,6 +1791,104 @@ describe('techLeadRepairTests (production seam)', () => {
     ]);
   });
 
+  it('never treats QA-touched product source as an allowed repair path (codex review finding)', async () => {
+    // QA strayed into product source during test-writing, so its diff paths —
+    // and therefore qa.testIds — include src/prod.ts. That must NOT license
+    // the tech-lead repair to edit the same source file.
+    const strayQa = {
+      kind: 'tests-written' as const,
+      testIds: ['src/x.test.ts', 'src/prod.ts'],
+    };
+    const git = makeRepairGitFake({
+      delta: [
+        { status: 'M', path: 'src/x.test.ts' },
+        { status: 'M', path: 'src/prod.ts' },
+      ],
+      diffHead: '+++ b/src/x.test.ts\n+patched\n',
+    });
+    const deps = buildRepairDeps(
+      { runGit: git.runGit, runRepairValidation: redValidation },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: strayQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({ kind: 'repaired' });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/prod.ts',
+    ]);
+    expect(git.calls).not.toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/x.test.ts',
+    ]);
+  });
+
+  it('rolls back a QA-stray-path-only repair even when qa.testIds lists that path', async () => {
+    const strayQa = {
+      kind: 'tests-written' as const,
+      testIds: ['src/x.test.ts', 'src/prod.ts'],
+    };
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/prod.ts' }],
+    });
+    const deps = buildRepairDeps(
+      { runGit: git.runGit, runRepairValidation: redValidation },
+      ['npm test'],
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: strayQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toEqual({
+      kind: 'not-repaired',
+      reason: 'repair touched only non-test paths — reverted',
+    });
+    expect(git.calls).toContainEqual([
+      'restore', '--source', 'tree-pre', '--staged', '--worktree', '--', 'src/prod.ts',
+    ]);
+  });
+
+  it('advertises only guard-editable test files in the repair prompt', async () => {
+    const strayQa = {
+      kind: 'tests-written' as const,
+      testIds: ['src/x.test.ts', 'src/prod.ts'],
+    };
+    let repairPrompt = '';
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+    });
+    const deps = buildRepairDeps(
+      {
+        runGit: git.runGit,
+        runExecution: async (opts) => {
+          repairPrompt = opts.prompt;
+          return { ok: true, diff: 'ignored', output: 'patched' };
+        },
+        runRepairValidation: redValidation,
+      },
+      ['npm test'],
+    );
+
+    await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: strayQa,
+      rejection: repairRejection,
+    });
+
+    const testFilesSection = /## QA test files\n\n([^#]*)/.exec(repairPrompt)?.[1] ?? '';
+    expect(testFilesSection).toContain('src/x.test.ts');
+    expect(testFilesSection).not.toContain('src/prod.ts');
+  });
+
   it('returns not-repaired when the executor made no changes', async () => {
     const git = makeRepairGitFake({ preTree: 'tree-same', postTree: 'tree-same' });
     const deps = buildRepairDeps(

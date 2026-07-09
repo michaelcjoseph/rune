@@ -799,10 +799,13 @@ function parseNameStatusZ(stdout: string): Array<{ status: string; path: string 
   return entries;
 }
 
-/** The repair guard's allowlist: test files, plus paths QA itself created
- *  (covers QA-authored fixtures/helpers that aren't `*.test.ts`). */
-function isAllowedRepairPath(path: string, qaTestIds: readonly string[]): boolean {
-  return /\.test\.tsx?$/.test(path) || qaTestIds.includes(path);
+/** The repair guard's allowlist: test files ONLY. Deliberately NOT widened to
+ *  QA's diff paths (`qa.testIds`) — those are every path QA touched, so a QA
+ *  stray into product source would silently license the tech-lead to edit the
+ *  same source (codex review finding, 2026-07-08). A repair that needs a
+ *  non-test-file change is structural by definition — that's the QA bounce. */
+function isAllowedRepairPath(path: string): boolean {
+  return /\.test\.tsx?$/.test(path);
 }
 
 /** A compact handoff note from the executor's textual output — the tail only,
@@ -1105,13 +1108,16 @@ export function buildProductionTeamTaskDeps(
           return notRepaired('pre-repair snapshot produced no tree');
         }
 
-        // 2. The tech-lead patches the tests in the worktree.
+        // 2. The tech-lead patches the tests in the worktree. Point it only
+        //    at paths the guard will accept — a QA stray (e.g. product source
+        //    in QA's diff) must not be advertised as an editable test file.
+        const editableTestFiles = qa.testIds.filter((path) => isAllowedRepairPath(path));
         const body = [
           `## Task\n\n${task.text}`,
           '',
           `## Spec\n\n${spec}`,
           '',
-          `## QA test files\n\n${qa.testIds.join('\n')}`,
+          `## QA test files\n\n${editableTestFiles.join('\n')}`,
           '',
           `## Your rejection\n\n${rejection.reason}`,
           ...(rejection.suggestedChange !== undefined
@@ -1149,10 +1155,10 @@ export function buildProductionTeamTaskDeps(
 
         // 4. Path guard: revert anything outside the test allowlist.
         const violations = delta.filter(
-          (entry) => !isAllowedRepairPath(entry.path, qa.testIds),
+          (entry) => !isAllowedRepairPath(entry.path),
         );
         const surviving = delta.filter(
-          (entry) => isAllowedRepairPath(entry.path, qa.testIds),
+          (entry) => isAllowedRepairPath(entry.path),
         );
         if (violations.length > 0) {
           await revertEntries(preTree, violations);
