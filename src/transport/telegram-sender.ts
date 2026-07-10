@@ -210,6 +210,29 @@ function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
   return parts.length > 1 ? parts.join(' · ') : null;
 }
 
+/** Terminal message for a `writing` mutation (/blog, /writing-critique). The
+ *  generic fallback would render "✅ /work --auto … finished" — wrong surface
+ *  language for a writing run. Failure reasons arrive pre-scrubbed (the
+ *  applier runs scrubAbsolutePaths before yielding the terminal). */
+function formatWritingTerminal(event: BusMutationEvent): string {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const command = data['command'] === 'writing-critique' ? '/writing-critique' : '/blog';
+  const topic = String(data['topic'] ?? data['critiqueTarget'] ?? data['slug'] ?? shortMutationId(event.mutationId));
+  if (event.subKind === 'completed') {
+    const branch = String(data['branch'] ?? '');
+    const sha = typeof data['commitSha'] === 'string' ? data['commitSha'].slice(0, 7) : '';
+    const where = [branch, sha].filter(Boolean).join(' @ ');
+    const surface = command === '/writing-critique'
+      ? String(data['outputPath'] ?? '')
+      : String(data['routePath'] ?? '');
+    const parts = [`✍️ ${command} "${topic}" committed`];
+    if (where) parts.push(where);
+    if (surface) parts.push(surface);
+    return parts.join(' · ');
+  }
+  return `💥 writing run "${topic}" failed: ${String(data['reason'] ?? 'unknown')}`;
+}
+
 /** Legacy generic format for non-gen-eval-loop mutations — unchanged behavior. */
 function formatGenericTerminal(event: BusMutationEvent): string {
   const data = event.data as Record<string, unknown> | undefined;
@@ -330,6 +353,8 @@ export class TelegramSender implements MessageSender {
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
     const text = event.mutationKind === 'gen-eval-loop'
       ? formatGenEvalLoopTerminal(event)
+      : event.mutationKind === 'writing'
+      ? formatWritingTerminal(event)
       // `orchestrated-work` and `work-run-release` terminals carry the same
       // outcome payload as work-run, so render them through the outcome-aware
       // formatter rather than the generic "/work --auto on <uuid>" fallback.

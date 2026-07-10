@@ -47,14 +47,13 @@ async function requireWritingOrchestration(): Promise<{
   planWritingProductRun: (input: { topic: string }) => WritingRunPlan;
   startWritingProductRun: (
     input:
-      | { command: 'blog'; chatId: number; topic: string; sender: unknown }
+      | { command: 'blog'; chatId: number; topic: string }
       | {
         command: 'writing-critique';
         chatId: number;
         target: string;
         outputPath: string;
         revisionRequested?: boolean;
-        sender: unknown;
       },
     deps: WritingStartDeps,
   ) => Promise<StartedWritingRun>;
@@ -67,14 +66,13 @@ async function requireWritingOrchestration(): Promise<{
         planWritingProductRun: mod.planWritingProductRun as (input: { topic: string }) => WritingRunPlan,
         startWritingProductRun: mod.startWritingProductRun as (
           input:
-            | { command: 'blog'; chatId: number; topic: string; sender: unknown }
+            | { command: 'blog'; chatId: number; topic: string }
             | {
               command: 'writing-critique';
               chatId: number;
               target: string;
               outputPath: string;
               revisionRequested?: boolean;
-              sender: unknown;
             },
           deps: WritingStartDeps,
         ) => Promise<StartedWritingRun>,
@@ -238,7 +236,6 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       command: 'blog',
       chatId: 100,
       topic: 'Operating from memory',
-      sender: {},
     }, deps);
 
     expect(deps.createWritingWorktree).toHaveBeenCalledOnce();
@@ -274,7 +271,6 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       command: 'blog',
       chatId: 100,
       topic: 'Operating from memory',
-      sender: {},
     }, deps);
 
     expect(deps.createWritingWorktree).toHaveBeenCalledWith(expect.objectContaining({
@@ -300,7 +296,6 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       command: 'blog',
       chatId: 100,
       topic: 'Operating from memory',
-      sender: {},
     }, deps);
 
     expect(deps.runWritingPipeline).toHaveBeenCalledWith(expect.objectContaining({
@@ -329,7 +324,6 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       target: 'docs/rune/Operating From Memory.md',
       outputPath: 'docs/rune/critiques/operating-from-memory.md',
       revisionRequested: true,
-      sender: {},
     }, deps);
 
     expect(deps.createWritingWorktree).toHaveBeenCalledWith(expect.objectContaining({

@@ -232,7 +232,7 @@ function outcomeFromMutationEvent(event: MutationEvent): BusRunOutcome | undefin
 }
 
 function publishDerivedRunEvent(descriptor: MutationDescriptor, event: MutationEvent): void {
-  if (descriptor.kind !== 'work-run' && descriptor.kind !== 'orchestrated-work') return;
+  if (descriptor.kind !== 'work-run' && descriptor.kind !== 'orchestrated-work' && descriptor.kind !== 'writing') return;
   const bus = _bus ?? noopBus;
   const base = runEventBase(descriptor, event.ts);
 
@@ -283,6 +283,11 @@ export type MutationKind =
   // Control mutation for answering a parked AskUserQuestion and resuming the
   // original parked worktree. Payload: `{ runId, optionId }`.
   | 'work-run-answer'
+  // Writing-engine run (/blog, /writing-critique): auto-approved user-command
+  // mutation whose applier drives the writing pipeline against the `writing`
+  // product's repo on a rune-writing/{slug} branch. Payload:
+  // `WritingRunPayload` (src/jobs/writing-run-runner.ts).
+  | 'writing'
   | 'gen-eval-loop'
   | 'project-edit'
   | 'proposal-action'

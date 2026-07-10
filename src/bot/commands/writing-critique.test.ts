@@ -75,7 +75,6 @@ describe('handleWritingCritique', () => {
       target: 'draft about memory',
       outputPath: 'docs/rune/critiques/draft-about-memory.md',
       revisionRequested: false,
-      sender,
     });
     expect(sender.send).not.toHaveBeenCalled();
   });
@@ -93,7 +92,6 @@ describe('handleWritingCritique', () => {
       target: 'docs/rune/Operating From Memory.md',
       outputPath: 'docs/rune/critiques/operating-from-memory.md',
       revisionRequested: false,
-      sender,
     });
   });
 
@@ -110,7 +108,6 @@ describe('handleWritingCritique', () => {
       target: 'docs/rune/Operating From Memory.md',
       outputPath: 'docs/rune/critiques/operating-from-memory.md',
       revisionRequested: true,
-      sender,
     });
   });
 });

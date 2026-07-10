@@ -46,6 +46,5 @@ export async function handleWritingCritique(
     target,
     outputPath,
     revisionRequested,
-    sender,
   });
 }

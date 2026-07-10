@@ -2178,6 +2178,7 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
 const KNOWN_MUTATION_KINDS: ReadonlySet<MutationKind> = new Set([
   'work-run',
   'orchestrated-work',
+  'writing',
   'gen-eval-loop',
   'project-edit',
   'proposal-action',

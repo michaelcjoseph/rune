@@ -16,6 +16,5 @@ export async function handleBlog(sender: MessageSender, userId: number, args: st
     command: 'blog',
     chatId: userId,
     topic,
-    sender,
   });
 }

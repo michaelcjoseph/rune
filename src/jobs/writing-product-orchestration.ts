@@ -78,7 +78,6 @@ export type StartWritingProductRunInput =
     command: 'blog';
     chatId: number;
     topic: string;
-    sender: unknown;
   }
   | {
     command: 'writing-critique';
@@ -86,7 +85,6 @@ export type StartWritingProductRunInput =
     target: string;
     outputPath: string;
     revisionRequested?: boolean;
-    sender: unknown;
   };
 
 export interface StartWritingProductRunDeps {

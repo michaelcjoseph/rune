@@ -67,7 +67,6 @@ describe('handleBlog', () => {
       command: 'blog',
       chatId: CHAT_ID,
       topic: 'why testing matters',
-      sender,
     });
     expect(mockStartReview).not.toHaveBeenCalled();
     expect(sender.send).not.toHaveBeenCalled();
