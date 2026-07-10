@@ -1,6 +1,86 @@
 ## Active
 
-(empty)
+- [ ] Update default chat model to be gpt-5.6-terra and reflect it as a clickable button option in the chat box
+- [ ] Gate/closeout validation timeouts capture no diagnostic for a pre-collection vitest wedge — the failure is invisible. **(surfaced by orchestrated run `f77bed15` on product `rune`, project `22-fix-run-dispatch`, 2026-07-10; the run burned its 10-min closeout budget and was SIGTERM-killed with zero actionable output, so the actual cause of the hang is unrecoverable from the logs)**
+
+  - **Severity:** Medium (the hang it hides is High: every rune-on-rune closeout dead-ends `dirty-uncommitted`, no work lands — but this entry is specifically about the *diagnostic blind spot*, not the hang itself).
+
+  - **Repro / evidence**
+    - Run `f77bed15` closeout ran `npm test` (`vitest run`) in the sandbox worktree, bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS = 600_000` (`src/config.ts:371`).
+    - `rune.log:55515`: `closeout validation command failed … "exitCode":143,"timedOut":true,"outputTail":"\n> rune@1.0.0 test\n> vitest run\n\n"`.
+    - The captured tail is *only* the npm banner — no `RUN v4.1.5` header. Vitest wedged during vite startup / dep-optimize, **before test collection**, and produced zero bytes for the full 10 minutes.
+    - Confirmed this session by reproduction: an isolated `vitest run` (main repo, symlinked worktree, and 3 concurrent cold-cache worktrees all sharing one `node_modules/.vite`) starts in <1s and streams output. The wedge only manifested in the real multi-agent run and is not reproducible in isolation, so **the captured artifact is the only forensic surface — and it captured nothing useful.**
+
+  - **Root cause (the blind spot, not the wedge)**
+    - `outputTail` is a **keep-the-end** rolling capture, capped at `MAX_VALIDATION_OUTPUT_TAIL_CHARS = 20_000` (`src/jobs/work-run-gate-runtime.ts:83`) / `CLOSEOUT_LOG_TAIL_CHARS = 2_000` (`src/jobs/orchestrated-work-runner.ts:898`). For a *pre-banner* wedge there is no end to keep — the tail is the ~30-char npm banner and nothing else.
+    - The `hanging-process` reporter in `vitest.config.ts` (added specifically for "the intermittent vitest hang") only fires *after* a run finishes but fails to exit — a wedge that never reaches test collection never triggers it.
+    - On timeout, `defaultRunValidationCommand` sends `SIGTERM` then `SIGKILL` (`src/jobs/work-run-gate-runtime.ts:189-194`). Neither signal makes Node emit a stack, so the wedged process dies without saying where it was stuck.
+
+  - **Fix shape** (direction — confirm signal mechanics before implementing)
+    - Before the SIGTERM/SIGKILL reap, capture *why* the child is stuck. Node does **not** dump JS stacks on `SIGQUIT`; the right tool is Node's diagnostic report: run the validation child with `NODE_OPTIONS=--report-on-signal --report-signal=SIGUSR2 --report-directory=<runDir>` and send `SIGUSR2` to the process group first. The report includes the JS stack + libuv open handles, which for a vite/esbuild optimize wedge points straight at the stuck call.
+    - Also persist a **head** capture (first N bytes), not only a keep-the-end tail — a startup wedge is diagnosed by the beginning of output, not the end.
+    - Consider a much shorter default budget for the per-task closeout (see #3 below) so a wedge fails fast with a report instead of after 10 idle minutes.
+
+  - **Acceptance**
+    - A validation command that wedges before emitting output leaves a durable artifact in the run dir that identifies where it was stuck (Node diagnostic report or equivalent), not just an empty tail.
+    - A test drives a validation child that hangs at startup and asserts the timeout path writes the diagnostic before reaping.
+- [ ] Work-run worktrees symlink `node_modules`, so vitest's cache / dep-optimize writes land in the shared tree — denied inside the sandbox, coupled across concurrent runs. **(surfaced by orchestrated run `f77bed15` on `rune` / `22-fix-run-dispatch`, 2026-07-10; both the QA and coder agents hit it and had to hand-roll a task-local vitest config to run any tests)**
+
+  - **Severity:** Medium (forces every sandboxed agent to work around it; couples all concurrent runs' vite caches; a contributing factor — not proven the sole cause — of the closeout hang in the linked High-impact failure).
+
+  - **Repro / evidence**
+    - `provisionWorktreeNodeModules` symlinks the product repo's `node_modules` into each fresh worktree — `symlinkSync(src, dest, 'dir')` (`src/jobs/sandbox-runtime.ts:339-343`) — to avoid a per-run `npm ci`.
+    - Vitest/Vite writes its transient config bundle + dep-optimize cache to `node_modules/.vite`, which resolves through that symlink back to the **shared** repo `node_modules` (read-only inside `sandbox-exec`).
+    - Run `f77bed15` transcript: QA @ 18:37 — "the focused suite is blocked by the shared, read-only `node_modules` symlink: Vitest cannot create its transient config bundle … using a task-local Vitest config under `/private/tmp`." Coder @ 18:42 — "a validation retry hit a sandbox write error in Vitest's cache directory under the shared `node_modules` symlink."
+    - Every agent that runs vitest inside the sandbox pays this tax and must invent its own `/tmp` cache/config workaround; the non-sandboxed closeout gate has no such escape hatch.
+
+  - **Root cause**
+    - Vite's `cacheDir` defaults to `node_modules/.vite`; `vitest.config.ts` sets no override. With `node_modules` symlinked to a shared, sandbox-read-only tree, the cache write is denied for sandboxed callers and shared (coupled) for non-sandboxed ones.
+
+  - **Fix shape**
+    - Give each run an isolated, writable vite cache off the symlinked `node_modules`. Make it env-overridable in config: `cacheDir: process.env.RUNE_VITEST_CACHE_DIR ?? 'node_modules/.vite'` in `vitest.config.ts`, and have the sandbox/gate set `RUNE_VITEST_CACHE_DIR` to a per-run writable dir (worktree-local, outside the symlink, or `/tmp/<runId>`).
+    - This removes the sandbox write-denial for agents and decouples concurrent runs' caches, and it lets agents drop their bespoke `/tmp` workarounds.
+
+  - **Things to watch**
+    - This is **not** confirmed as the cause of the closeout *hang* — this session's reproductions showed a non-sandboxed `vitest run` against a symlinked `node_modules` starts fine. It is a confirmed, independent friction (sandboxed agents cannot run vitest without a workaround) that is worth fixing on its own and removes one variable from the hang investigation.
+    - If a per-run cacheDir is used, ensure it is cleaned up (or lives under the GC'd run dir) so `/tmp` doesn't accumulate stale optimize bundles.
+
+  - **Acceptance**
+    - A sandboxed agent can run `vitest run` in its worktree without a write-denial and without a hand-rolled `/tmp` config.
+    - Two concurrent runs do not share a vite cache dir.
+- [ ] Per-task closeout gate runs the whole repo suite (with a 10-min budget) instead of the task's affected suite — N× cost, and it eats the vite wedge once per task. **(related to the `f77bed15` / `22-fix-run-dispatch` hang, 2026-07-10; a blast-radius + speed fix, explicitly NOT a cure for the wedge itself — see the two Active entries above)**
+
+  - **Severity:** Medium (performance / blast-radius; not a correctness bug — nothing incorrect lands, it's slow and it amplifies the hang's exposure).
+
+  - **Context — two gates, both currently full-suite**
+    - **Per-task closeout** (`src/jobs/orchestrated-work-runner.ts:621` `runCloseoutChecks`) runs after every task in the task's sandbox worktree. Today it reuses the product's `validationCommands` verbatim — its own comment: "for v1 these are the same fast checks the finalizer gate uses."
+    - **Final merge gate** (`src/jobs/work-run-gate-runtime.ts` `runGate`) runs `validationCommands` in a throwaway integration worktree (base branch + dry-merge of the feature branch) right before the finalizer merges to `main` — the "test before mutating main" invariant.
+    - For `rune`, `validationCommands` is `npm test` (the whole repo suite), which is not a fast check. So an N-task project runs the full suite N+1 times, and every per-task run is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS = 600_000` (`src/config.ts:371`) — a wedge idles the full 10 minutes per task before failing.
+
+  - **Fix shape**
+    - Scope the per-task closeout to the task's **affected** tests. Cleanest signal: the per-task test files the test-plan already pins; fallback is `vitest related` / `--changed`.
+    - Give the per-task closeout its **own, short** budget (e.g. 60–120s) so a startup wedge fails fast with captured output instead of after 10 idle minutes. This likely means splitting the per-task and finalizer gates' timeout/command config, which currently share `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` + `validationCommands`.
+    - Keep the **whole suite** at the final merge gate (`runGate`) — it already runs there, once, before `main`. Nothing reaches `main` without a full green run.
+
+  - **Tradeoff (accepted)**
+    - Scoping per-task loses early detection of a cross-cutting regression *between* tasks (task 3 breaks a test task 7's scoped suite doesn't cover). The final merge gate catches it before `main`, so nothing bad lands — you just learn about it at merge instead of at the offending task.
+
+  - **Do not mistake this for a hang fix**
+    - The final full-suite merge gate would hit the same vite wedge. #3 reduces how often the wedge is triggered and how long each occurrence idles; curing the wedge still needs the diagnostic (entry #1 above) + isolated cache (entry #2 above) + root-cause work.
+
+  - **Acceptance**
+    - Per-task closeout runs a task-scoped command bounded by a short budget; the full suite still runs at the merge gate before `main`.
+    - A per-task closeout that wedges at startup fails in seconds with captured output, not after 10 idle minutes.
+- [ ] **Orchestrated coder can't reach pkms: rune-kb MCP not registered in the coder's child-sandbox context, so MCP-only tasks fail on a missing deliverable.**
+  - **Symptom.** The orchestrated run for product `writing`/`brand` (michaelcjoseph.com, project 01) failed on task `voice-guidelines-copy` (run `b03af189`). Round cap reached with unresolved task feedback. Empty diff. The deliverable (copied voice guidelines under `docs/rune/`) was absent from both the diff and the branch tree-state.
+  - **Root cause.** The task's only sanctioned source is pkms `writing/voice.md`, and the project spec hard-gates pkms access to MCP only. The rune-kb MCP tools were not registered in the orchestrated coder's context, so that path was unreachable. The raw pkms/rune-kb daemon on `127.0.0.1:3848` was sandbox-blocked (correctly). Both doors to pkms were shut, leaving no valid way to produce the deliverable.
+  - **Not a coder-logic failure.** The coder behaved correctly. It refused direct pkms file access (privacy gate), refused to stub or fabricate the guidelines (the stub-that-passes failure this project exists to prevent), left the `tasks.md` box unticked, and did not force the sandbox-blocked daemon. The orchestration correctly failed on a genuinely-incomplete deliverable instead of merging a fake one.
+  - **Why retry won't help.** The blocker is environmental. Re-running the same coder in the same sandbox reproduces the same unreachable-MCP state. The fix belongs to dispatch and child-sandbox configuration, not the coder.
+  - **Fix.** Register the rune-kb MCP server in the orchestrated coder's child-sandbox context for runs scoped to `writing`/`brand`. Wire it through the same dispatch surface that injects per-product credentials (`src/jobs/credential-injector.ts` and `policies/products.json`), so the writing run inherits the rune-kb MCP tools alongside its scoped credentials, and Rune's own secrets stay out of the child. Confirm the sandbox egress policy permits the MCP transport to `127.0.0.1:3848` through the sanctioned tool path, not a raw socket.
+  - **Fail fast.** Add a dispatch-level precondition that a run whose tasks require pkms-via-MCP verifies rune-kb is registered before dispatching the coder. Fail with a clear `rune-kb MCP not registered` error instead of burning the full round cap on an empty diff.
+  - **Blast radius.** Any orchestrated task whose only sanctioned data path is pkms-via-MCP hits this, not just `voice-guidelines-copy`. `writing-ideas-migration` (Phase B) has the same dependency and will fail the same way. Phase B cannot complete until this lands.
+  - **Verification.** Re-run project 01 (product `writing`/`brand`). `voice-guidelines-copy` should fetch `writing/voice.md` through rune-kb MCP, write the copied guidelines under `docs/rune/`, produce a non-empty diff, and reach a terminal committed state. Confirm no direct pkms file reads occurred (MCP-only path held).
+  - **Related, but distinct.** Separate from the context-curator missing-section no-op (project 01 `context.md`, resolved 2026-07-10). Separate from the command→pipeline seam bug (`/blog` and `/writing-critique` omit `deps`). This is a third, independent blocker on the same product line.
 
 ## Loop-filed
 
