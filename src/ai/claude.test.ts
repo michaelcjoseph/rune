@@ -210,6 +210,27 @@ describe('ai/claude', () => {
       const result = await askClaudeOneShot('test');
       expect(result.error).toBe('ENOENT');
     });
+
+    it('carries opts.systemPrompt via --append-system-prompt and opts.model over ONESHOT_MODEL', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test', undefined, undefined, false, {
+        systemPrompt: 'WRITER SOUL',
+        model: 'sonnet',
+      });
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args[args.indexOf('--append-system-prompt') + 1]).toBe('WRITER SOUL');
+      expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    });
+
+    it('with voice enabled, opts.systemPrompt still leads the composed system prompt (same order as askClaudeSession)', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test', undefined, undefined, true, { systemPrompt: 'WRITER SOUL' });
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const composed = args[args.indexOf('--append-system-prompt') + 1]!;
+      // Voice block presence depends on the vault fixture; the pin is that the
+      // SOUL keeps system-prompt primacy either way.
+      expect(composed.startsWith('WRITER SOUL')).toBe(true);
+    });
   });
 
   describe('askClaude (session)', () => {

@@ -653,20 +653,33 @@ export async function askClaudeWithContext(
   );
 }
 
+/** Trailing options for `askClaudeOneShot` — additive so existing positional
+ *  call sites are untouched. */
+export interface AskClaudeOneShotOpts {
+  /** Appended via `--append-system-prompt` (system-prompt authority — the
+   *  writer SOUL rides here), composed BEFORE the voice block like
+   *  `askClaudeSession`. */
+  systemPrompt?: string;
+  /** Override `config.ONESHOT_MODEL`. */
+  model?: string;
+}
+
 /** One-shot query with no session persistence. Pass `opLabel` to surface as a
  *  cancellable in-flight op; omit for background callers (nightly, cron,
  *  meeting/book extraction) so they don't spam tracker messages. Pass
  *  `voice: true` for callers that produce prose the user reads. */
-export async function askClaudeOneShot(message: string, timeoutMs?: number, opLabel?: string, voice?: boolean): Promise<ClaudeResult> {
+export async function askClaudeOneShot(message: string, timeoutMs?: number, opLabel?: string, voice?: boolean, opts: AskClaudeOneShotOpts = {}): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
-  const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
-  // Voice goes via --append-system-prompt (same channel as askClaudeSession), not
-  // the -p user payload, so it carries system-prompt authority and stays out of
-  // the args.slice(0, 3) error-log window.
-  if (voice) {
-    const voiceBlock = buildVoicePromptSection();
-    if (voiceBlock) args.push('--append-system-prompt', voiceBlock);
-  }
+  const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', opts.model ?? config.ONESHOT_MODEL];
+  // System prompt + voice go via --append-system-prompt (same channel and same
+  // composition order as askClaudeSession), not the -p user payload, so they
+  // carry system-prompt authority and stay out of the args.slice(0, 3)
+  // error-log window.
+  const voiceBlock = voice ? buildVoicePromptSection() : '';
+  const composedSystemPrompt = voiceBlock
+    ? (opts.systemPrompt ? `${opts.systemPrompt}\n\n${voiceBlock}` : voiceBlock)
+    : opts.systemPrompt;
+  if (composedSystemPrompt) args.push('--append-system-prompt', composedSystemPrompt);
   const opMeta: OpMeta | undefined = opLabel ? { kind: 'one-shot', label: opLabel } : undefined;
   return execClaude(args, timeoutMs, opMeta);
 }
