@@ -798,17 +798,21 @@ function renderChatMessages(messages) {
 }
 
 function renderChatOpStatus(activeOp) {
-  if (!activeOp?.opId) return '';
+  if (!activeOp?.opId && !activeOp?.label) return '';
   // Recompute from startedAt on every render (matches the global UI) so a full
   // re-render mid-op shows true elapsed rather than the stale elapsedMs:0 stamp.
   const elapsed = activeOp.startedAt
     ? Date.now() - new Date(activeOp.startedAt).getTime()
     : (Number.isFinite(activeOp.elapsedMs) ? activeOp.elapsedMs : 0);
-  return `<div class="deep-chat-op-status chat-status" data-product-chat-op-status data-op-id="${attr(activeOp.opId)}" aria-live="polite">` +
+  const opId = activeOp.opId || '';
+  const cancel = opId
+    ? `<button type="button" class="cs-cancel" data-cancel-op-id="${attr(opId)}" title="Cancel" aria-label="Cancel operation">&times;</button>`
+    : '';
+  return `<div class="deep-chat-op-status chat-status" data-product-chat-op-status data-op-id="${attr(opId)}" aria-live="polite">` +
     `<span class="cs-spinner"></span>` +
     `<span class="cs-label">${escHtml(activeOp.label || 'Asking Claude')}</span>` +
-    `<span class="cs-elapsed">· ${escHtml(fmtElapsed(elapsed))}</span>` +
-    `<button type="button" class="cs-cancel" data-cancel-op-id="${attr(activeOp.opId)}" title="Cancel" aria-label="Cancel operation">&times;</button>` +
+    (activeOp.startedAt || Number.isFinite(activeOp.elapsedMs) ? `<span class="cs-elapsed">· ${escHtml(fmtElapsed(elapsed))}</span>` : '<span class="cs-elapsed"></span>') +
+    cancel +
   `</div>`;
 }
 
@@ -903,6 +907,58 @@ function isSpecArtifact(value) {
     typeof value.spec === 'string';
 }
 
+const PRODUCT_CHAT_UNREAD_KEY = '__runeProductChatUnreadProducts';
+
+function unreadProductSet(value) {
+  if (value instanceof Set) return value;
+  if (Array.isArray(value)) return new Set(value);
+  return new Set();
+}
+
+function browserUnreadProducts() {
+  if (typeof window === 'undefined') return new Set();
+  if (window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) return window[PRODUCT_CHAT_UNREAD_KEY];
+  const next = new Set(Array.isArray(window[PRODUCT_CHAT_UNREAD_KEY]) ? window[PRODUCT_CHAT_UNREAD_KEY] : []);
+  window[PRODUCT_CHAT_UNREAD_KEY] = next;
+  return next;
+}
+
+function isProductChatOutputFrame(frame) {
+  return (frame?.kind === 'message' || frame?.kind === 'chunk') &&
+    typeof frame.product === 'string' &&
+    frame.product.length > 0;
+}
+
+function productChannelName(channel) {
+  return typeof channel?.name === 'string' && channel.name
+    ? channel.name
+    : typeof channel?.product === 'string' && channel.product
+      ? channel.product
+      : typeof channel?.slug === 'string' && channel.slug
+        ? channel.slug
+        : '';
+}
+
+function renderProductChannels(view, unreadProducts = new Set()) {
+  const channels = list(view?.productChannels).filter(channel => productChannelName(channel));
+  if (channels.length === 0) return '';
+  const activeProduct = view?.name || '';
+  return `<nav class="product-channels" aria-label="Product chats">` +
+    channels.map(channel => {
+      const name = productChannelName(channel);
+      const label = channel?.label || name;
+      const active = name === activeProduct;
+      const unread = !active && unreadProducts.has(name);
+      return `<button type="button" data-product-channel="${attr(name)}" data-product="${attr(name)}" ` +
+        `class="product-channel${active ? ' product-channel--active' : ''}${unread ? ' product-channel--unread' : ''}" ` +
+        `aria-current="${active ? 'page' : 'false'}"${unread ? ' data-product-chat-unread="true"' : ''}>` +
+          `<span>${escHtml(label)}</span>` +
+          (unread ? '<span class="product-channel-unread-cue" data-product-chat-unread>New chat output</span>' : '') +
+      `</button>`;
+    }).join('') +
+  `</nav>`;
+}
+
 export function renderProductDeepView(view, options = {}) {
   const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
   const defaultSidePanel = view?.repoBacked === false ? 'runs' : 'operations';
@@ -913,6 +969,7 @@ export function renderProductDeepView(view, options = {}) {
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
+  const unreadProducts = unreadProductSet(options.unreadProducts);
   if (!view) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
@@ -934,6 +991,7 @@ export function renderProductDeepView(view, options = {}) {
     `<header class="deep-header">` +
       `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2>` +
         `${view.repoBacked === false ? '<span>limited - not repo-backed</span>' : ''}</div>` +
+      `${renderProductChannels(view, unreadProducts)}` +
       `<nav aria-label="Product surfaces">` +
         navSurfaces.map(surface =>
           `<button type="button" data-surface-jump="${attr(surface.id)}">${escHtml(surface.label)}</button>`
@@ -1061,15 +1119,19 @@ function operationsFromState(state, product) {
   };
 }
 
-// Op-events carry no product field, so they are user-global. Scope the product
-// chat pill to `chat` ops only — product chat + planning turns are chat-kind
-// (claude.ts opLabel:'chat'). Project runs emit no op-events (mutation/run
-// events, already surfaced in the Runs + Operations panels); background `agent`
-// ops (nightly, prep, reviews) are unrelated noise, so they are excluded.
+// Product chat op-events carry `product`; require an explicit matching product
+// so a global chat or another product's turn cannot attach this panel's pill.
+// Scope the product chat pill to `chat` ops only — product chat + planning
+// turns are chat-kind (claude.ts opLabel:'chat'). Project runs emit no op-events
+// (mutation/run events, already surfaced in the Runs + Operations panels);
+// background `agent` ops (nightly, prep, reviews) are unrelated noise, so they
+// are excluded.
 const PRODUCT_VISIBLE_OP_KINDS = new Set(['chat']);
 
-function shouldShowProductOp(frame) {
+function shouldShowProductOp(frame, targetProduct) {
   return frame?.kind === 'op-event' &&
+    typeof targetProduct === 'string' &&
+    targetProduct.length > 0 &&
     frame.opKind !== 'classifier' &&
     PRODUCT_VISIBLE_OP_KINDS.has(frame.opKind);
 }
@@ -1098,6 +1160,8 @@ function getProductSession(product) {
       chatMessages: [],
       planning: { active: false, status: 'scoping', artifact: null },
       activeOp: null,
+      statusLabel: null,
+      streamingMessageIndex: -1,
       opActivity: [],
     };
     productSessions.set(product, session);
@@ -1108,6 +1172,9 @@ function getProductSession(product) {
 /** Test seam: clear all retained per-product chat/planning state. */
 export function __resetProductSessions() {
   productSessions.clear();
+  if (typeof window !== 'undefined' && window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) {
+    window[PRODUCT_CHAT_UNREAD_KEY].clear();
+  }
 }
 
 export function createProductDeepView({
@@ -1137,8 +1204,10 @@ export function createProductDeepView({
   let chatMessages = session.chatMessages;
   let planning = session.planning;
   let activeOp = session.activeOp || null;
+  let statusLabel = session.statusLabel || null;
   let opActivity = list(session.opActivity);
-  let streamingMessageIndex = -1;
+  let streamingMessageIndex = Number.isFinite(session.streamingMessageIndex) ? session.streamingMessageIndex : -1;
+  let unreadProducts = browserUnreadProducts();
   let opTicker = null;
   let monitoringPoller = null;
   let terminalReloadInFlight = false;
@@ -1147,7 +1216,24 @@ export function createProductDeepView({
     session.chatMessages = chatMessages;
     session.planning = planning;
     session.activeOp = activeOp;
+    session.statusLabel = statusLabel;
+    session.streamingMessageIndex = streamingMessageIndex;
     session.opActivity = opActivity;
+  }
+
+  function syncLocalFromSession() {
+    chatMessages = session.chatMessages;
+    planning = session.planning;
+    activeOp = session.activeOp || null;
+    statusLabel = session.statusLabel || null;
+    streamingMessageIndex = Number.isFinite(session.streamingMessageIndex) ? session.streamingMessageIndex : -1;
+    opActivity = list(session.opActivity);
+  }
+
+  function renderIfCurrent(targetProduct, options = {}) {
+    if (targetProduct !== product || !current) return;
+    syncLocalFromSession();
+    render(options);
   }
 
   function getChatTranscript() {
@@ -1224,8 +1310,9 @@ export function createProductDeepView({
       activeSidePanel,
       chatMessages,
       planning,
-      activeOp,
+      activeOp: activeOp || (statusLabel ? { label: statusLabel } : null),
       monitoring,
+      unreadProducts,
     });
     restoreChatScroll(chatScroll, options);
     restoreChatInput(chatInput);
@@ -1344,50 +1431,50 @@ export function createProductDeepView({
     }
   }
 
-  function appendOperationActivity(row) {
-    opActivity = [...opActivity, row].slice(-50);
-    persistSession();
+  function appendOperationActivity(row, targetSession = session) {
+    targetSession.opActivity = [...list(targetSession.opActivity), row].slice(-50);
+    if (targetSession === session) syncLocalFromSession();
   }
 
-  function handleOpFrame(frame) {
-    if (!shouldShowProductOp(frame)) return;
+  function handleOpFrame(frame, targetProduct) {
+    if (!shouldShowProductOp(frame, targetProduct)) return;
+    const targetSession = getProductSession(targetProduct);
     const base = {
       opId: frame.opId,
-      label: opDisplayLabel(frame),
+      label: targetSession.statusLabel || opDisplayLabel(frame),
       startedAt: frame.startedAt,
       elapsedMs: Number.isFinite(frame.elapsedMs) ? frame.elapsedMs : 0,
     };
     if (frame.subKind === 'start') {
-      activeOp = base;
-      appendOperationActivity({ ...base, at: fmtClock(frame.startedAt), status: 'started' });
-      syncOpTicker();
-      render();
+      targetSession.activeOp = base;
+      appendOperationActivity({ ...base, at: fmtClock(frame.startedAt), status: 'started' }, targetSession);
+      renderIfCurrent(targetProduct);
+      if (targetProduct === product) syncOpTicker();
       return;
     }
     if (frame.subKind === 'progress') {
-      if (activeOp?.opId === frame.opId) activeOp = { ...activeOp, ...base };
+      if (targetSession.activeOp?.opId === frame.opId) targetSession.activeOp = { ...targetSession.activeOp, ...base };
       if (frame.detail) {
         appendOperationActivity({
           ...base,
           at: fmtClock(new Date().toISOString()),
           detail: frame.detail,
-        });
-      } else {
-        persistSession();
+        }, targetSession);
       }
-      render();
+      renderIfCurrent(targetProduct);
       return;
     }
     if (frame.subKind === 'end') {
-      if (activeOp?.opId === frame.opId) activeOp = null;
+      if (targetSession.activeOp?.opId === frame.opId) targetSession.activeOp = null;
+      targetSession.statusLabel = null;
       appendOperationActivity({
         ...base,
         at: fmtClock(new Date().toISOString()),
         detail: frame.error || frame.detail || frame.status || 'done',
         status: frame.status || 'ended',
-      });
-      syncOpTicker();
-      render();
+      }, targetSession);
+      renderIfCurrent(targetProduct);
+      if (targetProduct === product) syncOpTicker();
     }
   }
 
@@ -1444,19 +1531,54 @@ export function createProductDeepView({
     render({ followChat: true });
   }
 
-  function appendOrUpdateStreaming(text) {
-    if (streamingMessageIndex < 0 || !chatMessages[streamingMessageIndex]) {
-      chatMessages = [...chatMessages, { role: 'assistant streaming', text }];
-      streamingMessageIndex = chatMessages.length - 1;
+  function appendChatMessageToSession(targetProduct, role, text) {
+    const targetSession = getProductSession(targetProduct);
+    targetSession.chatMessages = [...list(targetSession.chatMessages), { role, text }];
+    targetSession.streamingMessageIndex = -1;
+    renderIfCurrent(targetProduct, { followChat: true });
+  }
+
+  function appendOrUpdateStreamingForSession(targetProduct, text) {
+    const targetSession = getProductSession(targetProduct);
+    const messages = list(targetSession.chatMessages);
+    const index = Number.isFinite(targetSession.streamingMessageIndex) ? targetSession.streamingMessageIndex : -1;
+    if (index < 0 || !messages[index]) {
+      targetSession.chatMessages = [...messages, { role: 'assistant streaming', text }];
+      targetSession.streamingMessageIndex = targetSession.chatMessages.length - 1;
     } else {
-      chatMessages = chatMessages.map((message, index) =>
-        index === streamingMessageIndex
+      targetSession.chatMessages = messages.map((message, messageIndex) =>
+        messageIndex === index
           ? { ...message, text: `${message.text || ''}${text}` }
           : message
       );
     }
-    persistSession();
-    render({ followChat: true });
+    renderIfCurrent(targetProduct, { followChat: true });
+  }
+
+  function setStatusForSession(targetProduct, label) {
+    const targetSession = getProductSession(targetProduct);
+    targetSession.statusLabel = label || null;
+    if (targetSession.activeOp?.opId) {
+      targetSession.activeOp = {
+        ...targetSession.activeOp,
+        label: targetSession.statusLabel || opDisplayLabel(targetSession.activeOp),
+      };
+    }
+    renderIfCurrent(targetProduct);
+  }
+
+  function markProductUnread(targetProduct) {
+    if (!targetProduct || targetProduct === product || unreadProducts.has(targetProduct)) return false;
+    unreadProducts.add(targetProduct);
+    return true;
+  }
+
+  function announceProductViewed(targetProduct) {
+    if (!targetProduct) return;
+    unreadProducts.delete(targetProduct);
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    const EventCtor = typeof window.CustomEvent === 'function' ? window.CustomEvent : CustomEvent;
+    window.dispatchEvent(new EventCtor('rune-product-chat-viewed', { detail: { product: targetProduct } }));
   }
 
   function restoreTemporarilyDisabledPlanActions() {
@@ -1584,17 +1706,30 @@ export function createProductDeepView({
   const onWebviewFrame = event => {
     const frame = event?.detail;
     if (!frame || !current) return;
+    const frameProduct = typeof frame.product === 'string' && frame.product
+      ? frame.product
+      : null;
+    if (frame.kind === 'op-event') {
+      handleOpFrame(frame, frameProduct);
+      return;
+    }
+    const targetProduct = frameProduct || product;
+    const unreadChanged = isProductChatOutputFrame(frame) && markProductUnread(targetProduct);
     if (frame.kind === 'chunk') {
-      appendOrUpdateStreaming(frame.text || '');
+      appendOrUpdateStreamingForSession(targetProduct, frame.text || '');
+      if (unreadChanged && targetProduct !== product) render();
       return;
     }
     if (frame.kind === 'message') {
-      streamingMessageIndex = -1;
-      appendChatMessage('assistant', frame.text || '');
+      appendChatMessageToSession(targetProduct, 'assistant', frame.text || '');
+      setStatusForSession(targetProduct, null);
+      const targetSession = getProductSession(targetProduct);
+      if (!targetSession.activeOp) renderIfCurrent(targetProduct);
+      if (unreadChanged && targetProduct !== product) render();
       return;
     }
-    if (frame.kind === 'op-event') {
-      handleOpFrame(frame);
+    if (frame.kind === 'status') {
+      setStatusForSession(targetProduct, frame.label || null);
       return;
     }
     if (frame.kind === 'run-event') {
@@ -1745,6 +1880,14 @@ export function createProductDeepView({
       }
       root.querySelector?.(`[data-surface="${surface}"]`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
       if (surface === 'chat') focusChatInput();
+      return;
+    }
+
+    const productChannel = event.target?.closest?.('[data-product-channel]');
+    if (productChannel) {
+      event.preventDefault?.();
+      const nextProduct = productChannel.dataset?.product || productChannel.dataset?.productChannel;
+      if (nextProduct && nextProduct !== product) router?.goProduct?.(nextProduct);
       return;
     }
 
@@ -1973,6 +2116,7 @@ export function createProductDeepView({
       // mid-session must not yank the user off whatever tab they're reading.
       if (current?.activeRun?.runId) activeSidePanel = 'runs';
       render();
+      announceProductViewed(product);
       if (focusRunId) {
         activeSidePanel = 'runs';
         syncMonitoringPoll();
@@ -1992,6 +2136,7 @@ export function createProductDeepView({
       if (opts.chatMessages) chatMessages = opts.chatMessages;
       if ('activeOp' in opts) activeOp = opts.activeOp;
       if (opts.monitoring) monitoring = opts.monitoring;
+      if ('unreadProducts' in opts) unreadProducts = unreadProductSet(opts.unreadProducts);
       currentOperations = opts.operations || currentOperations;
       render();
       syncMonitoringPoll();

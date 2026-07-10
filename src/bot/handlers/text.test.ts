@@ -1452,6 +1452,9 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.writableRoots).toEqual(['/workspace/rune']);
     // Product chat gets the scrubbed child env (Rune secrets removed).
     expect((options as any).envMode).toBe('product-chat');
+    // The live op-event scope rides through the Claude call metadata so the
+    // webview can attach the working pill to this product, not the active panel.
+    expect((options as any).product).toBe('rune');
     // Write-enabled: Edit/Write/Bash available (containment is prompt-based, see
     // buildProductIdentityPreamble — not OS-enforced).
     expect(options.allowedTools).toEqual(expect.arrayContaining([

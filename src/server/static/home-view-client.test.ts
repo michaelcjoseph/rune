@@ -30,8 +30,14 @@ function makeWindow(hash = '') {
     addEventListener: vi.fn((type: string, listener: Listener) => {
       listeners.set(type, listener);
     }),
+    removeEventListener: vi.fn((type: string) => {
+      listeners.delete(type);
+    }),
     dispatch(type: string) {
       listeners.get(type)?.();
+    },
+    emit(type: string, detail: unknown) {
+      listeners.get(type)?.({ detail });
     },
   };
 }
@@ -438,6 +444,52 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/no-op/i);
     expect(html).toMatch(/needs|attention|parked/i);
     expect(html).toMatch(/data-home-open-product[\s\S]{0,120}Open project|Open project[\s\S]{0,120}data-home-open-product/i);
+  });
+
+  it('renders browser-local unread product chat cues on Home product cards without requiring server unread state', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView(homePulse, { unreadProducts: new Set(['aura']) });
+    const auraCard = /<article[^>]*data-home-product=["']aura["'][\s\S]*?<\/article>/i.exec(html)?.[0] || '';
+    const relayCard = /<article[^>]*data-home-product=["']relay["'][\s\S]*?<\/article>/i.exec(html)?.[0] || '';
+
+    expect(auraCard).toMatch(/data-home-product-unread=["']true["']|home-product-card--unread|data-product-chat-unread/i);
+    expect(auraCard).toMatch(/new chat output|unread|activity/i);
+    expect(relayCard).not.toMatch(/data-home-product-unread=["']true["']|home-product-card--unread|data-product-chat-unread/i);
+  });
+
+  it('keeps Home unread cues in browser-local controller state derived from scoped product frames', async () => {
+    const previousWindow = (globalThis as any).window;
+    const win = makeWindow('#/');
+    (globalThis as any).window = win;
+    try {
+      const { createHomeView } = await import('./home-view.js');
+      const root = makeRoot();
+      const home = createHomeView({
+        root,
+        fetchJson: vi.fn(async (url: string) => {
+          if (url === '/api/home') return homePulse;
+          if (url === '/api/state') return homeOperations.status;
+          if (url === '/api/approvals') return [];
+          throw new Error(`unexpected fetch ${url}`);
+        }),
+        router: { goProduct: vi.fn() },
+      });
+
+      await home.load();
+      expect(root.innerHTML).not.toMatch(/data-home-product-unread=["']true["']/i);
+
+      win.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'background answer' });
+      expect(root.innerHTML).toMatch(/data-home-product=["']aura["'][\s\S]*data-home-product-unread=["']true["']/i);
+      expect(root.innerHTML).not.toMatch(/data-home-product=["']relay["'][\s\S]*data-home-product-unread=["']true["']/i);
+
+      win.emit('rune-product-chat-viewed', { product: 'aura' });
+      expect(root.innerHTML).not.toMatch(/data-home-product=["']aura["'][\s\S]*data-home-product-unread=["']true["']/i);
+      home.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
   });
 
   it('renders Rune MCP service degradation explicitly on the product card instead of leaving monitoring blank', async () => {

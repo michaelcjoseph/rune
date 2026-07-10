@@ -119,6 +119,11 @@
       const inProductView = typeof document !== 'undefined'
         && document.body?.dataset?.view === 'product';
 
+      const scopedChatFrame = (frame.kind === 'message' || frame.kind === 'chunk' || frame.kind === 'status' || frame.kind === 'op-event')
+        && typeof frame.product === 'string'
+        && frame.product.length > 0;
+      if (scopedChatFrame) return;
+
       if (frame.kind === 'message') {
         if (inProductView) return;
         // Reply arrived. If an op is still attached we leave the pill alone —
@@ -644,6 +649,7 @@
     // shows full agent-level history.)
     const inFlight = (state.inFlight ?? [])
       .filter(op => op.kind !== 'classifier')
+      .filter(op => !op.scope)
       .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
     if (!chatStatus.hasOp() && inFlight.length > 0) {
       const op = inFlight[0];

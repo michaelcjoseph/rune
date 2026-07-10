@@ -110,7 +110,34 @@ function renderMcpMonitoring(product) {
   `</div>`;
 }
 
-function renderProductCard(product) {
+function unreadProductSet(value) {
+  if (value instanceof Set) return value;
+  if (Array.isArray(value)) return new Set(value);
+  return new Set();
+}
+
+const PRODUCT_CHAT_UNREAD_KEY = '__runeProductChatUnreadProducts';
+
+function browserUnreadProducts() {
+  if (typeof window === 'undefined') return new Set();
+  if (window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) return window[PRODUCT_CHAT_UNREAD_KEY];
+  const next = new Set(Array.isArray(window[PRODUCT_CHAT_UNREAD_KEY]) ? window[PRODUCT_CHAT_UNREAD_KEY] : []);
+  window[PRODUCT_CHAT_UNREAD_KEY] = next;
+  return next;
+}
+
+function productFromEvent(event) {
+  const product = event?.detail?.product;
+  return typeof product === 'string' && product ? product : '';
+}
+
+function isProductChatOutputFrame(frame) {
+  return (frame?.kind === 'message' || frame?.kind === 'chunk') &&
+    typeof frame.product === 'string' &&
+    frame.product.length > 0;
+}
+
+function renderProductCard(product, unreadProducts = new Set()) {
   const counts = product.counts || {};
   const warnings = counts.backlogWarnings || 0;
   const attention = (product.attention || []).map(renderAttention).filter(Boolean).join('');
@@ -118,11 +145,17 @@ function renderProductCard(product) {
     ? `<div class="home-outcome">Recent: ${escHtml(product.mostRecentRun.outcome)} - ${escHtml(product.mostRecentRun.runId)}</div>`
     : '<div class="home-outcome muted">No completed runs</div>';
   const repoLabel = product.repoBacked ? 'repo-backed' : 'not repo-backed - tracked';
+  const unread = unreadProducts.has(product.name);
+  const unreadCue = unread
+    ? '<span class="home-product-unread-cue" data-product-chat-unread>New chat output</span>'
+    : '';
 
-  return `<article class="home-product-card" data-home-product="${escHtml(product.name)}">` +
+  return `<article class="home-product-card${unread ? ' home-product-card--unread' : ''}" ` +
+    `data-home-product="${escHtml(product.name)}"${unread ? ' data-home-product-unread="true"' : ''}>` +
     `<div class="home-product-head">` +
       `<h3>${escHtml(product.name)}</h3>` +
       `<span class="home-product-status">${escHtml(repoLabel)}</span>` +
+      unreadCue +
     `</div>` +
     renderActiveRun(product) +
     `<div class="home-counts">` +
@@ -145,8 +178,8 @@ function productClass(product) {
   return product?.class === 'internal' ? 'internal' : 'external';
 }
 
-function renderProductGroup(productGroup, label) {
-  const products = productGroup.products.map(renderProductCard).join('');
+function renderProductGroup(productGroup, label, unreadProducts = new Set()) {
+  const products = productGroup.products.map(product => renderProductCard(product, unreadProducts)).join('');
   return `<section class="home-product-class home-product-class--${attr(productGroup.class)}" ` +
     `data-home-product-class="${attr(productGroup.class)}">` +
       `<div class="home-product-class-head">` +
@@ -157,7 +190,7 @@ function renderProductGroup(productGroup, label) {
     `</section>`;
 }
 
-function renderProductRoster(products) {
+function renderProductRoster(products, unreadProducts = new Set()) {
   const groups = {
     internal: [],
     external: [],
@@ -167,10 +200,10 @@ function renderProductRoster(products) {
   }
   return [
     groups.internal.length > 0
-      ? renderProductGroup({ class: 'internal', products: groups.internal }, 'Internal')
+      ? renderProductGroup({ class: 'internal', products: groups.internal }, 'Internal', unreadProducts)
       : '',
     groups.external.length > 0
-      ? renderProductGroup({ class: 'external', products: groups.external }, 'External')
+      ? renderProductGroup({ class: 'external', products: groups.external }, 'External', unreadProducts)
       : '',
   ].join('');
 }
@@ -284,6 +317,7 @@ function renderHomeViewWithOptions(pulse, options = {}) {
   }
 
   const products = Array.isArray(pulse.products) ? pulse.products : [];
+  const unreadProducts = unreadProductSet(options.unreadProducts);
   if (products.length === 0) {
     return `<section class="home-view"><h2>Home</h2><p class="muted">No products registered</p>${renderOperationalRail(options.operations)}</section>`;
   }
@@ -291,7 +325,7 @@ function renderHomeViewWithOptions(pulse, options = {}) {
   return `<section class="home-view">` +
     `<div class="home-header"><h2>Home</h2><span>${escHtml(fmtCount(products.length, 'product', 'products'))}</span></div>` +
     `<div class="home-layout">` +
-      `<div class="home-products">${renderProductRoster(products)}</div>` +
+      `<div class="home-products">${renderProductRoster(products, unreadProducts)}</div>` +
       `${renderOperationalRail(options.operations)}` +
     `</div>` +
   `</section>`;
@@ -348,9 +382,10 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
   let currentPulse = null;
   let operations = null;
   let approvalErrors = {};
+  let unreadProducts = browserUnreadProducts();
 
   function render() {
-    root.innerHTML = renderHomeView(currentPulse, { operations });
+    root.innerHTML = renderHomeView(currentPulse, { operations, unreadProducts });
   }
 
   function approvalsWithErrors(approvals) {
@@ -423,8 +458,24 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     if (currentPulse) render();
   };
 
+  const onWebviewFrame = event => {
+    const frame = event?.detail;
+    if (!isProductChatOutputFrame(frame)) return;
+    unreadProducts.add(frame.product);
+    if (currentPulse) render();
+  };
+
+  const onProductChatViewed = event => {
+    const product = productFromEvent(event);
+    if (!product || !unreadProducts.has(product)) return;
+    unreadProducts.delete(product);
+    if (currentPulse) render();
+  };
+
   if (typeof window !== 'undefined') {
     window.addEventListener?.('rune-connection-status', onConnectionStatus);
+    window.addEventListener?.('rune-webview-frame', onWebviewFrame);
+    window.addEventListener?.('rune-product-chat-viewed', onProductChatViewed);
   }
 
   root.addEventListener?.('click', event => {
@@ -482,6 +533,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     },
     render(pulse, opts = {}) {
       currentPulse = pulse;
+      if ('unreadProducts' in opts) unreadProducts = unreadProductSet(opts.unreadProducts);
       operations = {
         ...(opts.operations || operations || {}),
         connectionStatus: opts.operations?.connectionStatus || operations?.connectionStatus || currentConnectionStatus(),
@@ -491,6 +543,8 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     close() {
       if (typeof window !== 'undefined') {
         window.removeEventListener?.('rune-connection-status', onConnectionStatus);
+        window.removeEventListener?.('rune-webview-frame', onWebviewFrame);
+        window.removeEventListener?.('rune-product-chat-viewed', onProductChatViewed);
       }
     },
   };

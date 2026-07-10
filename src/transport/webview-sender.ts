@@ -30,20 +30,49 @@ export class WebviewSender implements MessageSender {
   }
 
   async send(userId: number, text: string, opts?: SendOpts): Promise<void> {
+    return this.sendScoped(userId, text, undefined, opts);
+  }
+
+  async sendScoped(userId: number, text: string, product?: string, opts?: SendOpts): Promise<void> {
     const frame = JSON.stringify({
       kind: 'message',
       text,
+      ...(product ? { product } : {}),
       ...(opts?.approval ? { approval: opts.approval } : {}),
     });
     this.broadcast(userId, frame, true);
   }
 
   startTyping(userId: number, label = 'Thinking…'): void {
-    this.broadcast(userId, JSON.stringify({ kind: 'status', label }));
+    this.startTypingScoped(userId, label);
+  }
+
+  startTypingScoped(userId: number, label = 'Thinking…', product?: string): void {
+    this.broadcast(userId, JSON.stringify({
+      kind: 'status',
+      label,
+      ...(product ? { product } : {}),
+    }));
   }
 
   stopTyping(userId: number): void {
-    this.broadcast(userId, JSON.stringify({ kind: 'status', label: null }));
+    this.stopTypingScoped(userId);
+  }
+
+  stopTypingScoped(userId: number, product?: string): void {
+    this.broadcast(userId, JSON.stringify({
+      kind: 'status',
+      label: null,
+      ...(product ? { product } : {}),
+    }));
+  }
+
+  sendChunk(userId: number, text: string, product?: string): void {
+    this.broadcast(userId, JSON.stringify({
+      kind: 'chunk',
+      text,
+      ...(product ? { product } : {}),
+    }), true);
   }
 
   /** Forward an agent-event bus message to all connected WS clients for the given userId.
@@ -66,8 +95,11 @@ export class WebviewSender implements MessageSender {
    *  so they never reach the wire, matching TelegramSender behaviour. */
   onOpEvent(event: BusOpEvent): void {
     if (event.opKind === 'classifier') return;
-    const { userId, ...rest } = event;
-    this.broadcast(userId, JSON.stringify(rest));
+    const { userId, scope, ...rest } = event;
+    this.broadcast(userId, JSON.stringify({
+      ...rest,
+      ...(scope ? { product: scope } : {}),
+    }));
   }
 
   /** Forward a run-event bus message to all connected WS clients for the given userId.

@@ -231,6 +231,37 @@ describe('vault/sessions', () => {
         scope: { kind: 'global' },
       });
     });
+
+    it('round-trips the exported sessionKeyForScope through the existing parser semantics', () => {
+      const sessionKeyForScope = (sessionsModule as {
+        sessionKeyForScope?: (userId: number, transport: 'telegram' | 'webview', scope?: SessionScope) => string;
+      }).sessionKeyForScope;
+      const parseSessionKey = (sessionsModule as {
+        parseSessionKey?: (key: string) => unknown;
+      }).parseSessionKey;
+
+      expect(
+        sessionKeyForScope,
+        'src/vault/sessions.ts must export sessionKeyForScope so dispatch and session storage share one key format',
+      ).toEqual(expect.any(Function));
+      expect(parseSessionKey).toEqual(expect.any(Function));
+
+      const globalKey = sessionKeyForScope!(42, 'webview', { kind: 'global' });
+      expect(globalKey).toBe('webview:42');
+      expect(parseSessionKey!(globalKey)).toEqual({
+        userId: 42,
+        transport: 'webview',
+        scope: { kind: 'global' },
+      });
+
+      const productKey = sessionKeyForScope!(42, 'webview', { kind: 'product', product: 'rune' });
+      expect(productKey).toBe('rune:webview:42');
+      expect(parseSessionKey!(productKey)).toEqual({
+        userId: 42,
+        transport: 'webview',
+        scope: { kind: 'product', product: 'rune' },
+      });
+    });
   });
 
   describe('cross-transport isolation', () => {

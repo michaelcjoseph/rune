@@ -37,7 +37,11 @@ Scaffolded by hand on 2026-07-02 from the operator-approved PM spec, after the `
 
 ## Next Task Handoff
 
-- Two product chats run concurrently; each response lands only in its own panel.
-- Inactive-scope output buffers and renders intact/in-order on switch-back.
-- The activity cue shows on the sibling channel + home view and clears on view.
-- The manual live release-gate is completed and recorded in `docs/projects/21-parallel-product-chats/live-acceptance.md` before the project is called done.
+- - Product deep view only attaches chat working pills to explicitly matching product op-events.
+- Global app ignores product-scoped op-events, including `/api/state` in-flight hydration.
+
+Validation passed:
+- `npm run build`
+- `npm test` — 306 files passed, 5099 tests passed, 8 todo
+
+No tests removed.

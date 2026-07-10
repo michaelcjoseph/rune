@@ -69,6 +69,14 @@ vi.mock('./cockpit-run-status.js', () => ({
   readCockpitRunStatus: mockReadCockpitRunStatus,
 }));
 
+const { mockSessionKeyForScope } = vi.hoisted(() => ({
+  mockSessionKeyForScope: vi.fn((
+    userId: number,
+    transport: 'telegram' | 'webview',
+    scope: { kind: 'global'; product?: undefined } | { kind: 'product'; product: string } = { kind: 'global' },
+  ) => (scope.kind === 'product' ? `${scope.product}:${transport}:${userId}` : `${transport}:${userId}`)),
+}));
+
 const mockConfig = {
   HTTP_PORT: 0,
   HTTP_HOST: '127.0.0.1',
@@ -134,6 +142,7 @@ vi.mock('../jobs/scaffold-approval.js', () => ({
 
 vi.mock('../vault/sessions.js', () => ({
   getSession: vi.fn(() => null),
+  sessionKeyForScope: mockSessionKeyForScope,
 }));
 
 vi.mock('./state-snapshot.js', () => ({
@@ -191,8 +200,13 @@ vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSu
 
 // Import after mocks are wired up
 const { mountWebviewRoutes } = await import('./webview.js');
+const { WebviewSender } = await import('../transport/webview-sender.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
-const { getSession } = await import('../vault/sessions.js');
+const sessionsForWebview = await import('../vault/sessions.js') as unknown as {
+  getSession: ReturnType<typeof vi.fn>;
+  sessionKeyForScope: ReturnType<typeof vi.fn>;
+};
+const { getSession, sessionKeyForScope } = sessionsForWebview;
 const { getStateSnapshot } = await import('./state-snapshot.js');
 const { readRegistry } = await import('../intent/registry.js');
 const {
@@ -256,6 +270,60 @@ function openWebSocket(port: number): Promise<WebSocket> {
   });
 }
 
+function collectJsonFrames(ws: WebSocket, count: number, timeoutMs = 1000): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const frames: any[] = [];
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for ${count} websocket frames; got ${frames.length}`));
+    }, timeoutMs);
+    const onMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
+      let raw: string;
+      if (Array.isArray(data)) raw = Buffer.concat(data).toString('utf8');
+      else if (Buffer.isBuffer(data)) raw = data.toString('utf8');
+      else raw = Buffer.from(new Uint8Array(data)).toString('utf8');
+      try {
+        frames.push(JSON.parse(raw));
+      } catch (err) {
+        cleanup();
+        reject(err);
+        return;
+      }
+      if (frames.length >= count) {
+        cleanup();
+        resolve(frames);
+      }
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off('message', onMessage);
+    };
+    ws.on('message', onMessage);
+  });
+}
+
+async function startWebviewRouteServer(
+  webview: InstanceType<typeof WebviewSender>,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  let handler!: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  const routeServer = http.createServer(async (req, res) => {
+    const handled = await handler(req, res);
+    if (!handled) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found (fallthrough)' }));
+    }
+  });
+  handler = mountWebviewRoutes(routeServer, { webview, isReady: () => true });
+  await new Promise<void>((resolve) => routeServer.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (routeServer.address() as any).port,
+    close: async () => {
+      webview.shutdown();
+      await new Promise<void>((resolve) => routeServer.close(() => resolve()));
+    },
+  };
+}
+
 async function getReleasedLocalPort(): Promise<number> {
   const s = http.createServer();
   await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
@@ -280,6 +348,28 @@ function waitForMockCall(mock: ReturnType<typeof vi.fn>, timeoutMs = 1000): Prom
     };
     tick();
   });
+}
+
+function waitForMockCallCount(mock: ReturnType<typeof vi.fn>, count: number, timeoutMs = 1000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (mock.mock.calls.length >= count) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        reject(new Error(`timed out waiting for ${count} mock calls`));
+        return;
+      }
+      setTimeout(tick, 10);
+    };
+    tick();
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function useRuneMcpRegistry(): void {
@@ -473,8 +563,17 @@ const mockWebviewSender = {
   register: vi.fn(),
   unregister: vi.fn(),
   send: vi.fn(async (_userId: number, _message: string, _opts?: { approval?: unknown }) => undefined),
+  sendScoped: vi.fn(async (
+    _userId: number,
+    _message: string,
+    _product?: string,
+    _opts?: { approval?: unknown },
+  ) => undefined),
   startTyping: vi.fn(),
+  startTypingScoped: vi.fn(),
   stopTyping: vi.fn(),
+  stopTypingScoped: vi.fn(),
+  sendChunk: vi.fn(),
   shutdown: vi.fn(),
 };
 
@@ -514,6 +613,11 @@ describe('server/webview', () => {
     mockConfig.RUNE_MCP_PORT = 65534;
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (sessionKeyForScope as ReturnType<typeof vi.fn>).mockImplementation((
+      userId: number,
+      transport: 'telegram' | 'webview',
+      scope: { kind: 'global'; product?: undefined } | { kind: 'product'; product: string } = { kind: 'global' },
+    ) => (scope.kind === 'product' ? `${scope.product}:${transport}:${userId}` : `${transport}:${userId}`));
     (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
       version: 1,
@@ -1850,6 +1954,258 @@ describe('server/webview', () => {
           { kind: 'product', product: 'aura' },
         );
       } finally {
+        ws.terminate();
+      }
+    });
+
+    it('stamps product scope onto turn-scoped status and message frames broadcast through the WS path', async () => {
+      const liveSender = new WebviewSender();
+      const routeServer = await startWebviewRouteServer(liveSender);
+      const firstTab = await openWebSocket(routeServer.port);
+      const secondTab = await openWebSocket(routeServer.port);
+      const firstFrames = collectJsonFrames(firstTab, 3);
+      const secondFrames = collectJsonFrames(secondTab, 3);
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        sender.startTyping(userId, 'Working aura');
+        await sender.send(userId, 'Aura scoped answer');
+        sender.stopTyping(userId);
+      });
+
+      try {
+        firstTab.send(JSON.stringify({ kind: 'message', text: '  stream aura  ', product: 'aura' }));
+
+        const expectedFrames = [
+          { kind: 'status', label: 'Working aura', product: 'aura' },
+          { kind: 'message', text: 'Aura scoped answer', product: 'aura' },
+          { kind: 'status', label: null, product: 'aura' },
+        ];
+        await expect(firstFrames).resolves.toEqual(expectedFrames);
+        await expect(secondFrames).resolves.toEqual(expectedFrames);
+      } finally {
+        firstTab.terminate();
+        secondTab.terminate();
+        await routeServer.close();
+      }
+    });
+
+    it('passes a product-scoped per-turn sender into WS product chat dispatch', async () => {
+      const ws = await openWebSocket(port);
+      const approvalOpts = {
+        approval: {
+          prompt: 'ok?',
+          options: [{ value: 'y', label: 'Yes' }],
+        },
+      };
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        const chunkSender = sender as typeof sender & { sendChunk(userId: number, text: string): void };
+        sender.startTyping(userId, 'Working aura');
+        chunkSender.sendChunk(userId, 'Aura chunk ');
+        await sender.send(userId, 'Aura final');
+        await sender.send(userId, 'Aura approval', approvalOpts);
+        sender.stopTyping(userId);
+      });
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  stream aura chunks  ', product: 'aura' }));
+        await waitForMockCallCount(mockWebviewSender.sendScoped, 2, 250);
+
+        expect(mockWebviewSender.startTypingScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Working aura',
+          'aura',
+        );
+        expect(mockWebviewSender.sendChunk).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura chunk ',
+          'aura',
+        );
+        expect(mockWebviewSender.sendScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura final',
+          'aura',
+          undefined,
+        );
+        expect(mockWebviewSender.sendScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'Aura approval',
+          'aura',
+          approvalOpts,
+        );
+        expect(mockWebviewSender.stopTypingScoped).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'aura',
+        );
+
+        expect(mockWebviewSender.startTyping).not.toHaveBeenCalled();
+        expect(mockWebviewSender.send).not.toHaveBeenCalled();
+        expect(mockWebviewSender.stopTyping).not.toHaveBeenCalled();
+      } finally {
+        ws.terminate();
+      }
+    });
+
+    it('leaves turn-scoped WS status and message frames unscoped for the global chat', async () => {
+      const liveSender = new WebviewSender();
+      const routeServer = await startWebviewRouteServer(liveSender);
+      const ws = await openWebSocket(routeServer.port);
+      const framesPromise = collectJsonFrames(ws, 3);
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sender, userId) => {
+        sender.startTyping(userId, 'Asking Claude');
+        await sender.send(userId, 'Global answer');
+        sender.stopTyping(userId);
+      });
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  global question  ' }));
+
+        const frames = await framesPromise;
+        expect(frames).toEqual([
+          { kind: 'status', label: 'Asking Claude' },
+          { kind: 'message', text: 'Global answer' },
+          { kind: 'status', label: null },
+        ]);
+        for (const frame of frames) {
+          expect(frame).not.toHaveProperty('product');
+        }
+      } finally {
+        ws.terminate();
+        await routeServer.close();
+      }
+    });
+
+    it('keys WS dispatch queues by session scope so different products can dispatch in parallel', async () => {
+      const ws = await openWebSocket(port);
+      let releaseAura!: () => void;
+      const auraStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseAura = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  aura slow turn  ', product: 'aura' }));
+        await auraStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  watt should start immediately  ', product: 'watt' }));
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2, 250);
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(2);
+
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'aura slow turn',
+          { kind: 'product', product: 'aura' },
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'watt should start immediately',
+          { kind: 'product', product: 'watt' },
+        );
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'product', product: 'aura' },
+        );
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'product', product: 'watt' },
+        );
+      } finally {
+        releaseAura?.();
+        ws.terminate();
+      }
+    });
+
+    it('keeps WS turns within the same product scope serialized', async () => {
+      const ws = await openWebSocket(port);
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseFirst = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  first aura turn  ', product: 'aura' }));
+        await firstStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  second aura turn  ', product: 'aura' }));
+        await delay(50);
+
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(1);
+
+        releaseFirst();
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2);
+
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'second aura turn',
+          { kind: 'product', product: 'aura' },
+        );
+      } finally {
+        releaseFirst?.();
+        ws.terminate();
+      }
+    });
+
+    it('keeps WS global chat turns serialized under the global webview session key', async () => {
+      const ws = await openWebSocket(port);
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async () => new Promise<void>((release) => {
+            releaseFirst = release;
+            resolve();
+          }),
+        );
+      });
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  first global turn  ' }));
+        await firstStarted;
+
+        ws.send(JSON.stringify({ kind: 'message', text: '  second global turn  ' }));
+        await delay(50);
+
+        expect(handleWebviewMessage).toHaveBeenCalledTimes(1);
+
+        releaseFirst();
+        await waitForMockCallCount(handleWebviewMessage as ReturnType<typeof vi.fn>, 2);
+
+        expect(sessionKeyForScope).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          { kind: 'global' },
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'first global turn',
+        );
+        expect(handleWebviewMessage).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'second global turn',
+        );
+      } finally {
+        releaseFirst?.();
         ws.terminate();
       }
     });

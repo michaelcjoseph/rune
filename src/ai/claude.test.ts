@@ -78,6 +78,7 @@ const { spawn } = await import('node:child_process');
 const { readFileSync } = await import('node:fs');
 const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, summarizeConversationMessages, markSessionCreated, loadAgentDef, getProjectMcpArgs, clearProjectMcpArgsCacheForTest } =
   await import('./claude.js');
+const { setInFlightBus } = await import('../transport/in-flight.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
 
@@ -162,6 +163,7 @@ describe('getProjectMcpArgs — cwd-independent rune-kb config', () => {
 describe('ai/claude', () => {
   beforeEach(() => {
     spawnMock.mockReset();
+    setInFlightBus(null as any);
   });
 
   describe('askClaudeOneShot', () => {
@@ -381,6 +383,25 @@ describe('ai/claude', () => {
         expect.any(Array),
         expect.objectContaining({ cwd: '/workspace/some-product' }),
       );
+    });
+
+    it('threads product scope into the in-flight chat op metadata', async () => {
+      const publishMock = vi.fn();
+      setInFlightBus({ publish: publishMock, on: vi.fn(), off: vi.fn() } as any);
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('scoped reply') }));
+
+      await askClaudeWithContext('hi', 'ctx-product-op-scope', 'sys', {
+        opLabel: 'chat',
+        product: 'aura',
+      } as any);
+
+      const startEvent = publishMock.mock.calls.map(call => call[0]).find(event => event.subKind === 'start');
+      expect(startEvent).toEqual(expect.objectContaining({
+        kind: 'op-event',
+        subKind: 'start',
+        opKind: 'chat',
+        scope: 'aura',
+      }));
     });
 
     it('defaults to the vault cwd when no cwd is provided', async () => {

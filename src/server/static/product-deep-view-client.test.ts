@@ -414,6 +414,40 @@ const mcpMonitoringPayload = {
   },
 };
 
+function installFrameBusWindow() {
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
+  const previousWindow = (globalThis as any).window;
+  (globalThis as any).window = {
+    runeSendWebviewMessage: vi.fn(() => true),
+    dispatchEvent: vi.fn(),
+    CustomEvent: class {
+      type: string;
+      detail: unknown;
+      constructor(type: string, init: { detail?: unknown } = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    },
+    addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+      const set = listeners.get(type) ?? new Set<(event: unknown) => void>();
+      set.add(listener);
+      listeners.set(type, set);
+    }),
+    removeEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+      listeners.get(type)?.delete(listener);
+    }),
+  };
+  return {
+    emit(type: string, detail: unknown) {
+      for (const listener of listeners.get(type) ?? []) listener({ detail });
+    },
+    restore() {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    },
+  };
+}
+
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   // Per-product chat/planning state is retained at module scope (so it survives
   // navigate-away-and-back). Clear it between tests so they stay isolated.
@@ -2783,6 +2817,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'start',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2799,6 +2834,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'progress',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2815,6 +2851,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'end',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -2867,6 +2904,87 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
 
       expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
       expect(root.innerHTML).not.toContain('op-classifier-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores unscoped chat op-event frames so global chat does not attach a product working pill', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-global-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-global-chat-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores chat op-event frames for a different product so the working pill stays on the owning panel', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          product: 'rune',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-chat-rune-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-chat-rune-1');
       view.close();
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
@@ -2937,6 +3055,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
+          product: 'aura',
           subKind: 'start',
           opKind: 'chat',
           opId: 'op-chat-1',
@@ -3408,6 +3527,188 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('routes scoped streamed product frames to their owning session and replays inactive buffers in arrival order', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const auraRoot = makeRoot();
+      const relayRoot = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView({ name: 'aura', activeRun: undefined });
+        if (url === '/api/products/relay') return productView({ name: 'relay', activeRun: undefined });
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const aura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await aura.load();
+      aura.close();
+
+      const relay = createProductDeepView({ root: relayRoot, product: 'relay', fetchJson });
+      await relay.load();
+
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'aura chunk one. ' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'relay', text: 'relay visible answer' });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'aura chunk two. ' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'aura final answer' });
+
+      expect(relayRoot.innerHTML).toContain('relay visible answer');
+      expect(relayRoot.innerHTML).not.toContain('aura chunk one');
+      expect(relayRoot.innerHTML).not.toContain('aura chunk two');
+      expect(relayRoot.innerHTML).not.toContain('aura final answer');
+
+      relay.close();
+      const auraAgain = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await auraAgain.load();
+
+      const html = auraRoot.innerHTML;
+      expect(html).toContain('aura chunk one');
+      expect(html).toContain('aura chunk two');
+      expect(html).toContain('aura final answer');
+      expect(html.indexOf('aura chunk one')).toBeLessThan(html.indexOf('aura chunk two'));
+      expect(html.indexOf('aura chunk two')).toBeLessThan(html.indexOf('aura final answer'));
+      auraAgain.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('keeps product chat status pills scoped and restores an inactive product pill on switch-back', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const auraRoot = makeRoot();
+      const relayRoot = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView({ name: 'aura', activeRun: undefined });
+        if (url === '/api/products/relay') return productView({ name: 'relay', activeRun: undefined });
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const relay = createProductDeepView({ root: relayRoot, product: 'relay', fetchJson });
+      await relay.load();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'status',
+        product: 'aura',
+        label: 'Aura is thinking',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-chat-1',
+        label: 'webview chat',
+        startedAt: '2026-07-09T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+
+      expect(relayRoot.innerHTML).not.toContain('Aura is thinking');
+      expect(relayRoot.innerHTML).not.toContain('op-aura-chat-1');
+      expect(relayRoot.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+
+      relay.close();
+      const aura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await aura.load();
+
+      expect(auraRoot.innerHTML).toContain('Aura is thinking');
+      expect(auraRoot.innerHTML).toContain('op-aura-chat-1');
+      expect(auraRoot.innerHTML).toMatch(/data-product-chat-op-status/i);
+      aura.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('renders browser-local unread cues on sibling product channel entries, not the active channel', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(
+      productView({
+        name: 'relay',
+        activeRun: undefined,
+        productChannels: [
+          { name: 'aura', label: 'Aura' },
+          { name: 'relay', label: 'Relay' },
+        ],
+      }),
+      { unreadProducts: new Set(['aura']) },
+    );
+
+    const auraChannel = /<[^>]+data-product-channel=["']aura["'][\s\S]*?(?=<[^>]+data-product-channel=|<\/nav>|<\/header>)/i.exec(html)?.[0] || '';
+    const relayChannel = /<[^>]+data-product-channel=["']relay["'][\s\S]*?(?=<[^>]+data-product-channel=|<\/nav>|<\/header>)/i.exec(html)?.[0] || '';
+    expect(auraChannel).toMatch(/data-product-chat-unread|product-channel--unread|new chat output|unread|activity/i);
+    expect(relayChannel).not.toMatch(/data-product-chat-unread|product-channel--unread|new chat output|unread|activity/i);
+  });
+
+  it('lights a backgrounded sibling channel entry live from a scoped frame, deriving switcher unread in the controller with no injected set', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const relayRoot = makeRoot();
+      // Operator is inside relay's deep view (Home is not mounted). Only the
+      // deep-view controller can raise the sibling switcher cue here, and it must
+      // derive that unread from frame events — never from an injected Set.
+      const relay = createProductDeepView({
+        root: relayRoot,
+        product: 'relay',
+        fetchJson: vi.fn(async () =>
+          productView({
+            name: 'relay',
+            activeRun: undefined,
+            productChannels: [
+              { name: 'aura', label: 'Aura' },
+              { name: 'relay', label: 'Relay' },
+            ],
+          }),
+        ),
+      });
+
+      await relay.load();
+
+      // Baseline: nothing backgrounded yet, so no sibling channel is flagged.
+      const auraBefore = /<[^>]+data-product-channel=["']aura["'][\s\S]*?(?=<[^>]+data-product-channel=|<\/nav>|<\/header>)/i.exec(relayRoot.innerHTML)?.[0] || '';
+      expect(auraBefore).not.toMatch(/data-product-chat-unread|product-channel--unread|new chat output|unread|activity/i);
+
+      // A frame for the backgrounded sibling must light its switcher entry live.
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'aura background answer' });
+
+      const auraAfter = /<[^>]+data-product-channel=["']aura["'][\s\S]*?(?=<[^>]+data-product-channel=|<\/nav>|<\/header>)/i.exec(relayRoot.innerHTML)?.[0] || '';
+      const relayAfter = /<[^>]+data-product-channel=["']relay["'][\s\S]*?(?=<[^>]+data-product-channel=|<\/nav>|<\/header>)/i.exec(relayRoot.innerHTML)?.[0] || '';
+      // The backgrounded sibling lights up; the active channel the operator is
+      // viewing never does.
+      expect(auraAfter).toMatch(/data-product-chat-unread|product-channel--unread|new chat output|unread|activity/i);
+      expect(relayAfter).not.toMatch(/data-product-chat-unread|product-channel--unread|new chat output|unread|activity/i);
+
+      relay.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('announces a product chat as viewed on load so browser-local unread state can clear', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+      });
+
+      await view.load();
+
+      expect((globalThis as any).window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'rune-product-chat-viewed',
+        detail: { product: 'aura' },
+      }));
+      view.close();
+    } finally {
+      bus.restore();
     }
   });
 

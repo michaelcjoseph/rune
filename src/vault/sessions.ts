@@ -367,7 +367,11 @@ function loadProductPromptContext(product: string): ProductPromptContext | null 
 /** Composite key shape: global `${transport}:${userId}`, product
  *  `${product}:${transport}:${userId}`. The two-part global key is retained so
  *  existing on-disk sessions and Telegram/webview global threads keep working. */
-function sessionKey(userId: number, transport: Transport, scope: SessionScope = { kind: 'global' }): string {
+export function sessionKeyForScope(
+  userId: number,
+  transport: Transport,
+  scope: SessionScope = { kind: 'global' },
+): string {
   if (scope.kind === 'product') return `${scope.product}:${transport}:${userId}`;
   return `${transport}:${userId}`;
 }
@@ -386,7 +390,7 @@ export function getSession(
   transport: Transport,
   scope: SessionScope = { kind: 'global' },
 ): Session | null {
-  return sessions.get(sessionKey(userId, transport, scope)) || null;
+  return sessions.get(sessionKeyForScope(userId, transport, scope)) || null;
 }
 
 export function createSession(
@@ -404,7 +408,7 @@ export function createSession(
     model: model || config.DEFAULT_CHAT_MODEL,
     messages: [],
   };
-  sessions.set(sessionKey(userId, transport, scope), session);
+  sessions.set(sessionKeyForScope(userId, transport, scope), session);
   persistSessions();
   return session;
 }
@@ -414,7 +418,7 @@ export function updateSession(
   transport: Transport,
   scope: SessionScope = { kind: 'global' },
 ): void {
-  const session = sessions.get(sessionKey(userId, transport, scope));
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
   if (!session) return;
   session.lastActivity = new Date().toISOString();
   session.messageCount++;
@@ -427,7 +431,7 @@ export function setSessionModel(
   model: string,
   scope: SessionScope = { kind: 'global' },
 ): void {
-  const session = sessions.get(sessionKey(userId, transport, scope));
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
   if (!session) return;
   session.model = model;
   persistSessions();
@@ -438,7 +442,7 @@ export function deleteSession(
   transport: Transport,
   scope: SessionScope = { kind: 'global' },
 ): void {
-  const key = sessionKey(userId, transport, scope);
+  const key = sessionKeyForScope(userId, transport, scope);
   const session = sessions.get(key);
   if (session) cleanupSession(session.sessionId);
   sessions.delete(key);
@@ -452,7 +456,7 @@ export function appendMessageToSession(
   text: string,
   scope: SessionScope = { kind: 'global' },
 ): void {
-  const session = sessions.get(sessionKey(userId, transport, scope));
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
   if (!session) return;
   if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
   session.messages.push({ role, text, ts: `${getTodayDate()} ${getTimestamp()}` });
@@ -464,7 +468,7 @@ export function getSessionMessages(
   transport: Transport,
   scope: SessionScope = { kind: 'global' },
 ): ConversationMessage[] {
-  return sessions.get(sessionKey(userId, transport, scope))?.messages ?? [];
+  return sessions.get(sessionKeyForScope(userId, transport, scope))?.messages ?? [];
 }
 
 export interface SessionEntry {
@@ -518,7 +522,7 @@ export function restoreSessions(): void {
       // these as 'telegram' since they predate the webview transport.
       let key: string;
       if (typeof rawKey === 'number') {
-        key = sessionKey(rawKey, 'telegram');
+        key = sessionKeyForScope(rawKey, 'telegram');
         migrated++;
       } else if (parseSessionKey(rawKey)) {
         key = rawKey;
