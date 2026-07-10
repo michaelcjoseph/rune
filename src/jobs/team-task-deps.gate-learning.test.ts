@@ -135,7 +135,7 @@ const task: SizedTask = {
   roles: ['qa', 'tech-lead', 'coder', 'reviewer'],
 };
 
-const openai: RoleModelBinding = { alias: 'gpt-5.5', provider: 'openai', format: 'codex' };
+const openai: RoleModelBinding = { alias: 'gpt-5.6-sol', provider: 'openai', format: 'codex' };
 const anthropic: RoleModelBinding = { alias: 'opus', provider: 'anthropic', format: 'claude' };
 
 const models: TeamRoleModels = {

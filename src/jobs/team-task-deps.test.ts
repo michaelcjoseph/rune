@@ -8,9 +8,11 @@
  *     stub), with coder/reviewer resolving to DIFFERENT providers through the
  *     model-policy resolver — fail-closed to a block when only a
  *     same-provider model is available
- *   - `policies/model-policy.json` carries the Phase 8 model map:
- *     pm/tech-lead/reviewer/designer → `opus` (anthropic), qa/coder →
- *     `gpt-5.5` (openai)
+ *   - `policies/model-policy.json` carries the Phase 8 model map: the judgment
+ *     roles (pm/tech-lead/reviewer/designer) on anthropic via the Claude CLI,
+ *     the artifact roles (qa/coder) on openai via the Codex CLI. These tests
+ *     assert that shape, not the specific aliases filling each slot — swapping
+ *     a model is a policy-file edit, not a test change.
  *   - the orchestrated applier's production `runTaskWorkflow` calls through
  *     to `runTeamTaskWorkflow` — the "orchestrated role execution not yet
  *     wired" blocked path is gone and cannot reappear without failing here
@@ -38,7 +40,7 @@ import {
   __getRuntimeDepsForTest,
   __resetOrchestratedRuntimeForTest,
 } from './orchestrated-work-runner.js';
-import { parsePolicy, type ModelPolicy } from '../intent/model-policy.js';
+import { parsePolicy, type ModelEntry, type ModelPolicy } from '../intent/model-policy.js';
 import {
   runTeamTaskWorkflow,
   type FindingsLedgerEntry,
@@ -62,6 +64,18 @@ const REAL_POLICY_PATH = join(REPO_ROOT, 'policies', 'model-policy.json');
 
 function loadRealPolicy(): ModelPolicy {
   return parsePolicy(readFileSync(REAL_POLICY_PATH, 'utf8'));
+}
+
+/** The registry entry a role's declared default points at. Keeps these tests
+ *  pinned to the shape of the model map (provider, executor, capabilities)
+ *  rather than to whichever alias currently fills each slot — swapping a model
+ *  in the policy is data, not a test change. */
+function registryEntryForRole(policy: ModelPolicy, role: string): ModelEntry {
+  const alias = policy.roleDefaults[role];
+  expect(alias, `roleDefaults must declare a model for '${role}'`).toBeDefined();
+  const entry = policy.models.find((m) => m.alias === alias);
+  expect(entry, `roleDefaults['${role}'] = '${alias}' must be a registered model`).toBeDefined();
+  return entry!;
 }
 
 function makeSandbox(): SandboxSpec {
@@ -152,30 +166,40 @@ function buildDeps(
 // ---------------------------------------------------------------------------
 
 describe('model map — policies/model-policy.json (Phase 8)', () => {
-  it('registers both Phase 8 aliases: opus (anthropic/claude) and gpt-5.5 (openai/codex)', () => {
+  it('backs every product-team role with a registered model of the right provider and executor', () => {
     const policy = loadRealPolicy();
-    const opus = policy.models.find((m) => m.alias === 'opus');
-    const gpt = policy.models.find((m) => m.alias === 'gpt-5.5');
 
-    expect(opus).toBeDefined();
-    expect(opus?.provider).toBe('anthropic');
-    expect(opus?.format).toBe('claude');
+    // Judgment roles adjudicate on anthropic, through the Claude CLI.
+    for (const role of ['pm', 'tech-lead', 'reviewer', 'designer']) {
+      const entry = registryEntryForRole(policy, role);
+      expect(entry.provider, role).toBe('anthropic');
+      expect(entry.format, role).toBe('claude');
+    }
 
-    expect(gpt).toBeDefined();
-    expect(gpt?.provider).toBe('openai');
-    expect(gpt?.format).toBe('codex');
+    // Artifact roles produce code on openai, through the Codex CLI, and so must
+    // be coding-capable or the resolver's hard capability filter drops them.
+    for (const role of ['qa', 'coder']) {
+      const entry = registryEntryForRole(policy, role);
+      expect(entry.provider, role).toBe('openai');
+      expect(entry.format, role).toBe('codex');
+      expect(entry.capabilities, role).toContain('coding');
+    }
   });
 
-  it('resolves pm/tech-lead/reviewer/designer → opus and qa/coder → gpt-5.5 via roleDefaults', () => {
-    const models = resolveTeamRoleModels(loadRealPolicy());
+  it('resolves every role to the alias its roleDefaults entry declares', () => {
+    const policy = loadRealPolicy();
+    const models = resolveTeamRoleModels(policy);
+    const declared = policy.roleDefaults;
 
-    expect(models.pm).toMatchObject({ alias: 'opus', provider: 'anthropic' });
-    expect(models.techLead).toMatchObject({ alias: 'opus', provider: 'anthropic' });
-    expect(models.designer).toMatchObject({ alias: 'opus', provider: 'anthropic' });
-    expect(models.reviewer).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+    expect(models.pm).toMatchObject({ alias: declared['pm'], provider: 'anthropic' });
+    expect(models.techLead).toMatchObject({ alias: declared['tech-lead'], provider: 'anthropic' });
+    expect(models.designer).toMatchObject({ alias: declared['designer'], provider: 'anthropic' });
+    // The reviewer resolves to its declared default even under the
+    // distinct-from-coder-provider filter — it is not downgraded to a fallback.
+    expect(models.reviewer).toMatchObject({ alias: declared['reviewer'], provider: 'anthropic' });
 
-    expect(models.qa).toMatchObject({ alias: 'gpt-5.5', provider: 'openai' });
-    expect(models.coder).toMatchObject({ alias: 'gpt-5.5', provider: 'openai' });
+    expect(models.qa).toMatchObject({ alias: declared['qa'], provider: 'openai' });
+    expect(models.coder).toMatchObject({ alias: declared['coder'], provider: 'openai' });
   });
 
   it('coder and reviewer resolve to different providers (independence by construction)', () => {
@@ -406,8 +430,11 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(tl.approved).toBe(true);
 
     expect(calls.map((c) => c.role)).toEqual(['reviewer', 'tech-lead']);
-    // Judgment roles run on the policy-resolved opus binding.
-    expect(calls.every((c) => c.model === 'opus')).toBe(true);
+    // Judgment roles run on their policy-resolved anthropic bindings: reviewer → opus,
+    // tech-lead → fable. Both are anthropic/claude.
+    const byRole = new Map(calls.map((c) => [c.role, c]));
+    expect(byRole.get('reviewer')?.model).toBe('opus');
+    expect(byRole.get('tech-lead')?.model).toBe('fable');
     expect(calls.every((c) => c.provider === 'anthropic')).toBe(true);
     expect(calls.every((c) => c.format === 'claude')).toBe(true);
   });
@@ -420,7 +447,8 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       if (selfReviewEcho !== undefined) return selfReviewEcho;
       return GREEN_JUDGMENT_REPLY;
     };
-    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({ judgmentCall: judgment }));
+    const policy = loadRealPolicy();
+    const deps = buildDeps(resolveTeamRoleModels(policy), makeSeams({ judgmentCall: judgment }));
 
     const evidence = await runTeamTaskWorkflow(
       sizedTask,
@@ -431,7 +459,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(evidence.outcome).toBe('ready-for-closeout');
     expect(calls).toContainEqual({
       role: 'coder',
-      model: 'gpt-5.5',
+      model: policy.roleDefaults['coder'],
       provider: 'openai',
       format: 'codex',
       selfReview: true,
@@ -1329,11 +1357,12 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
     expect(evidence.outcome).toBe('ready-for-closeout');
     const lines = events.filter((event) => typeof event.data?.['line'] === 'string');
     expect(lines.length).toBeGreaterThan(0);
+    const declared = loadRealPolicy().roleDefaults;
     const expectedByRole = new Map([
-      ['qa', { role: 'qa', provider: 'openai', model: 'gpt-5.5' }],
-      ['tech-lead', { role: 'tech-lead', provider: 'anthropic', model: 'opus' }],
-      ['coder', { role: 'coder', provider: 'openai', model: 'gpt-5.5' }],
-      ['reviewer', { role: 'reviewer', provider: 'anthropic', model: 'opus' }],
+      ['qa', { role: 'qa', provider: 'openai', model: declared['qa']! }],
+      ['tech-lead', { role: 'tech-lead', provider: 'anthropic', model: declared['tech-lead']! }],
+      ['coder', { role: 'coder', provider: 'openai', model: declared['coder']! }],
+      ['reviewer', { role: 'reviewer', provider: 'anthropic', model: declared['reviewer']! }],
     ]);
 
     for (const line of lines) {
@@ -1378,15 +1407,16 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       String(event.data?.['line'] ?? '').includes('executor progress'),
     );
     expect(executorLines).toHaveLength(2);
+    const declared = loadRealPolicy().roleDefaults;
     expectAttributedLine(executorLines[0]!, {
       role: 'qa',
       provider: 'openai',
-      model: 'gpt-5.5',
+      model: declared['qa']!,
     });
     expectAttributedLine(executorLines[1]!, {
       role: 'coder',
       provider: 'openai',
-      model: 'gpt-5.5',
+      model: declared['coder']!,
     });
   });
 
@@ -1424,11 +1454,13 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       String(event.data?.['line'] ?? '').includes('executor saw'),
     );
     expect(executorLines).toHaveLength(2);
+    const declared = loadRealPolicy().roleDefaults;
     for (const line of executorLines) {
+      const role = String(line.data?.['role']);
       expectAttributedLine(line, {
-        role: String(line.data?.['role']),
+        role,
         provider: 'openai',
-        model: 'gpt-5.5',
+        model: declared[role]!,
       });
       const displayLine = String(line.data?.['line']);
       expect(displayLine).not.toContain(rawSecret);
@@ -1731,7 +1763,7 @@ describe('techLeadRepairTests (production seam)', () => {
     expect(executions[0]?.prompt).toContain('the spec body');
     expect(executions[0]?.prompt).toContain('src/x.test.ts');
     expect(executions[0]?.systemPrompt).toContain('Edit ONLY test files');
-    expect(executions[0]?.model).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+    expect(executions[0]?.model).toMatchObject({ alias: 'fable', provider: 'anthropic' });
   });
 
   it('reverts a product-source write from the delta and proceeds with the surviving test patch', async () => {

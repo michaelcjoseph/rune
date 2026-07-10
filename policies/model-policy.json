@@ -2,13 +2,20 @@
   "_comment": "Declarative model selection policy for the intent layer (project 08). Data, not code — editing this file is not a deploy. Models are referenced by stable alias, never a pinned version ID. See docs/projects/08-intent-layer/spec.md (the 'Model selection policy' section) and src/intent/model-policy.ts.",
   "models": [
     {
-      "_comment": "Anthropic Opus 4.8 via the Claude CLI alias. Also the judgment-role model for the product-team workflow (project 14) — PM, tech lead, reviewer, designer — replacing the earlier Fable 5 binding.",
       "alias": "opus",
       "provider": "anthropic",
       "format": "claude",
       "capabilities": ["coding", "long-context", "deep-reasoning", "classify"],
       "costTier": "high",
       "status": "preferred"
+    },
+    {
+      "alias": "fable",
+      "provider": "anthropic",
+      "format": "claude",
+      "capabilities": ["coding", "long-context", "deep-reasoning", "classify"],
+      "costTier": "high",
+      "status": "active"
     },
     {
       "alias": "sonnet",
@@ -27,34 +34,33 @@
       "status": "active"
     },
     {
-      "_comment": "Codex executor for Layer 5 cross-model dispatch (project 08, A6.1). Provider openai; capability 'coding' to satisfy the Evaluator-role binding once roleDefaults.evaluator is set (A6.2) and the evaluatorDistinctFromGenerator constraint is flipped on (A6.3). Status 'preferred' marks Codex as the intended Evaluator on autonomous engine runs.",
-      "alias": "codex",
+      "alias": "gpt-5.6-sol",
       "provider": "openai",
       "format": "codex",
-      "capabilities": ["coding"],
-      "costTier": "medium",
+      "capabilities": ["coding", "long-context", "deep-reasoning", "classify"],
+      "costTier": "high",
       "status": "preferred"
     },
     {
-      "_comment": "Project 14 Phase 8: the artifact-role executor for the product-team workflow — QA test authoring and coder. OpenAI GPT-5.5 via the Codex CLI (`codex exec -m gpt-5.5`). Distinct provider from the reviewer's `opus` by construction (independence gate).",
-      "alias": "gpt-5.5",
+      "alias": "gpt-5.6-terra",
       "provider": "openai",
       "format": "codex",
-      "capabilities": ["coding", "long-context"],
+      "capabilities": ["coding", "classify"],
       "costTier": "high",
       "status": "preferred"
     }
   ],
   "globalFallback": "opus",
-  "_roleDefaults_comment": "Per-role default model alias. `evaluator: codex` (project 08, A6.2) makes the autonomous Evaluator pick a cross-provider model by default so cross-model adjudication is the policy-driven shape. The six product-team roles (project 14, Phase 8) bind per the spec's model table: judgment roles → opus (anthropic, Opus 4.8), artifact roles → gpt-5.5 (openai); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed).",
+  "_roleDefaults_comment": "Per-role default model alias. `evaluator` (project 08, A6.2) resolves to an openai model so the autonomous Evaluator adjudicates cross-provider by default; the resolver also takes `distinctFromProvider` at call time, so an openai generator pushes the evaluator back to the anthropic globalFallback. The six product-team roles (project 14, Phase 8): PM and tech lead → fable (anthropic, Fable 5), reviewer + designer → opus (anthropic, Opus 4.8), artifact roles → qa: gpt-5.6-terra, coder: gpt-5.6-sol (openai, via the Codex CLI); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed). `planning-critique` is the `/plan` cross-model critique pass — it must be a non-anthropic, coding-capable model because it runs through `runCodex` against a Claude-authored plan.",
   "roleDefaults": {
-    "evaluator": "codex",
-    "pm": "opus",
-    "tech-lead": "opus",
+    "evaluator": "gpt-5.6-terra",
+    "pm": "fable",
+    "tech-lead": "fable",
     "reviewer": "opus",
     "designer": "opus",
-    "qa": "gpt-5.5",
-    "coder": "gpt-5.5"
+    "qa": "gpt-5.6-terra",
+    "coder": "gpt-5.6-sol",
+    "planning-critique": "gpt-5.6-sol"
   },
   "evaluatorDistinctFromGenerator": true
 }

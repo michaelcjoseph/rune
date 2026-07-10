@@ -495,10 +495,10 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
   };
 
   const models = {
-    pm: binding('opus', 'anthropic', 'claude'),
-    techLead: binding('opus', 'anthropic', 'claude'),
-    qa: binding('gpt-5.5', 'openai', 'codex'),
-    coder: binding('gpt-5.5', 'openai', 'codex'),
+    pm: binding('fable', 'anthropic', 'claude'),
+    techLead: binding('fable', 'anthropic', 'claude'),
+    qa: binding('gpt-5.6-terra', 'openai', 'codex'),
+    coder: binding('gpt-5.6-sol', 'openai', 'codex'),
     reviewer: binding('opus', 'anthropic', 'claude'),
     designer: binding('opus', 'anthropic', 'claude'),
   };

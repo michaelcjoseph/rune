@@ -112,7 +112,7 @@ function makeSandbox(): SandboxSpec {
   } as SandboxSpec;
 }
 
-const coderModel: RoleModelBinding = { alias: 'gpt-5.5', provider: 'openai', format: 'codex' };
+const coderModel: RoleModelBinding = { alias: 'gpt-5.6-sol', provider: 'openai', format: 'codex' };
 const claudeModel: RoleModelBinding = { alias: 'opus', provider: 'anthropic', format: 'claude' };
 const protectedServiceRuntimePrompt = [
   '## Protected Localhost Services',
@@ -447,7 +447,7 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
     // The agent's textual output rides along for the QA-result parse.
     expect(result.output).toBe('task implemented');
     // The spawn received the resolved model + the worktree as cwd.
-    expect(seen).toEqual([{ alias: 'gpt-5.5', format: 'codex', cwd: repoDir }]);
+    expect(seen).toEqual([{ alias: 'gpt-5.6-sol', format: 'codex', cwd: repoDir }]);
   });
 
   it('returns an empty diff for a no-op task', async () => {

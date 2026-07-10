@@ -80,7 +80,7 @@ import {
 import type { GateRejectionFeedback } from '../intent/team-task-workflow.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
-const openai: RoleModelBinding = { alias: 'gpt-5.5', provider: 'openai', format: 'codex' };
+const openai: RoleModelBinding = { alias: 'gpt-5.6-sol', provider: 'openai', format: 'codex' };
 const anthropic: RoleModelBinding = { alias: 'opus', provider: 'anthropic', format: 'claude' };
 
 const models: TeamRoleModels = {

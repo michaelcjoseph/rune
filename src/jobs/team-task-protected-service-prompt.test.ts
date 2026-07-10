@@ -154,7 +154,8 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
     expect(judgmentPrompts.map((call) => call.role)).toEqual(
       expect.arrayContaining(['tech-lead', 'reviewer']),
     );
-    expect(judgmentPrompts.every((call) => call.model === 'opus')).toBe(true);
+    // Judgment roles run on anthropic Claude models: tech-lead → fable, reviewer → opus.
+    expect(judgmentPrompts.every((call) => ['opus', 'fable'].includes(call.model))).toBe(true);
 
     for (const call of artifactPrompts) {
       expect(call.systemPrompt).toContain('static role charter with no localhost listener safety rules');

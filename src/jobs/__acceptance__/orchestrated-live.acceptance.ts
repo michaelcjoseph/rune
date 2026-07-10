@@ -263,13 +263,13 @@ async function preflight(): Promise<void> {
   }
   log('preflight', `claude opus OK (reply: ${claudeRes.stdout.trim().slice(0, 40)})`);
 
-  // Codex side: the production probe (binary present AND logged in).
+  // Codex side: the production probe (binary present AND logged in). This probes
+  // the executor, not a specific model — the per-role model ids come from the
+  // policy at resolution time, so naming one here would only go stale.
   const { probeCodexProvider } = await import('../../ai/codex.js');
   const codex = await probeCodexProvider();
   if (!codex.available) {
-    throw new AcceptanceError(
-      `codex exec -m gpt-5.5 unavailable (resolved model id: gpt-5.5). reason: ${codex.reason}`,
-    );
+    throw new AcceptanceError(`codex exec unavailable. reason: ${codex.reason}`);
   }
   log('preflight', 'codex available (binary present + logged in)');
 }

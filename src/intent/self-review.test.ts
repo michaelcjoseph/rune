@@ -266,7 +266,7 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
         render: renderArtifact,
         parse: parseArtifact,
         modelCall,
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-sol',
         provider: 'openai',
       }),
     ).rejects.toThrow(/transport unavailable/);
@@ -278,12 +278,12 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
     expect(mockLogger.info).toHaveBeenCalledWith('self-review started', {
       role: 'tech-lead',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
       provider: 'openai',
     });
     expect(mockLogger.error).toHaveBeenCalledWith('self-review failed', {
       role: 'tech-lead',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
       provider: 'openai',
       error: 'transport unavailable at <project>/private.log',
     });

@@ -586,7 +586,45 @@ const defaultCritiqueClaudeCall = async (system: string, message: string): Promi
   }
 };
 
+/** Resolve the `/plan` cross-model critique model from the policy — never a
+ *  hardcoded alias. `distinctFromProvider: 'anthropic'` is a hard filter, not a
+ *  preference: this call goes to `runCodex` and exists to second-opinion a
+ *  Claude-authored plan, so a Claude model is both unrunnable here and
+ *  self-defeating. Returns null when no policy is present or the resolved model
+ *  is not Codex-executable — the caller degrades to the Claude-revised plan
+ *  rather than spawning an unintended model. */
+function resolveCritiqueCodexModel(): string | null {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  if (!policy) {
+    log.warn('planning critique (codex) skipped; no model policy to resolve a critique model from');
+    return null;
+  }
+  let resolution;
+  try {
+    resolution = resolveModel(
+      { role: 'planning-critique', capabilities: ['coding'], distinctFromProvider: 'anthropic' },
+      policy,
+    );
+  } catch (err) {
+    log.warn('planning critique (codex) skipped; no non-anthropic coding model resolved', {
+      error: (err as Error).message,
+    });
+    return null;
+  }
+  const entry = policy.models.find((candidate) => candidate.alias === resolution.model);
+  if (entry?.format !== 'codex') {
+    log.warn('planning critique (codex) skipped; resolved model is not Codex-executable', {
+      model: resolution.model,
+      format: entry?.format,
+    });
+    return null;
+  }
+  return resolution.model;
+}
+
 const defaultCritiqueCodexCall = async (message: string): Promise<string | null> => {
+  const model = resolveCritiqueCodexModel();
+  if (model === null) return null;
   // read-only sandbox: the critique only returns text, it never edits the repo.
   // Slim env (defense-in-depth): a text-only internal critique has no need for
   // Rune's Telegram/HTTP secrets — pass only what the Codex CLI itself needs.
@@ -597,7 +635,7 @@ const defaultCritiqueCodexCall = async (message: string): Promise<string | null>
   let result;
   try {
     result = await runCodex(message, {
-      model: 'gpt-5.5',
+      model,
       sandboxMode: 'read-only',
       env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
     });

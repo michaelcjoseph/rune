@@ -656,7 +656,7 @@ describe('planning-roles — tech-lead self-review in runDownstreamPlan (project
       calls.push('self-review');
       expect(input.role).toBe('tech-lead');
       expect(input).toMatchObject({
-        model: 'opus',
+        model: 'fable',
         provider: 'anthropic',
       });
       expect(input.artifact).toMatchObject({

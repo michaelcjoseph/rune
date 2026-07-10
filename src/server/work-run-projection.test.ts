@@ -182,8 +182,8 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
         data: {
           role: 'qa',
           provider: 'openai',
-          model: 'gpt-5.5',
-          line: 'qa | openai | gpt-5.5 | writing tests from the spec',
+          model: 'gpt-5.6-terra',
+          line: 'qa | openai | gpt-5.6-terra | writing tests from the spec',
         },
       },
       {
@@ -193,8 +193,8 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
         data: {
           role: 'coder',
           provider: 'openai',
-          model: 'gpt-5.5',
-          line: 'coder | openai | gpt-5.5 | wiring cockpit projection',
+          model: 'gpt-5.6-sol',
+          line: 'coder | openai | gpt-5.6-sol | wiring cockpit projection',
         },
       },
     ]);
@@ -208,8 +208,8 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
     expect(out['02-growth']!.outcome).toBeNull();
     expect(out['02-growth']!.transcriptUrl).toBe(`/api/work-runs/${id}/transcript`);
     expect(out['02-growth']!.lastOutput).toEqual([
-      'qa | openai | gpt-5.5 | writing tests from the spec',
-      'coder | openai | gpt-5.5 | wiring cockpit projection',
+      'qa | openai | gpt-5.6-terra | writing tests from the spec',
+      'coder | openai | gpt-5.6-sol | wiring cockpit projection',
     ]);
   });
 

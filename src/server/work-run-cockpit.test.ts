@@ -273,8 +273,8 @@ const ORCH_TRANSCRIPT_LINES = [
     data: {
       role: 'qa',
       provider: 'openai',
-      model: 'gpt-5.5',
-      line: 'qa | openai | gpt-5.5 | writing tests from the spec',
+      model: 'gpt-5.6-terra',
+      line: 'qa | openai | gpt-5.6-terra | writing tests from the spec',
     },
   }),
   JSON.stringify({
@@ -284,8 +284,8 @@ const ORCH_TRANSCRIPT_LINES = [
     data: {
       role: 'coder',
       provider: 'openai',
-      model: 'gpt-5.5',
-      line: 'coder | openai | gpt-5.5 | wiring cockpit projection',
+      model: 'gpt-5.6-sol',
+      line: 'coder | openai | gpt-5.6-sol | wiring cockpit projection',
     },
   }),
 ].join('\n') + '\n';
@@ -472,8 +472,8 @@ describe('GET /api/cockpit surfaces the work-run projection (§5.1)', () => {
     expect(project.workRun.outcome).toBeNull();
     expect(project.workRun.transcriptUrl).toBe(`/api/work-runs/${ORCH_RUN_ID}/transcript`);
     expect(project.workRun.lastOutput).toEqual([
-      'qa | openai | gpt-5.5 | writing tests from the spec',
-      'coder | openai | gpt-5.5 | wiring cockpit projection',
+      'qa | openai | gpt-5.6-terra | writing tests from the spec',
+      'coder | openai | gpt-5.6-sol | wiring cockpit projection',
     ]);
   });
 });

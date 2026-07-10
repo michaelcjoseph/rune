@@ -239,7 +239,7 @@ describe('planning-roles-wiring — PM assessment seam', () => {
     // SOUL (system-prompt authority) carried the PM charter — role independence.
     expect(seenSystem['pm']?.toLowerCase()).toContain('product manager');
     expect(seenBinding['pm']).toEqual({
-      model: 'opus',
+      model: 'fable',
       provider: 'anthropic',
       format: 'claude',
     });
@@ -304,7 +304,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     expect(systemPrompt).toContain('keys must be role slugs');
     expect(systemPrompt).toContain('values must be markdown');
     expect(seenBinding['tech-lead']).toEqual({
-      model: 'opus',
+      model: 'fable',
       provider: 'anthropic',
       format: 'claude',
     });
