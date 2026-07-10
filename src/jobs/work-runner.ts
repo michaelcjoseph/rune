@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
@@ -23,10 +23,9 @@ import { scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG, worktreePathFor, workBranchName, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
+import { findWorkProjectDir, resolveLiveWorkProject } from './work-project.js';
 
 const log = createLogger('work-runner');
-
-const PROJECTS_SUBDIR = join('docs', 'projects');
 
 // `workBranchName` moved to `src/intent/sandbox.ts` (the light sandbox-policy
 // module) so consumers like `work-run-release.ts` can reuse it without importing
@@ -179,31 +178,6 @@ const EMPTY_WORK_PRODUCT: WorkProductFacts = {
   transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
 };
 
-/** Find the absolute path for a project slug by scanning `<base>/docs/projects`.
- *  Used both during validate (against the live tree at PROJECT_ROOT) and during
- *  apply (against the run's worktree). Slug match is exact, or
- *  `<numeric-prefix>-<slug>` so "06-webview" can be referenced as "webview". */
-function findProjectDir(slug: string, base: string): string | null {
-  const projectsDir = join(base, PROJECTS_SUBDIR);
-  let names: string[];
-  try {
-    names = readdirSync(projectsDir) as string[];
-  } catch {
-    return null;
-  }
-  for (const name of names) {
-    try {
-      if (!statSync(join(projectsDir, name)).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (name === slug || name.endsWith(`-${slug}`)) {
-      return join(projectsDir, name);
-    }
-  }
-  return null;
-}
-
 type WorkRunPayload = {
   projectSlug: string;
   /**
@@ -237,13 +211,14 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       return { ok: false, reason: `invalid product: ${payload.product}` };
     }
 
-    // Pre-flight against the live tree. The actual run reads from the
-    // worktree, but the worktree is created off the repo's HEAD which (for
-    // rune-on-rune) is the same commit the live tree is on.
-    const dir = findProjectDir(projectSlug, PROJECT_ROOT);
-    if (!dir) {
-      return { ok: false, reason: `project not found: ${projectSlug}` };
-    }
+    const project = resolveLiveWorkProject({
+      projectSlug,
+      product: payload.product,
+      productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+      fallbackRoot: PROJECT_ROOT,
+    });
+    if (!project.ok) return project;
+    const dir = project.projectDir;
     if (!existsSync(join(dir, 'spec.md'))) {
       return { ok: false, reason: `spec.md missing for project: ${projectSlug}` };
     }
@@ -285,6 +260,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // start while an orchestrated run owns that project's worktree.
         (h.descriptor.kind === 'work-run' || h.descriptor.kind === 'orchestrated-work') &&
         (h.descriptor.payload as WorkRunPayload).projectSlug === projectSlug &&
+        ((h.descriptor.payload as WorkRunPayload).product ?? 'rune') === product &&
         h.descriptor.status === 'running',
     );
     if (runningForSlug.length >= config.WORK_RUN_PER_PROJECT_CAP) {
@@ -380,7 +356,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         product,
       });
 
-      const dir = findProjectDir(projectSlug, sandbox.worktree);
+      const dir = findWorkProjectDir(projectSlug, sandbox.worktree);
       if (!dir) {
         yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}`, projectSlug });
         return;

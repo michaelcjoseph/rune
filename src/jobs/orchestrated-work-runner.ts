@@ -113,10 +113,9 @@ import {
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
+import { findWorkProjectDir, resolveLiveWorkProject } from './work-project.js';
 
 const log = createLogger('orchestrated-work-runner');
-
-const PROJECTS_SUBDIR = join('docs', 'projects');
 
 /** Per-task round cap (coder → review rounds inside one workflow run). */
 const ORCHESTRATED_ROUND_CAP = 3;
@@ -516,27 +515,6 @@ function refreshRegistryAfterLanding(
       error: (err as Error).message,
     });
   }
-}
-
-/** Find a project dir by slug under `<base>/docs/projects` (exact or
- *  `<numeric-prefix>-<slug>`), mirroring work-runner's resolver. */
-function findProjectDir(slug: string, base: string): string | null {
-  const projectsDir = join(base, PROJECTS_SUBDIR);
-  let names: string[];
-  try {
-    names = readdirSync(projectsDir) as string[];
-  } catch {
-    return null;
-  }
-  for (const name of names) {
-    try {
-      if (!statSync(join(projectsDir, name)).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (name === slug || name.endsWith(`-${slug}`)) return join(projectsDir, name);
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,18 +1168,26 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     if (payload.product !== undefined && !VALID_SLUG.test(payload.product)) {
       return { ok: false, reason: `invalid product: ${payload.product}` };
     }
-    const dir = findProjectDir(projectSlug, PROJECT_ROOT);
-    if (!dir) return { ok: false, reason: `project not found: ${projectSlug}` };
+    const project = resolveLiveWorkProject({
+      projectSlug,
+      product: payload.product,
+      productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+      fallbackRoot: PROJECT_ROOT,
+    });
+    if (!project.ok) return project;
+    const dir = project.projectDir;
     if (!existsSync(join(dir, 'spec.md'))) {
       return { ok: false, reason: `spec.md missing for project: ${projectSlug}` };
     }
     // Per-project + global concurrency caps (shared with the legacy work-run
     // applier — the two never run the same project concurrently because they
     // share the deterministic per-project worktree path).
+    const product = payload.product ?? 'rune';
     const runningForSlug = [...activeRuns.values()].filter(
       (h) =>
         (h.descriptor.kind === 'orchestrated-work' || h.descriptor.kind === 'work-run') &&
         (h.descriptor.payload as OrchestratedWorkPayload).projectSlug === projectSlug &&
+        ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'rune') === product &&
         h.descriptor.status === 'running',
     );
     if (runningForSlug.length >= config.WORK_RUN_PER_PROJECT_CAP) {
@@ -1299,7 +1285,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         return;
       }
 
-      const projectDir = findProjectDir(projectSlug, sandbox.worktree);
+      const projectDir = findWorkProjectDir(projectSlug, sandbox.worktree);
       if (!projectDir) {
         const terminal = term(descriptor.id, 'failed', {
           reason: `project not found in worktree: ${projectSlug}`,

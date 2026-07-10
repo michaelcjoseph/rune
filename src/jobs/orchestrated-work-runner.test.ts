@@ -318,6 +318,55 @@ describe('orchestratedWorkApplier', () => {
       const r = orchestratedWorkApplier.validate({ projectSlug: 'demo', product: '../x' } as never);
       expect(r.ok).toBe(false);
     });
+
+    it('resolves an external product outside PROJECT_ROOT and scopes its concurrency cap by product', () => {
+      const root = mkdtempSync(join(tmpdir(), 'orch-validate-external-'));
+      const repo = join(root, 'brand-repo');
+      const projectDir = join(repo, 'docs', 'projects', '01-brand');
+      const productsFile = join(root, 'products.json');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      mkdirSync(projectDir, { recursive: true });
+      writeFileSync(join(projectDir, 'spec.md'), '# Spec\n', 'utf8');
+      execFileSync('git', ['init', '-q', repo]);
+      writeFileSync(productsFile, JSON.stringify({
+        brand: { repoPath: repo, baseBranch: 'main' },
+      }), 'utf8');
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      activeRuns.clear();
+      activeRuns.set('aura-same-slug', {
+        descriptor: {
+          id: 'aura-same-slug',
+          kind: 'work-run',
+          payload: { projectSlug: '01-brand', product: 'aura' },
+          status: 'running',
+        },
+      } as never);
+
+      try {
+        expect(orchestratedWorkApplier.validate({
+          projectSlug: '01-brand',
+          product: 'brand',
+        })).toEqual({ ok: true });
+
+        activeRuns.set('brand-same-slug', {
+          descriptor: {
+            id: 'brand-same-slug',
+            kind: 'work-run',
+            payload: { projectSlug: '01-brand', product: 'brand' },
+            status: 'running',
+          },
+        } as never);
+        expect(orchestratedWorkApplier.validate({
+          projectSlug: '01-brand',
+          product: 'brand',
+        })).toEqual({ ok: false, reason: 'already running for 01-brand' });
+      } finally {
+        activeRuns.clear();
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('apply — maps OrchestrationResult to a terminal event', () => {

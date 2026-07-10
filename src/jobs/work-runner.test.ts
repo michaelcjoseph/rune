@@ -112,16 +112,20 @@ const mockDestroyWorktree = vi.fn();
 // would land on. Inert until that wiring imports it (hold mode never reads it).
 const mockGetProductConfig = vi.fn(() => ({
   product: 'rune',
-  repoPath: '/test/repo/rune',
+  repoPath: TEST_PROJECT_ROOT,
   baseBranch: 'main',
   egressAllowlist: [],
   validationCommands: ['npm run build', 'npm test'],
 }));
+const mockReadProductsConfig = vi.fn<
+  () => Record<string, ReturnType<typeof mockGetProductConfig>>
+>(() => ({ rune: mockGetProductConfig() }));
 vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
   getProductConfig: mockGetProductConfig,
+  readProductsConfig: mockReadProductsConfig,
 }));
 
 // --- Phase 3.5 (live gated-merge activation) test seams ---
@@ -260,13 +264,18 @@ function makeFakeChild(opts: {
  *  apply after createWorktree). The worktree's `docs/projects` lives under the
  *  fake sandbox path (FAKE_WORKTREE/docs/projects), so the test fixture must
  *  answer for paths under both roots. */
-function setupValidProject(slug: string = '06-webview', worktree: string = FAKE_WORKTREE) {
+function setupValidProject(
+  slug: string = '06-webview',
+  worktree: string = FAKE_WORKTREE,
+  liveRoot: string = TEST_PROJECT_ROOT,
+) {
   const dirName = slug;
-  const liveDir = join(PROJECTS_DIR, dirName);
+  const liveProjectsDir = join(liveRoot, 'docs', 'projects');
+  const liveDir = join(liveProjectsDir, dirName);
   const worktreeDir = join(worktree, 'docs', 'projects', dirName);
 
   mockReaddirSync.mockImplementation((p: string) => {
-    if (p === PROJECTS_DIR || p === join(worktree, 'docs', 'projects')) {
+    if (p === liveProjectsDir || p === join(worktree, 'docs', 'projects')) {
       return [dirName];
     }
     return [];
@@ -354,6 +363,14 @@ describe('workRunApplier', () => {
     // throw) before invoking apply.
     mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec());
     mockDestroyWorktree.mockImplementation(async () => {});
+    mockGetProductConfig.mockReturnValue({
+      product: 'rune',
+      repoPath: TEST_PROJECT_ROOT,
+      baseBranch: 'main',
+      egressAllowlist: [],
+      validationCommands: ['npm run build', 'npm test'],
+    });
+    mockReadProductsConfig.mockImplementation(() => ({ rune: mockGetProductConfig() }));
 
     // Inject the Phase 2 classification + persist seam with test doubles:
     //  - git stub returns empty for every command → a clean exit-0 run
@@ -463,6 +480,48 @@ describe('workRunApplier', () => {
 
       const result = workRunApplier.validate({ projectSlug: '06-webview' });
       expect(result.ok).toBe(true);
+    });
+
+    it('resolves an explicit external product from products config', () => {
+      const externalRoot = '/test/brand';
+      setupValidProject('06-webview', FAKE_WORKTREE, externalRoot);
+      mockReadProductsConfig.mockReturnValue({
+        brand: { ...mockGetProductConfig(), repoPath: externalRoot },
+      });
+
+      expect(workRunApplier.validate({ projectSlug: '06-webview', product: 'brand' })).toEqual({ ok: true });
+    });
+
+    it('returns safe distinct failures for unknown products and malformed config', () => {
+      setupValidProject('06-webview');
+      mockReadProductsConfig.mockReturnValueOnce({});
+      expect(workRunApplier.validate({ projectSlug: '06-webview', product: 'brand' })).toEqual({
+        ok: false,
+        reason: 'unknown product: brand',
+      });
+
+      mockReadProductsConfig.mockImplementationOnce(() => { throw new Error('/private/operator/products.json is malformed'); });
+      expect(workRunApplier.validate({ projectSlug: '06-webview', product: 'brand' })).toEqual({
+        ok: false,
+        reason: 'products config unavailable',
+      });
+    });
+
+    it('scopes the per-project cap by product and project slug', () => {
+      const externalRoot = '/test/brand';
+      setupValidProject('06-webview', FAKE_WORKTREE, externalRoot);
+      mockReadProductsConfig.mockReturnValue({
+        brand: { ...mockGetProductConfig(), repoPath: externalRoot },
+      });
+      mockActiveRuns.set('aura-run', {
+        descriptor: {
+          kind: 'orchestrated-work',
+          payload: { projectSlug: '06-webview', product: 'aura' },
+          status: 'running',
+        },
+      });
+
+      expect(workRunApplier.validate({ projectSlug: '06-webview', product: 'brand' })).toEqual({ ok: true });
     });
 
     it('matches a project directory by slug suffix (e.g. "06-webview" matches dir "06-webview")', () => {
