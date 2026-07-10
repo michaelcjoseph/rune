@@ -14,7 +14,7 @@ A single Node.js process handles everything:
 - **MCP daemon** (localhost:3848) — standalone Streamable HTTP MCP service at `/mcp` plus daemon `/health`, with separate OAuth config/store so cockpit restarts do not drop Claude App MCP sessions.
 - **MCP watchdog** — a 60s main-process tick probes the daemon's `/health` + trailing metrics history and alerts via Telegram on daemon-down/degraded/error-spike/tool-failures (6h cooldown, one-time recovery notices); the cockpit's redesigned monitoring tab renders the same composed state via `GET /api/mcp/monitoring`. → `docs/architecture/subsystems.md`.
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` and emits bus frames; TG shows a "🤔 · /cancel" tracker, the webview a cancellable pill. → `docs/architecture/subsystems.md`.
-- **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
+- **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`, `writingRunApplier` (`/blog`+`/writing-critique` writing runs). Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
 - **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`; full `/plan`→merged stage-by-stage map (agents/gates/criteria) → `docs/architecture/project-lifecycle.md`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 18-step nightly orchestrator, review nudges.
 - **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + PM-led planning conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
@@ -70,7 +70,8 @@ One file per command in `src/bot/commands/`. Free-form messages are classified a
 | `/ingest`, `/seed`, `/library-sync` | Enqueue a vault file / bulk-seed KB / sync Lenny posts+podcasts |
 | `/status`, `/cancel [opId]` | System health / SIGTERM an in-flight op |
 | `/prep`, `/priorities` | Morning prep / review-set daily priorities |
-| `/daily`…`/yearly`, `/health`, `/blog` | Interview-based review + drafting sessions |
+| `/daily`…`/yearly`, `/health` | Interview-based review sessions |
+| `/blog <topic>`, `/writing-critique [--revise] <target>` | Dispatch a writing-product run (draft → critique → revise → commit on `rune-writing/{slug}` of the `writing` product) / critique an existing draft |
 | `/plan [product]`, `/approve` | Start a PM-led scoping conversation → approve the PM spec / run downstream planning + scaffold |
 | `/cancel-review`, `/active-context` | Cancel an in-progress review / show active orchestration context |
 | `/workout [home\|gym]`, `/done-workout` | Generate a tailored workout / log it to the journal |
