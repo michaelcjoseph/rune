@@ -24,6 +24,7 @@ import {
 } from './jobs/orchestrated-work-runner.js';
 import { workRunReleaseApplier } from './jobs/work-run-release.js';
 import { workRunAnswerApplier } from './jobs/work-run-answer.js';
+import { writingRunApplier } from './jobs/writing-run-runner.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSessions } from './reviews/planning.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
@@ -169,6 +170,7 @@ registerApplier(genEvalLoopApplier);
 registerApplier(orchestratedWorkApplier);
 registerApplier(workRunReleaseApplier);
 registerApplier(workRunAnswerApplier);
+registerApplier(writingRunApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;
