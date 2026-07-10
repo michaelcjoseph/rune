@@ -26,7 +26,7 @@ its `spec.md`.
 | [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 | [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Done | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
-| [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Not Started | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
+| [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Done | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
 | [22-fix-run-dispatch](22-fix-run-dispatch/spec.md) | Not Started | Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff, reconciling to a readable terminal in the cockpit. |
 ---
 
@@ -413,7 +413,7 @@ Removes the lossy Planner→PM brief handoff and the block-for-interview bounce:
 - **Fix-it self-review:** a reusable `runSelfReview<A>` primitive gives PM (spec), Tech Lead (tech-spec + tasks), and Coder (code diff) one cold fix-pass each — corrected-or-confirmed artifact, no loop, no new gate.
 - **Task breakdown & test plan:** see [tasks.md](20-pm-scoping-self-review/tasks.md) and [test-plan.md](20-pm-scoping-self-review/test-plan.md). Test-first per phase.
 
-## 21-parallel-product-chats — Not Started
+## 21-parallel-product-chats — Done
 
 [Spec](21-parallel-product-chats/spec.md)
 
