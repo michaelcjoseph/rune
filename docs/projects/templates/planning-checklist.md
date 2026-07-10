@@ -288,6 +288,42 @@ Lesson 5 for the full forensics.
 
 ---
 
+## 7. Type-widening tasks own their exhaustive consumers
+
+Adding a member to a matched type — a union, a discriminated union, or the
+`STATES`/`Set` that mirrors it — is **not a "type-layer only" change.** Under
+strict typecheck, every exhaustive `switch` (or mapper that leans on
+exhaustiveness and carries no `default`) that consumes the type stops
+compiling until it handles the new member. A task that widens the type
+implicitly owns all of those consumer sites.
+
+At decomposition time, for any task that widens a matched type:
+
+- Enumerate the exhaustive consumers in the same task — grep the type name;
+  the total `switch`es and mappers are the ones that will break.
+- Specify **safe, non-throwing** handling of the new members at each consumer
+  (a fail-closed placeholder is fine), plus a test that pins the consumer
+  does not throw on the new member.
+- If the *real* behavior for the new members belongs to a later phase, say so
+  explicitly and keep the placeholder provisional — but the consumer must
+  still compile and not crash in this task.
+- **Never** let the task read as "add to the union, no downstream changes."
+  That wording is self-contradictory when total consumers exist, and it
+  strands the run.
+
+**Failure mode this prevents:** 22-fix-run-dispatch Phase 1
+(`fix-attempt-terminal-states`) was written as "extend the `FixAttemptState`
+union … no transition wiring yet," implying no downstream work. But the
+exhaustive `switch (attempt.state)` in `src/server/backlog-actions.ts` has no
+`default`, so adding the three terminals broke `tsc`. The coder silenced it
+with a bare `default: throw` to stay buildable; QA rejected the diff at the
+`implementation-diff` gate (out-of-scope, untested control flow that turns an
+unrendered terminal into a cockpit crash), and the orchestrated run
+terminated with zero commits. The consumer-site handling was real work the
+task never named.
+
+---
+
 ## Quick checklist (copy into the PR or planning notes)
 
 - [ ] Every capability in the spec has a (pure core, runtime adapter,
@@ -308,3 +344,7 @@ Lesson 5 for the full forensics.
 - [ ] Every task that touches a surface with existing scaffolding
       (placeholder panel, count-only summary, stub button) names the
       specific behavior gap to close — not just "build X".
+- [ ] Every task that widens a matched type (union, discriminated union,
+      `STATES` set) enumerates its exhaustive consumers and tasks safe,
+      test-pinned, non-throwing handling of the new members — not "add to
+      the union, no downstream changes".

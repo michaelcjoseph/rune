@@ -19,7 +19,19 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
   `src/jobs/fix-attempt-store.ts` with the post-dispatch terminals `fixed` \| `failed` \|
   `parked-on-human` (the pre-dispatch `declined` already exists and is reused for guard
   policy-declines): add them to the `FixAttemptState` union, the `STATES` set, and
-  `parseFixAttempt` validation. No transition wiring yet.
+  `parseFixAttempt` validation (new terminals carry optional `reason`/`detail`; keep `runId`
+  required only where it already is). **This is not type-layer-only.** Extending the union
+  breaks every exhaustive consumer, and strict typecheck will not pass until they handle the
+  new members — so this task implicitly owns those consumer sites. The known consumer is the
+  exhaustive `switch (attempt.state)` in `src/server/backlog-actions.ts` (no `default`, relies
+  on exhaustiveness). Add an explicit `case` for each new terminal that maps to a **safe,
+  non-throwing placeholder** using an existing benign `FixActionState` shape. Do **not** paper
+  over the exhaustiveness error with a bare `default: throw` (an unrendered terminal must never
+  crash the backlog surface), and do **not** introduce new `FixActionState` members or real
+  labels here — those are Phase 3 (`cockpit-fix-terminal-surface`); keep the placeholder
+  obviously provisional. No transition wiring yet. QA pins: all three new states round-trip
+  through the parser, legacy `declined` still parses without `runId`, and the backlog-action
+  mapper returns a value (never throws) for each new terminal.
 
 ## Phase 2 — Dispatch
 
