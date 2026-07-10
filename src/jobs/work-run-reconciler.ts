@@ -12,6 +12,14 @@ const log = createLogger('work-run-reconciler');
 
 export const TERMINAL_WORK_RUN_RECONCILE_INTERVAL_MS = 60_000;
 
+/** Liveness-staleness age before the reconciler recovers a SUMMARY-LESS run
+ *  (`isPreSummaryRecoveryDue`): a crashed run whose child has shown no liveness
+ *  for this long is presumed dead and finalized. Kept at 2h and deliberately
+ *  DECOUPLED from `WORK_RUN_MAX_RUNTIME_MS` (the active-run ceiling, raised to
+ *  8h) — the two gate different things (dead-run cleanup vs a live run's time
+ *  budget), so raising the ceiling must not also slow this cleanup. */
+const PRESUMED_DEAD_STALE_MS = 2 * 60 * 60 * 1000;
+
 export interface TerminalWorkRunReconcilerDeps {
   supervisedRunsFile: string;
   workRunsDir: string;
@@ -336,7 +344,7 @@ export async function defaultTerminalWorkRunReconcilerDeps(): Promise<TerminalWo
       writeRecoveredTerminalMutation(descriptor, eventFromSummary(summary));
     },
     recoverPreSummaryRun: (run) => recoverStaleWorkRun(run),
-    preSummaryRecoveryStaleMs: config.WORK_RUN_MAX_RUNTIME_MS,
+    preSummaryRecoveryStaleMs: PRESUMED_DEAD_STALE_MS,
     hasActiveMutation: (id) => activeRuns.has(id),
     now: () => new Date().toISOString(),
   };

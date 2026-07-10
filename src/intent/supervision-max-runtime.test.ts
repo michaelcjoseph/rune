@@ -22,9 +22,9 @@ import {
 } from './supervision.js';
 
 const NOW = 1_700_000_000_000;
-// Equals config.WORK_RUN_MAX_RUNTIME_MS (7_200_000 ms / 2h). Inlined because
-// the constant isn't exported yet; the impl task should export it and switch
-// this to an import.
+// An arbitrary 2h ceiling used to exercise the PURE predicate; `planMaxRuntimeKills`
+// takes the ceiling as a parameter, so this fixture is independent of the config
+// default (which is 8h — see WORK_RUN_MAX_RUNTIME_MS).
 const MAX_RUNTIME_MS = 2 * 60 * 60 * 1000;
 const HEARTBEAT_MS = 5 * 60 * 1000;
 

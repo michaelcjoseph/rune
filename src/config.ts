@@ -351,13 +351,18 @@ const config = {
    *    before the backstop actuator escalates to cancel/reap/finalize (P2.7).
    *  - MAX_RUNTIME: hard ceiling after which a run is group-killed and finalized
    *    regardless of apparent liveness (P2.7) — the keep-alive ticker can't
-   *    defeat it.
+   *    defeat it. It is the ONLY total-elapsed backstop; the liveness/output
+   *    clocks are recency-based and can't catch an alive-and-active-but-endless
+   *    run. Default 8h: high enough not to cut a legitimately long orchestrated
+   *    run, low enough to still stop a true runaway overnight. Distinct from the
+   *    reconciler's presume-dead staleness (PRESUMED_DEAD_STALE_MS, decoupled so
+   *    raising this ceiling doesn't also slow dead-run cleanup).
    *  - GATE_COMMAND_TIMEOUT: per validation-command budget in the merge gate
    *    (P1.5); a timeout is a red gate result, not a wedge. */
   WORK_RUN_TERMINAL_DRAIN_MS: parseNumericEnv('WORK_RUN_TERMINAL_DRAIN_MS', 30_000, { min: 1, integer: true }),
   WORK_RUN_REAP_GRACE_MS: parseNumericEnv('WORK_RUN_REAP_GRACE_MS', 5_000, { min: 1, integer: true }),
   WORK_RUN_QUIET_CANCEL_AFTER_MS: parseNumericEnv('WORK_RUN_QUIET_CANCEL_AFTER_MS', 1_200_000, { min: 1, integer: true }),
-  WORK_RUN_MAX_RUNTIME_MS: parseNumericEnv('WORK_RUN_MAX_RUNTIME_MS', 7_200_000, { min: 1, integer: true }),
+  WORK_RUN_MAX_RUNTIME_MS: parseNumericEnv('WORK_RUN_MAX_RUNTIME_MS', 28_800_000, { min: 1, integer: true }),
   /** Project 13, Phase 1b — how long (ms) a parked (`blocked-on-human`) run may
    *  stay unreleased before the stall-check runner sends a ONE-TIME staleness
    *  nudge (never an auto-release; the worktree holds until a human releases it).
