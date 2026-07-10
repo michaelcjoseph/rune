@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.hoisted(() => vi.fn());
-const mockStartWritingProductRun = vi.hoisted(() => vi.fn());
+const mockHandleBlog = vi.hoisted(() => vi.fn());
 
 vi.mock('../../config.js', () => ({
   default: {
@@ -101,9 +101,9 @@ vi.mock('../../reviews/orchestrator.js', () => ({
   handleReviewMessage: vi.fn(),
   registerReviewHandler: vi.fn(),
 }));
-vi.mock('../../jobs/writing-product-orchestration.js', () => ({
-  startWritingProductRun: mockStartWritingProductRun,
-}));
+// handleBlog is mocked like the other command modules — its own unit suite
+// (blog.test.ts) pins the createMutation('writing', …) dispatch it performs.
+vi.mock('../commands/blog.js', () => ({ handleBlog: mockHandleBlog }));
 vi.mock('../../study/sr-session.js', () => ({
   hasActiveSRSession: vi.fn(() => false),
   handleSRMessage: vi.fn(),
@@ -513,19 +513,14 @@ describe('text handler routing', () => {
     expect(handleSyllabus).not.toHaveBeenCalled();
   });
 
-  it('routes /blog to the writing-product pipeline entry point, not the legacy review flow', async () => {
-    mockStartWritingProductRun.mockResolvedValue(undefined);
+  it('routes /blog to the writing-product command handler, not the legacy review flow', async () => {
+    mockHandleBlog.mockResolvedValue(undefined);
     const sender = mockSender();
 
     await handleTextMessage(sender, msg('/blog operating from memory'));
 
-    expect(mockStartWritingProductRun).toHaveBeenCalledOnce();
-    expect(mockStartWritingProductRun).toHaveBeenCalledWith({
-      command: 'blog',
-      chatId: 100,
-      topic: 'operating from memory',
-      sender,
-    });
+    expect(mockHandleBlog).toHaveBeenCalledOnce();
+    expect(mockHandleBlog).toHaveBeenCalledWith(sender, 100, 'operating from memory');
     expect(mockStartReview).not.toHaveBeenCalled();
   });
 
@@ -551,7 +546,7 @@ describe('text handler routing', () => {
 
     await handleTextMessage(mockSender(), msg(command));
 
-    expect(mockStartWritingProductRun).not.toHaveBeenCalled();
+    expect(mockHandleBlog).not.toHaveBeenCalled();
     expect(handleWritingCritique).not.toHaveBeenCalled();
     expect(mockClassify).not.toHaveBeenCalled();
     expect(askMock).toHaveBeenCalledWith(command, 'unknown-slash-sess', expect.any(String), {
