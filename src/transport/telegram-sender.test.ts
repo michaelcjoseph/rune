@@ -477,6 +477,65 @@ describe('TelegramSender', () => {
       expect(mockSendLongMessage).not.toHaveBeenCalled();
     });
 
+    // --- Writing-run terminals (/blog, /writing-critique) ---
+    function writingEvent(subKind: 'completed' | 'failed', data: Record<string, unknown>) {
+      return {
+        kind: 'mutation-event' as const,
+        mutationId: 'wrt12345-6789-90ab-cdef-1234567890ab',
+        mutationKind: 'writing',
+        subKind,
+        ts: new Date().toISOString(),
+        data,
+        userId: 123,
+      } as any;
+    }
+
+    it('a committed /blog writing terminal renders branch, short sha, and route — never "/work --auto finished"', async () => {
+      sender.onMutationEvent(writingEvent('completed', {
+        command: 'blog',
+        topic: 'operating from memory',
+        slug: 'operating-from-memory',
+        branch: 'rune-writing/operating-from-memory',
+        commitSha: 'abc1234567890def',
+        routePath: '/rune/operating-from-memory',
+        outcome: 'branch-complete',
+      }));
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('✍️ /blog "operating from memory" committed');
+      expect(text).toContain('rune-writing/operating-from-memory @ abc1234');
+      expect(text).toContain('/rune/operating-from-memory');
+      expect(text).not.toMatch(/\/work --auto/);
+    });
+
+    it('a committed /writing-critique terminal surfaces the critique output path', async () => {
+      sender.onMutationEvent(writingEvent('completed', {
+        command: 'writing-critique',
+        critiqueTarget: 'docs/rune/Operating From Memory.md',
+        branch: 'rune-writing/operating-from-memory',
+        commitSha: 'abc1234567890def',
+        outputPath: 'docs/rune/critiques/operating-from-memory.md',
+        outcome: 'branch-complete',
+      }));
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('/writing-critique');
+      expect(text).toContain('docs/rune/critiques/operating-from-memory.md');
+    });
+
+    it('a failed writing terminal renders the reason', async () => {
+      sender.onMutationEvent(writingEvent('failed', {
+        command: 'blog',
+        topic: 'operating from memory',
+        reason: 'writing pipeline failed at draft: model call failed',
+      }));
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('💥 writing run "operating from memory" failed');
+      expect(text).toContain('failed at draft');
+      expect(text).not.toMatch(/\/work --auto/);
+    });
+
     // --- Project 13, Phase 1a: run-start notification delivery ---
     /** Build a work-run `start` BusMutationEvent (project 13). */
     function workRunStart(data: Record<string, unknown>) {

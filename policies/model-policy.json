@@ -51,7 +51,7 @@
     }
   ],
   "globalFallback": "opus",
-  "_roleDefaults_comment": "Per-role default model alias. `evaluator` (project 08, A6.2) resolves to an openai model so the autonomous Evaluator adjudicates cross-provider by default; the resolver also takes `distinctFromProvider` at call time, so an openai generator pushes the evaluator back to the anthropic globalFallback. The six product-team roles (project 14, Phase 8): PM and tech lead → fable (anthropic, Fable 5), reviewer + designer → opus (anthropic, Opus 4.8), artifact roles → qa: gpt-5.6-terra, coder: gpt-5.6-sol (openai, via the Codex CLI); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed). `planning-critique` is the `/plan` cross-model critique pass — it must be a non-anthropic, coding-capable model because it runs through `runCodex` against a Claude-authored plan.",
+  "_roleDefaults_comment": "Per-role default model alias. `evaluator` (project 08, A6.2) resolves to an openai model so the autonomous Evaluator adjudicates cross-provider by default; the resolver also takes `distinctFromProvider` at call time, so an openai generator pushes the evaluator back to the anthropic globalFallback. The six product-team roles (project 14, Phase 8): PM and tech lead → fable (anthropic, Fable 5), reviewer + designer → opus (anthropic, Opus 4.8), artifact roles → qa: gpt-5.6-terra, coder: gpt-5.6-sol (openai, via the Codex CLI); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed). `planning-critique` is the `/plan` cross-model critique pass — it must be a non-anthropic, coding-capable model because it runs through `runCodex` against a Claude-authored plan. `writer` drives the writing pipeline's plan/draft/critique/revise one-shots (SOUL + voice prose) — must stay claude-format (the calls go through the Claude CLI; writing-run-deps falls back to ONESHOT_MODEL otherwise).",
   "roleDefaults": {
     "evaluator": "gpt-5.6-terra",
     "pm": "fable",
@@ -60,7 +60,8 @@
     "designer": "opus",
     "qa": "gpt-5.6-terra",
     "coder": "gpt-5.6-sol",
-    "planning-critique": "gpt-5.6-sol"
+    "planning-critique": "gpt-5.6-sol",
+    "writer": "opus"
   },
   "evaluatorDistinctFromGenerator": true
 }

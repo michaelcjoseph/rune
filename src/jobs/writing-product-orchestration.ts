@@ -1,3 +1,5 @@
+import { writingBranchName } from '../intent/sandbox.js';
+
 export type WritingProductSurfaceState =
   | 'researching'
   | 'drafting'
@@ -76,7 +78,6 @@ export type StartWritingProductRunInput =
     command: 'blog';
     chatId: number;
     topic: string;
-    sender: unknown;
   }
   | {
     command: 'writing-critique';
@@ -84,7 +85,6 @@ export type StartWritingProductRunInput =
     target: string;
     outputPath: string;
     revisionRequested?: boolean;
-    sender: unknown;
   };
 
 export interface StartWritingProductRunDeps {
@@ -135,7 +135,7 @@ export function planWritingProductRun(input: { topic: string }): WritingProductR
     product: 'writing',
     topic,
     slug,
-    branch: `rune-writing/${slug}`,
+    branch: writingBranchName(slug),
     routePaths: ['/rune', `/rune/${slug}`],
     migration: {
       ideas: {

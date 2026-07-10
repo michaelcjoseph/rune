@@ -43,16 +43,23 @@ type WritingPipelineDeps = {
   writeArtifact: (path: string, content: string) => Promise<void>;
   commitArtifact: (input: { branch: string; paths: string[]; message: string }) => Promise<{ sha: string }>;
   emitRunState: (event: WritingPipelineEvent) => void;
+  readArtifact?: (path: string) => Promise<string>;
   directPkms?: {
     readFile: (path: string) => Promise<string>;
     writeFile: (path: string, content: string) => Promise<void>;
   };
 };
 
+type RunWritingPipelineInput = {
+  topic: string;
+  requestedBy: 'blog' | 'writing-critique';
+  critique?: { slug: string; outputPath: string; revisionRequested: boolean };
+};
+
 async function requireWritingPipeline(): Promise<{
   WRITING_PIPELINE_STATES: readonly WritingPipelineState[];
   runWritingPipeline: (
-    input: { topic: string; requestedBy: 'blog' | 'writing-critique' },
+    input: RunWritingPipelineInput,
     deps: WritingPipelineDeps,
   ) => Promise<WritingPipelineResult>;
 }> {
@@ -66,7 +73,7 @@ async function requireWritingPipeline(): Promise<{
       return {
         WRITING_PIPELINE_STATES: mod.WRITING_PIPELINE_STATES as readonly WritingPipelineState[],
         runWritingPipeline: mod.runWritingPipeline as (
-          input: { topic: string; requestedBy: 'blog' | 'writing-critique' },
+          input: RunWritingPipelineInput,
           deps: WritingPipelineDeps,
         ) => Promise<WritingPipelineResult>,
       };
@@ -334,6 +341,204 @@ describe('writing-pipeline-core', () => {
       state: 'failed',
       failed: true,
     });
+  });
+
+  it('critique mode: critiques the EXISTING artifact under the pre-derived slug and commits only the critique file', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const existingArtifact = '# Operating from memory\n\nThe committed draft under review.';
+    const readArtifact = vi.fn(async () => existingArtifact);
+    const { deps, events, writes, commits } = makeDeps({ readArtifact });
+
+    // The raw critique target is path-shaped — slugifying it would fork the
+    // branch (docs-rune-operating-from-memory). The pre-derived critique.slug
+    // must win so critique commits land on the SAME rune-writing/{slug} branch
+    // as the original draft (project-19 spec §W4).
+    const result = await runWritingPipeline(
+      {
+        topic: 'docs/rune/Operating From Memory.md',
+        requestedBy: 'writing-critique',
+        critique: {
+          slug: 'operating-from-memory',
+          outputPath: 'docs/rune/critiques/operating-from-memory.md',
+          revisionRequested: false,
+        },
+      },
+      deps,
+    );
+
+    // No drafting/revising — critique-only is a subsequence of the canonical order.
+    expect(events.map((event) => event.state)).toEqual([
+      'researching',
+      'critiquing',
+      'ready-for-review',
+      'committed',
+    ]);
+    expect(readArtifact).toHaveBeenCalledWith('docs/rune/operating-from-memory.md');
+    // The critique model judges the EXISTING artifact, not a fresh draft.
+    expect(deps.model.critique).toHaveBeenCalledWith(
+      expect.objectContaining({ markdown: existingArtifact }),
+    );
+    expect(deps.model.plan).not.toHaveBeenCalled();
+    expect(deps.model.draft).not.toHaveBeenCalled();
+    expect(deps.model.revise).not.toHaveBeenCalled();
+    expect(writes).toEqual([
+      expect.objectContaining({ path: 'docs/rune/critiques/operating-from-memory.md' }),
+    ]);
+    expect(commits).toEqual([
+      {
+        branch: 'rune-writing/operating-from-memory',
+        paths: ['docs/rune/critiques/operating-from-memory.md'],
+        message: 'Critique writing page: docs/rune/Operating From Memory.md',
+      },
+    ]);
+    expect(result).toMatchObject({
+      slug: 'operating-from-memory',
+      branch: 'rune-writing/operating-from-memory',
+      state: 'committed',
+      committed: true,
+      commitSha: 'abc1234',
+    });
+  });
+
+  it('critique mode with revision: revises the artifact and commits critique + artifact on the same branch', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const readArtifact = vi.fn(async () => '# Existing\n\nDraft to revise.');
+    const { deps, events, writes, commits } = makeDeps({ readArtifact });
+
+    const result = await runWritingPipeline(
+      {
+        topic: 'operating-from-memory',
+        requestedBy: 'writing-critique',
+        critique: {
+          slug: 'operating-from-memory',
+          outputPath: 'docs/rune/critiques/operating-from-memory.md',
+          revisionRequested: true,
+        },
+      },
+      deps,
+    );
+
+    expect(events.map((event) => event.state)).toEqual([
+      'researching',
+      'critiquing',
+      'revising',
+      'ready-for-review',
+      'committed',
+    ]);
+    // The revise call gets the existing artifact plus the critique notes.
+    expect(deps.model.revise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        markdown: '# Existing\n\nDraft to revise.',
+        critique: 'Make the thesis more concrete.',
+      }),
+    );
+    expect(writes.map((w) => w.path)).toEqual([
+      'docs/rune/critiques/operating-from-memory.md',
+      'docs/rune/operating-from-memory.md',
+    ]);
+    expect(commits).toEqual([
+      {
+        branch: 'rune-writing/operating-from-memory',
+        paths: [
+          'docs/rune/critiques/operating-from-memory.md',
+          'docs/rune/operating-from-memory.md',
+        ],
+        message: 'Revise writing page: operating-from-memory',
+      },
+    ]);
+    expect(result).toMatchObject({ state: 'committed', committed: true });
+  });
+
+  it('critique mode fails honestly when no readArtifact dep is provided (critique targets an EXISTING draft)', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const { deps, events, writes, commits } = makeDeps(); // no readArtifact
+
+    const result = await runWritingPipeline(
+      {
+        topic: 'operating-from-memory',
+        requestedBy: 'writing-critique',
+        critique: {
+          slug: 'operating-from-memory',
+          outputPath: 'docs/rune/critiques/operating-from-memory.md',
+          revisionRequested: false,
+        },
+      },
+      deps,
+    );
+
+    expect(events.map((event) => event.state)).toEqual(['researching', 'failed']);
+    expect(writes).toEqual([]);
+    expect(commits).toEqual([]);
+    expect(result).toMatchObject({ state: 'failed', failed: true });
+  });
+
+  it('critique mode fails when the existing artifact cannot be read', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const readArtifact = vi.fn(async () => {
+      throw new Error('ENOENT: no draft on this branch');
+    });
+    const { deps, commits } = makeDeps({ readArtifact });
+
+    const result = await runWritingPipeline(
+      {
+        topic: 'operating-from-memory',
+        requestedBy: 'writing-critique',
+        critique: {
+          slug: 'operating-from-memory',
+          outputPath: 'docs/rune/critiques/operating-from-memory.md',
+          revisionRequested: false,
+        },
+      },
+      deps,
+    );
+
+    expect(commits).toEqual([]);
+    expect(result).toMatchObject({ state: 'failed', failed: true });
+  });
+
+  it('critique mode strips planted private research markers from the committed critique notes', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const readArtifact = vi.fn(async () => '# Existing\n\nDraft.');
+    const { deps, writes } = makeDeps({
+      readArtifact,
+      mcp: {
+        callTool: vi.fn(async (name: string) => {
+          if (name === 'journal_range') {
+            return { entries: [`personal raw marker: ${PLANTED_PRIVATE_MARKER}`, RAW_JOURNAL_EXCERPT] };
+          }
+          return { results: [] };
+        }),
+      },
+      model: {
+        plan: vi.fn(async () => ({ outline: 'outline' })),
+        draft: vi.fn(async () => ({ markdown: 'draft' })),
+        // A leaky critique model quotes the private research verbatim.
+        critique: vi.fn(async () => ({
+          notes: `Sharpen the hook.\n${PLANTED_PRIVATE_MARKER}\n${RAW_JOURNAL_EXCERPT}\nTighten the close.`,
+        })),
+        revise: vi.fn(async () => ({ markdown: 'unused' })),
+      },
+    });
+
+    const result = await runWritingPipeline(
+      {
+        topic: 'operating-from-memory',
+        requestedBy: 'writing-critique',
+        critique: {
+          slug: 'operating-from-memory',
+          outputPath: 'docs/rune/critiques/operating-from-memory.md',
+          revisionRequested: false,
+        },
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({ state: 'committed', committed: true });
+    const committedNotes = writes.find((w) => w.path.startsWith('docs/rune/critiques/'))?.content ?? '';
+    expect(committedNotes).toContain('Sharpen the hook.');
+    expect(committedNotes).toContain('Tighten the close.');
+    expect(committedNotes).not.toContain(PLANTED_PRIVATE_MARKER);
+    expect(committedNotes).not.toContain('therapy sleep score was 47');
   });
 
   it('does not import direct vault/pkms file access in the pipeline module', () => {

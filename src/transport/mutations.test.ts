@@ -42,6 +42,7 @@ const {
   activeRuns,
   writeRecoveredTerminalMutation,
   setMutationShutdownInProgress,
+  setMutationBus,
 } = await import('./mutations.ts' as string);
 
 // --- Helpers ---
@@ -208,6 +209,40 @@ describe('mutations', () => {
       const result = await createMutation('work-run', { projectSlug: '06-webview' }, 'webview');
       expect(result.ok).toBe(true);
       expect((result as any).descriptor.target.ref).toBe('06-webview');
+    });
+
+    it("forwards a 'writing' applier's events to the run feed (state + log frames)", async () => {
+      // publishDerivedRunEvent is kind-gated; the writing engine's cockpit
+      // visibility depends on 'writing' passing that gate like work-run does.
+      const published: any[] = [];
+      setMutationBus({ publish: (e: any) => published.push(e) } as any);
+      try {
+        async function* writingGen(): AsyncIterable<any> {
+          const ts = new Date().toISOString();
+          yield { mutationId: 'w', ts, kind: 'start', data: { slug: 't' } };
+          yield { mutationId: 'w', ts, kind: 'output', data: { line: 'writing: drafting' } };
+          yield { mutationId: 'w', ts, kind: 'completed', data: { outcome: 'branch-complete' } };
+        }
+        registerApplier(makeApplier({
+          kind: 'writing',
+          autoApprove: true,
+          validateResult: { ok: true },
+          applyGen: writingGen(),
+        }));
+
+        await createMutation('writing', { product: 'writing', projectSlug: 't' }, 'cli');
+        await new Promise((r) => setTimeout(r, 20));
+
+        const runEvents = published.filter((e) => e.kind === 'run-event');
+        expect(runEvents.some((e) => e.subKind === 'state' && e.state === 'running')).toBe(true);
+        expect(runEvents.some((e) => e.subKind === 'log' && e.lines?.[0] === 'writing: drafting')).toBe(true);
+        expect(runEvents.some((e) => e.subKind === 'state' && e.state === 'completed' && e.outcome === 'completed')).toBe(true);
+        const anyRunEvent = runEvents[0];
+        expect(anyRunEvent.product).toBe('writing');
+        expect(anyRunEvent.target).toEqual({ kind: 'project', slug: 't' });
+      } finally {
+        setMutationBus(null);
+      }
     });
   });
 

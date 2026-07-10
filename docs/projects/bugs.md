@@ -1,6 +1,14 @@
 ## Active
 
-- [ ] ## Writing `/blog` and `/writing-critique` never invoke the pipeline — commands omit `deps`
+(empty)
+
+## Loop-filed
+
+(empty)
+
+## Done
+
+- [x] Writing `/blog` and `/writing-critique` never invoke the pipeline — commands omit `deps` _(Fixed 2026-07-10 — the seam is closed: both commands now dispatch through the mutation pipeline and the tested-but-unreachable engine runs in production. Four operator decisions (2026-07-09) shaped the build: dedicated `writing` MutationKind + applier (substrate reuse, not direct wiring, not forced through orchestrated-work); runtime target stays product `writing` (michaelcjoseph.com — the bug's "single-repo" scope constrains the FIX code to the rune repo, which held: zero site work bundled); model calls reconnect the orphaned project-12 writer machinery (SOUL on the system channel via a new `askClaudeOneShot` opts bag, memory fence on the user turn, voice flag, policy-resolved `writer` role → opus, ONESHOT_MODEL fallback for non-claude-format resolutions); both commands wired, with a minimal core critique mode. **What shipped:** `writingBranchName`/`writingSlugFromBranch` siblings in `src/intent/sandbox.ts` (literals deduped); core pipeline critique mode (`input.critique {slug, outputPath, revisionRequested}` + optional `readArtifact` dep — critiques the EXISTING `docs/rune/{slug}.md` into `docs/rune/critiques/{slug}.md`, optional revision, both committed on the draft's own branch; slug PRE-DERIVED by the caller so a path-shaped target can never fork the branch — a latent orchestrator/core slug divergence found during planning); `src/jobs/writing-run-deps.ts` — production `StartWritingProductRunDeps`: `createWorktree` on the writing product (`rune-writing/{slug}` create-or-resume), IN-PROCESS dispatch to the real `vault_search`/`journal_range`/`follow_wikilinks` handlers with input translation (the pipeline's call shapes predate the handlers: `{maxDays}` → `{startDate,endDate}`, `{query}` → `{text}`), writer one-shots per stage, containment-asserted artifact io, branch-verified git commit (the vault/writer commit helpers are main-only and untouched); every dep records its first failure and polls cancel at stage boundaries, and the deps-level adapter THROWS the recorded stage failure on a `failed` core result so the orchestrator's generic "did not commit" guard never masks the real reason (the core swallows stage errors by design). `src/jobs/writing-run-runner.ts` — `writingRunApplier` (kind `writing`, autoApprove): writing-repo preflight (missing checkout → friendly terminal), one-run-per-slug guard (shared worktree path), pipeline states bridged to run-feed log lines (`publishDerivedRunEvent` gate extended to `writing`), terminal `completed {outcome:'branch-complete', commitSha, routePath}` / `failed` (scrubbed), worktree destroyed in finally on success AND failure (committed work lives on the branch; a kept dirty tree would wedge the slug), and a load-bearing 30s keep-alive/activity ticker — the quiet→cancel backstop is NOT kind-gated and would system-reap a run silent inside a long one-shot model call. Commands ack immediately with branch + short id; `TelegramSender` gained a ✍️/💥 writing terminal formatter (the generic fallback read "✅ /work --auto finished"); `input.sender` (never read) dropped from the orchestration input; `KNOWN_MUTATION_KINDS` accepts `writing`. Safety verified during planning: `cleanupOrphanWorktrees` is registration-based and work-run GC prefix-guards `rune-work/` — a `rune-writing/` branch/worktree is never swept or force-deleted (flip side: nothing GCs abandoned writing branches — free refs, same accepted tradeoff as the GC fix). Covered by `writing-run-deps.test.ts` (MCP routing/translation, SOUL/voice/model wiring, fence unwrap, containment, adapter failed→throw, plus a REAL temp-git create/commit/resume integration test), `writing-run-runner.test.ts` (validate matrix, event order, scrubbed stage-attributed failures, cancel, destroy-always, preflight, slug guard, ticker), critique-mode + planted-private-marker-in-critique-notes tests in `writing-pipeline-core.test.ts`, run-feed gate pin in `mutations.test.ts`, TG formats in `telegram-sender.test.ts`, and rewritten command tests. Docs synced (`module-reference.md` — five new writing entries + stale blog.ts entries fixed, `subsystems.md` applier #6, CLAUDE.md mutation-pipeline bullet + command table). `npm run build` + full `npm test` (308 files / 5158 tests) green. Requires a Rune restart to register the applier. Live acceptance (the bug's own criteria + project-01 Phase A unblock): `/blog <topic>` from TG/cockpit → ack → `writing:` state lines in the run feed → ✍️ terminal with branch @ sha → `git -C ~/workspace/michaelcjoseph.com log rune-writing/<slug>` shows `Publish writing page: <topic>` touching only `docs/rune/<slug>.md`; the planted-private-marker sanitizer now guards a live path. Known limits: cancel is cooperative at stage boundaries (an in-flight model call runs to its own timeout); resume with an identical regenerated artifact fails clean as "no changes".)_
   - **Severity:** High
     - The live writing flow is a no-op.
     - Every user-facing entry point exists and looks wired, but `/blog <topic>`
@@ -13,7 +21,7 @@
     - Also the remaining blocker on michaelcjoseph.com's
       `01-rune-writing-product` project (its Phase A dependency).
 
-  ### Repro
+  - **Repro**
   - Trigger `/blog some-topic` from Telegram or the cockpit.
   - Observe, all absent:
     - No `rune-writing/some-topic` branch.
@@ -21,7 +29,7 @@
     - No state transitions in the run feed.
     - No message back to the user.
 
-  ### Root cause
+  - **Root cause**
   - `startWritingProductRun` is overloaded (`src/jobs/writing-product-orchestration.ts:182-190`):
     - `(input)` returns only a `WritingProductRunPlan`, early-returning at `:194`
       (`if (!deps) return plan;`).
@@ -44,7 +52,7 @@
     - Planted-marker negative test (`writing-pipeline-core.test.ts:212-299`).
     - Both guard a path that never executes in production.
 
-  ### Fix shape
+  - **Fix shape**
   - Build a production `StartWritingProductRunDeps`.
     - `createWritingWorktree`: real git worktree create-or-resume for
       `rune-writing/{slug}`.
@@ -79,7 +87,7 @@
     - Decide before implementing. The branch-prefix friction above is the one
       known cost of the reuse path, and it is cheaper than the reimplementation.
 
-  ### Acceptance
+  - **Acceptance**
   - `/blog <topic>` end to end:
     - Creates or resumes `rune-writing/{slug}`.
     - Drives states `researching → drafting → critiquing → revising →
@@ -90,19 +98,11 @@
   - The planted-private-marker negative test path executes in the live flow.
   - `createWritingWorktree` ships with a real implementation and a real test.
 
-  ### Scope
+  - **Scope**
   - Single-repo, product `rune`.
   - File and run as a rune-scoped bug or one-task project.
   - Do NOT bundle with michaelcjoseph.com site work.
     - That is the exact cross-repo failure that stranded project 19 Phase 6.
-
-
-## Loop-filed
-
-(empty)
-
-## Done
-
 - [x] Work-run GC force-deletes an incomplete project's `rune-work/<slug>` resume branch when its run dirs age out of the 3-run retention window — resurrecting the 2026-06-04 re-fork bug, so the next run re-forks off `main` and restarts the project from task 1. **(surfaced by the project-21 orchestrated run that restarted at task 1, 2026-07-08; systemic — work-run GC, not project-21-specific)** _(Fixed 2026-07-09 — shipped fix direction 1 (operator-decided: guard only; direction 2's project-state coupling deliberately not built — accepted tradeoff: an abandoned project's unmerged branch is never pruned, a leaked git ref, essentially free). Phase C of `gcWorkRuns` (`src/jobs/work-run-gc.ts`) now proves a branch merged before the `git branch -D`: `git rev-list --count <baseBranch>..<branch>` in the run's product repo, and anything short of a provable `0` keeps the ref — unmerged (`>0`), unparseable count, and errored rev-list all skip the prune with a `keeping unmerged work-run branch` / `unmerged check failed; keeping branch` warn log (fail-safe polarity: a kept ref is free, a deleted one re-forks the project from task 1; a nonexistent branch errors into the same skip — the old path's "branch prune failed" no-op, one step earlier). Base branches thread from product config via a new optional `GcWorkRunsOpts.productBaseBranches` (built in `work-run-gc-runner.ts` alongside `productRepos`; a missing entry defaults to `'main'`, matching `readProductsConfig`'s parse-time default); run summaries are deliberately NOT consulted — `baseBranch` is only stamped on merged terminals, absent in exactly the incomplete-run case the guard protects. Dir-retention caps and the retained-branch guard are unchanged — the new check is what makes the resume point durable once every run dir ages out. Covered by `work-run-gc.test.ts`: unmerged branch survives total age-out (the bug's pin — red before the fix), rev-list-error + unparseable-count fail-safes, per-product base-branch threading (`develop..` assertion) with `main` default, merged-branch prune preserved, plus a REAL temp-git integration test (`defaultRunGit` against an actual repo: an unmerged closeout commit survives a `maxRuns: 0` pass; after `git merge` the next pass prunes the ref). Docs synced (`module-reference.md` work-run-gc/gc-runner entries). `npm run build` + full `npm test` (306 files / 5104 tests) green. Live signal: the next GC pass over an aged-out incomplete project logs `keeping unmerged work-run branch` instead of issuing `branch -D`, and a resumed run continues from the branch tip instead of restarting at task 1. The upstream problem — project 21 repeatedly ending `dirty-uncommitted`/`failed` and never merging, which is what let its run count blow past the retention window — remains separate and open.)_
   - **Issue**
     - The `rune-work/<slug>` branch is a project's durable resume point: `createWorktree` resumes an existing branch (`git worktree add <path> <branch>`, no `-b`, `src/jobs/sandbox-runtime.ts:374-393`) so prior task closeouts survive across runs; only when the branch is absent does it take the FRESH path and cut a new one from `main`'s HEAD (`:394-421`), where `tasks.md` is all-unchecked. `selectNextTask` (`src/intent/orch-task-select.ts`) then returns the first unchecked `- [ ]`, i.e. task 1.
