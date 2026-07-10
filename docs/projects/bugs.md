@@ -1,16 +1,101 @@
 ## Active
 
-- [ ] Work-run GC force-deletes an incomplete project's `rune-work/<slug>` resume branch when its run dirs age out of the 3-run retention window — resurrecting the 2026-06-04 re-fork bug, so the next run re-forks off `main` and restarts the project from task 1. **(surfaced by the project-21 orchestrated run that restarted at task 1, 2026-07-08; systemic — work-run GC, not project-21-specific)**
-  - **Issue**
-    - The `rune-work/<slug>` branch is a project's durable resume point: `createWorktree` resumes an existing branch (`git worktree add <path> <branch>`, no `-b`, `src/jobs/sandbox-runtime.ts:374-393`) so prior task closeouts survive across runs; only when the branch is absent does it take the FRESH path and cut a new one from `main`'s HEAD (`:394-421`), where `tasks.md` is all-unchecked. `selectNextTask` (`src/intent/orch-task-select.ts`) then returns the first unchecked `- [ ]`, i.e. task 1.
-    - Work-run GC treats that durable branch as a disposable run artifact. `gcWorkRuns` (`src/jobs/work-run-gc.ts`) retains only the newest terminal run DIRS under GLOBAL caps — `WORK_RUN_RETENTION_MAX_RUNS = 3` / `WORK_RUN_RETENTION_MAX_BYTES = 200MB` (`src/config.ts:341-342`, passed at `work-run-gc-runner.ts:69-76`) — deletes the rest oldest-first, and force-deletes each pruned run's branch in Phase C (`git branch -D`, `work-run-gc.ts:252`). The caps are global across ALL products and projects, so a project's run dirs age out fast when other work interleaves.
-    - The existing GC guard (`work-run-gc.ts:210-233`) — added as the "GC guard" half of the 2026-06-04 re-fork fix (see the Done entry "`/work --auto` doesn't resume an interrupted project… re-forks a fresh branch off `main`") — is incomplete. It builds `retainedBranches` only from run dirs STILL ON DISK and skips deleting a branch a retained run references, so the branch is protected only while ≥1 of that project's run dirs survives the 3-run window. Its own comment names the failure it is meant to prevent ("re-introduce the re-fork bug in a new form"), but it has no notion that the branch is an incomplete project's live resume point: once every one of that project's run dirs ages out, the guard lapses and the branch is force-deleted with all its unmerged task closeouts. An incomplete project that needs many attempts (project 21 took 7+) is exactly the case that blows through a 3-run cap.
-    - The `-D` (force) is deliberate — run branches are "intentionally never merged into the checkout" — but that assumption is only safe for a COMPLETED project whose work already landed on `main`. For an in-flight project the branch carries real unmerged progress, so force-delete silently discards it.
-    - **Confirmed instance:** on `21-parallel-product-chats`, `logs/rune.log` at `2026-07-08T22:13:58.840Z` records `gcWorkRuns` issuing `git branch -D rune-work/21-parallel-product-chats` (tied to aged-out run `6f57193f-407e-4672-8f07-613f0e9382e5`, the 20:01→21:38 run); the command reports "branch not found" because an earlier GC pass in the same window had already succeeded (successful prunes are not logged, only failures warn). Main advanced to `89533e3` at 22:17:42; the next run found no branch, cut fresh from `89533e3` (branch reflog: "Created from 89533e3…", one lone closeout commit `9caa700` at 22:51), read an all-unchecked `tasks.md`, and restarted at task 1 (`session-scope-key-helper`) before failing again. No project-21 run ever merged (all 7 ended `dirty-uncommitted`/`failed`), so `main` carries zero ticks and the branch was the only record of progress.
-  - **Fix direction** (proposed — not operator-decided)
-    - 1. **Never force-delete an unmerged resume branch** (primary, self-contained). Before the Phase C `git branch -D`, check `git rev-list --count <baseBranch>..<branch>`; if the branch has commits not on `baseBranch`, skip the prune and keep the ref. This directly retires the "run branches are never merged so `-D` is always safe" assumption, which is exactly wrong for an incomplete project. Pin with a test: a project branch carrying one unmerged commit survives a GC pass that evicts ALL of that project's run dirs.
-    - 2. **Tie the resume branch's lifecycle to the PROJECT, not the run-dir count** (alternate / complement). Only prune `rune-work/<slug>` once the owning project reaches a terminal state (done/abandoned) in the registry; run dirs (transcripts/forensics) keep GC'ing freely under the 3-run cap. More correct conceptually, but couples GC to project state.
-    - Note this is separate from the upstream problem that project 21 keeps ending `dirty-uncommitted`/`failed` and never merges, which is what let its run count climb past the retention window in the first place.
+- [ ] ## Writing `/blog` and `/writing-critique` never invoke the pipeline — commands omit `deps`
+  - **Severity:** High
+    - The live writing flow is a no-op.
+    - Every user-facing entry point exists and looks wired, but `/blog <topic>`
+      creates no branch, drafts nothing, commits nothing, and sends no reply.
+
+  - **Provenance**
+    - The project-19 Phase 6 writing engine landed on `main` (merge `b1ff45f`).
+    - Implementations are real, not tests-only. This is the one integration seam
+      left open.
+    - Also the remaining blocker on michaelcjoseph.com's
+      `01-rune-writing-product` project (its Phase A dependency).
+
+  ### Repro
+  - Trigger `/blog some-topic` from Telegram or the cockpit.
+  - Observe, all absent:
+    - No `rune-writing/some-topic` branch.
+    - No `/rune/{slug}` artifact.
+    - No state transitions in the run feed.
+    - No message back to the user.
+
+  ### Root cause
+  - `startWritingProductRun` is overloaded (`src/jobs/writing-product-orchestration.ts:182-190`):
+    - `(input)` returns only a `WritingProductRunPlan`, early-returning at `:194`
+      (`if (!deps) return plan;`).
+    - `(input, deps)` runs the real pipeline (`:198` `createWritingWorktree`,
+      `:203` `runWritingPipeline`).
+  - Both production callers invoke the plan-only overload with no `deps`:
+    - `src/bot/commands/blog.ts:15`
+    - `src/bot/commands/writing-critique.ts:43`
+  - Consequences:
+    - `runWritingPipeline` (`src/jobs/writing-pipeline.ts:200`) has zero
+      production importers. It runs only under test mocks.
+    - `createWritingWorktree` has no implementation at all.
+      - Exists only as an interface field (`writing-product-orchestration.ts:91-95`).
+      - Satisfied solely by `vi.fn()` in tests.
+    - `input.sender` is accepted (`:79`, `:87`) but never read, so even the
+      plan-only path stays silent to the user.
+  - Privacy enforcement is correct but unreachable:
+    - `sanitizePublicMarkdown` / `collectPrivateSourceBoundaries`
+      (`writing-pipeline.ts:133-198`), applied before commit at `:265`.
+    - Planted-marker negative test (`writing-pipeline-core.test.ts:212-299`).
+    - Both guard a path that never executes in production.
+
+  ### Fix shape
+  - Build a production `StartWritingProductRunDeps`.
+    - `createWritingWorktree`: real git worktree create-or-resume for
+      `rune-writing/{slug}`.
+      - Reuse the existing orchestrated substrate so credential isolation and the
+        egress allowlist apply for free:
+        - `worktreePathFor(product, project, worktreeRoot)` (`src/intent/sandbox.ts:95`)
+          is generic. Reusable as-is.
+        - `buildSandboxEnv(sandbox, { productsConfigPath })`
+          (`src/jobs/credential-injector.ts`) is the standard scoped-env builder.
+          See `src/jobs/gen-eval-loop-runner.ts:355` for the reference call.
+      - **Known friction:** `workBranchName()` (`src/intent/sandbox.ts:82`)
+        hardcodes `rune-work/${slug}`. Writing's contract needs
+        `rune-writing/${slug}`. Parameterize the prefix or add a sibling helper.
+        Do not fork the worktree logic to get around this.
+      - Ship it with a real test, not just mocks.
+    - `runWritingPipeline`: wrap `writing-pipeline.ts:200` and construct its deps.
+      - MCP client for pkms source reads.
+      - The plan / draft / critique / revise model calls.
+      - `writeArtifact`, `commitArtifact`.
+      - `emitRunState` bound to the run feed.
+  - Update both commands to pass `deps`.
+    - `src/bot/commands/blog.ts`
+    - `src/bot/commands/writing-critique.ts`
+    - Use `input.sender` to report state transitions and the terminal result.
+
+  - **Design decision to make (the crux)**
+    - Route the writing run through the standard orchestrated work-runner, or
+      build a bespoke writing path?
+    - Recommendation: the work-runner. It reuses sandbox isolation, credential
+      injection, and the `npm run build` validation gate. The bespoke path
+      reimplements all three.
+    - Decide before implementing. The branch-prefix friction above is the one
+      known cost of the reuse path, and it is cheaper than the reimplementation.
+
+  ### Acceptance
+  - `/blog <topic>` end to end:
+    - Creates or resumes `rune-writing/{slug}`.
+    - Drives states `researching → drafting → critiquing → revising →
+      ready-for-review → committed`.
+    - Commits the pages.
+    - Messages the user the terminal state.
+    - This is exactly project 01's Phase C `user-reachability-check`.
+  - The planted-private-marker negative test path executes in the live flow.
+  - `createWritingWorktree` ships with a real implementation and a real test.
+
+  ### Scope
+  - Single-repo, product `rune`.
+  - File and run as a rune-scoped bug or one-task project.
+  - Do NOT bundle with michaelcjoseph.com site work.
+    - That is the exact cross-repo failure that stranded project 19 Phase 6.
+
 
 ## Loop-filed
 
@@ -18,6 +103,17 @@
 
 ## Done
 
+- [x] Work-run GC force-deletes an incomplete project's `rune-work/<slug>` resume branch when its run dirs age out of the 3-run retention window — resurrecting the 2026-06-04 re-fork bug, so the next run re-forks off `main` and restarts the project from task 1. **(surfaced by the project-21 orchestrated run that restarted at task 1, 2026-07-08; systemic — work-run GC, not project-21-specific)** _(Fixed 2026-07-09 — shipped fix direction 1 (operator-decided: guard only; direction 2's project-state coupling deliberately not built — accepted tradeoff: an abandoned project's unmerged branch is never pruned, a leaked git ref, essentially free). Phase C of `gcWorkRuns` (`src/jobs/work-run-gc.ts`) now proves a branch merged before the `git branch -D`: `git rev-list --count <baseBranch>..<branch>` in the run's product repo, and anything short of a provable `0` keeps the ref — unmerged (`>0`), unparseable count, and errored rev-list all skip the prune with a `keeping unmerged work-run branch` / `unmerged check failed; keeping branch` warn log (fail-safe polarity: a kept ref is free, a deleted one re-forks the project from task 1; a nonexistent branch errors into the same skip — the old path's "branch prune failed" no-op, one step earlier). Base branches thread from product config via a new optional `GcWorkRunsOpts.productBaseBranches` (built in `work-run-gc-runner.ts` alongside `productRepos`; a missing entry defaults to `'main'`, matching `readProductsConfig`'s parse-time default); run summaries are deliberately NOT consulted — `baseBranch` is only stamped on merged terminals, absent in exactly the incomplete-run case the guard protects. Dir-retention caps and the retained-branch guard are unchanged — the new check is what makes the resume point durable once every run dir ages out. Covered by `work-run-gc.test.ts`: unmerged branch survives total age-out (the bug's pin — red before the fix), rev-list-error + unparseable-count fail-safes, per-product base-branch threading (`develop..` assertion) with `main` default, merged-branch prune preserved, plus a REAL temp-git integration test (`defaultRunGit` against an actual repo: an unmerged closeout commit survives a `maxRuns: 0` pass; after `git merge` the next pass prunes the ref). Docs synced (`module-reference.md` work-run-gc/gc-runner entries). `npm run build` + full `npm test` (306 files / 5104 tests) green. Live signal: the next GC pass over an aged-out incomplete project logs `keeping unmerged work-run branch` instead of issuing `branch -D`, and a resumed run continues from the branch tip instead of restarting at task 1. The upstream problem — project 21 repeatedly ending `dirty-uncommitted`/`failed` and never merging, which is what let its run count blow past the retention window — remains separate and open.)_
+  - **Issue**
+    - The `rune-work/<slug>` branch is a project's durable resume point: `createWorktree` resumes an existing branch (`git worktree add <path> <branch>`, no `-b`, `src/jobs/sandbox-runtime.ts:374-393`) so prior task closeouts survive across runs; only when the branch is absent does it take the FRESH path and cut a new one from `main`'s HEAD (`:394-421`), where `tasks.md` is all-unchecked. `selectNextTask` (`src/intent/orch-task-select.ts`) then returns the first unchecked `- [ ]`, i.e. task 1.
+    - Work-run GC treats that durable branch as a disposable run artifact. `gcWorkRuns` (`src/jobs/work-run-gc.ts`) retains only the newest terminal run DIRS under GLOBAL caps — `WORK_RUN_RETENTION_MAX_RUNS = 3` / `WORK_RUN_RETENTION_MAX_BYTES = 200MB` (`src/config.ts:341-342`, passed at `work-run-gc-runner.ts:69-76`) — deletes the rest oldest-first, and force-deletes each pruned run's branch in Phase C (`git branch -D`, `work-run-gc.ts:252`). The caps are global across ALL products and projects, so a project's run dirs age out fast when other work interleaves.
+    - The existing GC guard (`work-run-gc.ts:210-233`) — added as the "GC guard" half of the 2026-06-04 re-fork fix (see the Done entry "`/work --auto` doesn't resume an interrupted project… re-forks a fresh branch off `main`") — is incomplete. It builds `retainedBranches` only from run dirs STILL ON DISK and skips deleting a branch a retained run references, so the branch is protected only while ≥1 of that project's run dirs survives the 3-run window. Its own comment names the failure it is meant to prevent ("re-introduce the re-fork bug in a new form"), but it has no notion that the branch is an incomplete project's live resume point: once every one of that project's run dirs ages out, the guard lapses and the branch is force-deleted with all its unmerged task closeouts. An incomplete project that needs many attempts (project 21 took 7+) is exactly the case that blows through a 3-run cap.
+    - The `-D` (force) is deliberate — run branches are "intentionally never merged into the checkout" — but that assumption is only safe for a COMPLETED project whose work already landed on `main`. For an in-flight project the branch carries real unmerged progress, so force-delete silently discards it.
+    - **Confirmed instance:** on `21-parallel-product-chats`, `logs/rune.log` at `2026-07-08T22:13:58.840Z` records `gcWorkRuns` issuing `git branch -D rune-work/21-parallel-product-chats` (tied to aged-out run `6f57193f-407e-4672-8f07-613f0e9382e5`, the 20:01→21:38 run); the command reports "branch not found" because an earlier GC pass in the same window had already succeeded (successful prunes are not logged, only failures warn). Main advanced to `89533e3` at 22:17:42; the next run found no branch, cut fresh from `89533e3` (branch reflog: "Created from 89533e3…", one lone closeout commit `9caa700` at 22:51), read an all-unchecked `tasks.md`, and restarted at task 1 (`session-scope-key-helper`) before failing again. No project-21 run ever merged (all 7 ended `dirty-uncommitted`/`failed`), so `main` carries zero ticks and the branch was the only record of progress.
+  - **Fix direction** (operator decision 2026-07-09: direction 1 only)
+    - 1. **Never force-delete an unmerged resume branch** (primary, self-contained — **shipped**). Before the Phase C `git branch -D`, check `git rev-list --count <baseBranch>..<branch>`; if the branch has commits not on `baseBranch`, skip the prune and keep the ref. This directly retires the "run branches are never merged so `-D` is always safe" assumption, which is exactly wrong for an incomplete project. Pin with a test: a project branch carrying one unmerged commit survives a GC pass that evicts ALL of that project's run dirs.
+    - 2. **Tie the resume branch's lifecycle to the PROJECT, not the run-dir count** (alternate / complement — **not built**). Only prune `rune-work/<slug>` once the owning project reaches a terminal state (done/abandoned) in the registry; run dirs (transcripts/forensics) keep GC'ing freely under the 3-run cap. More correct conceptually, but couples GC to project state.
+    - Note this is separate from the upstream problem that project 21 keeps ending `dirty-uncommitted`/`failed` and never merges, which is what let its run count climb past the retention window in the first place.
 - [x] The test-intent gate can veto QA's tests but cannot repair them — on a tech-lead rejection the feedback threads back to QA and the same agent/model retries against a stable blind spot until the round cap trips and the whole orchestrated run fails. Give the gate a corrective action: the tech-lead patches the tests directly on first rejection. **(surfaced by the project-21 orchestrated run `6f57193f`, 2026-07-08; systemic — team-task workflow, not project-21-specific)** _(Fixed 2026-07-08 — shipped the decided approach on both layers. **Workflow** (`team-task-workflow.ts`): on the first `test-intent` rejection the loop invokes a new optional `techLeadRepairTests` dep before the QA bounce — a `repaired` result is re-reviewed by `techLeadReviewTests`, and approval breaks straight to the coder (QA is never re-rolled); `not-repaired` or a throwing dep degrades to the QA bounce with the repair outcome appended to `actionableNotes`. The `tl-test-review` verdict gained an optional `repairable` flag (`false` = structural rework / spec ambiguity ⇒ skip the repair, straight bounce; absent ⇒ attempt — a failed repair falls back safely). Repair is attempted once per task, never for no-code-test rationales; `ORCHESTRATED_ROUND_CAP` stays as the unchanged backstop. The attempt emits a `test-repair` activity event (run-feed visible) and lands as `TaskEvidence.testIntentRepair` on every terminal, including the outer-catch `failed` path. **Production seam** (`team-task-deps.ts`): an `execute('tech-lead', models.techLead)` worktree session (the opus binding is claude-format + coding-capable; `execute`'s role param widened), then mechanical enforcement — the repair delta is computed against a pre-repair `git add -A && git write-tree` snapshot (NOT the executor's returned diff, which is scrubbed and includes QA's uncommitted work); any delta path outside `*.test.ts(x)` is reverted on disk (`git restore --source=<preTree>` / `git rm -f`) before closeout's `git add -A` could ever commit it; then **confirm-red** runs the product `validationCommands` (new `runRepairValidation` seam, `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`): a green run rolls the whole patch back (`not-repaired`, "vacuous or behavior-pinning"), as does a timeout, while a red run threads command/exit/bounded-scrubbed `outputTail` into the re-review body as `Confirm-red evidence` so the tech-lead judges red-for-the-right-reason; `lastQaDiff` refreshes to the patched cumulative diff (same scrub/redact as the execution agent) so the re-review and `qaRevalidateDiff` stay consistent, and returned `testIds` merge QA's with the surviving delta. Every internal failure returns `{kind:'not-repaired'}` — the repair can never fail the task. New `TeamTaskSeams` members `runGit`/`runRepairValidation` default to `defaultRunGit`/`runValidationCommands`; deps-test fixtures get a fail-deterministic throwing `runGit` so no fixture reaches real git. No runner changes needed (`validationCommands`/`cap`/`emit` already thread through `createProductionTaskWorkflowRunner`). Covered by `team-task-workflow.test.ts` (repair success skips the QA retry; not-repaired/re-review-reject/throw bounce with truthful notes; `repairable:false` + rationale skip; once-per-task; cap backstop; `test-repair` + dual `role-verdict` events) and `team-task-deps.test.ts` (snapshot-fail spends no executor call; delta guard reverts violations and keeps the surviving patch; all-violations/green/timeout roll back; skipped red-check on empty commands; testId merge; confirm-red evidence in the next review body, cleared on fresh QA tests; `repairable` parse; plus two REAL temp-git integration tests proving on-disk restore/rollback). Docs synced (`project-lifecycle.md` C2 gate c + repair paragraph, `subsystems.md`, `module-reference.md`). `npm run build` + full `npm test` (305 files / 5075 tests) green. The optional complements below remain unbuilt — the planning-time completeness lint is the natural next pick if task-6-shaped gaps recur. Live signal: the next orchestrated run whose tech-lead rejects a test intent shows `tech-lead: test-repair` in the run feed and proceeds to the coder instead of triple-bouncing into a failed run. (Amended 2026-07-08 after a codex code review found a BLOCK-severity guard hole in the first cut: the allowlist also accepted any path in `qa.testIds`, and `qa.testIds` is `filesFromDiff(QA's diff)` — every path QA touched, not only test files — so a QA stray into product source (e.g. `src/prod.ts` in QA's diff) would have silently licensed the tech-lead repair to edit that same source, violating the shipped tests-only contract. Fixed by narrowing `isAllowedRepairPath` to the `*.test.ts(x)` regex alone — a repair needing a non-test-file change is structural by definition, which is exactly the QA-bounce case — and filtering the repair prompt's `## QA test files` list to guard-editable paths so a stray is never advertised as editable. Pinned by three new tests in `team-task-deps.test.ts`: a QA-stray source path in the delta is reverted while the test patch survives, a stray-only delta rolls back to not-repaired even when `qa.testIds` lists the path, and the repair prompt omits non-test paths.))_
   - **Issue**
     - The QA-first test-intent loop (`src/intent/team-task-workflow.ts:379-429`) is: QA authors the task's tests (`deps.qaWriteTests`) → the tech-lead judges them BEFORE the coder starts (`deps.techLeadReviewTests`) → on `approved` it breaks to the coder; on a fail it builds `GateRejectionFeedback` (reason + `suggestedChangeNotes(tlTests.suggestedChange)` as `actionableNotes`), threads it back to **QA**, and re-runs QA up to `ORCHESTRATED_ROUND_CAP = 3` (`src/jobs/orchestrated-work-runner.ts:122`). At `qaAttempt === cap-1` it `block()`s the task with `loopExitReason: 'hard-budget'`, which `mapResultToTerminal` renders as a `failed` orchestrated terminal (`orchestrated-work-runner.ts:2169-2173`, `orchestration blocked on "<task>": <reason>`).
