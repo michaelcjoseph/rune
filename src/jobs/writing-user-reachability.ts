@@ -1,4 +1,5 @@
 import { slugifyWritingIdentifier } from './writing-product-orchestration.js';
+import { writingBranchName } from '../intent/sandbox.js';
 
 export type WritingReachabilitySurface = 'telegram' | 'cockpit';
 
@@ -53,7 +54,7 @@ export async function runWritingUserReachabilityCheck(
 ): Promise<WritingReachabilityResult> {
   const topic = input.topic.trim();
   const slug = slugifyWritingIdentifier(topic);
-  const branch = `rune-writing/${slug}`;
+  const branch = writingBranchName(slug);
   const routePaths = ['/rune', `/rune/${slug}`] as ['/rune', `/rune/${string}`];
 
   const started = await deps.dispatchBlogCommand({

@@ -3,6 +3,7 @@ import {
   WRITING_PRODUCT_SURFACE_STATES,
   type WritingProductSurfaceState,
 } from './writing-product-orchestration.js';
+import { writingBranchName } from '../intent/sandbox.js';
 
 export type WritingPipelineState = WritingProductSurfaceState;
 
@@ -69,7 +70,7 @@ function targetForTopic(topic: string): WritingPipelineTarget {
   const slug = slugifyWritingIdentifier(topic);
   return {
     slug,
-    branch: `rune-writing/${slug}`,
+    branch: writingBranchName(slug),
     routePath: `/rune/${slug}`,
     artifactPath: `docs/rune/${slug}.md`,
   };

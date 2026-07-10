@@ -1,3 +1,5 @@
+import { writingBranchName } from '../intent/sandbox.js';
+
 export type WritingProductSurfaceState =
   | 'researching'
   | 'drafting'
@@ -135,7 +137,7 @@ export function planWritingProductRun(input: { topic: string }): WritingProductR
     product: 'writing',
     topic,
     slug,
-    branch: `rune-writing/${slug}`,
+    branch: writingBranchName(slug),
     routePaths: ['/rune', `/rune/${slug}`],
     migration: {
       ideas: {

@@ -18,6 +18,8 @@ import {
   isWriteAllowed,
   isEgressAllowed,
   canReachCredential,
+  writingBranchName,
+  writingSlugFromBranch,
   type SandboxSpec,
 } from './sandbox.js';
 
@@ -162,5 +164,31 @@ describe('sandbox — credential scoping (test-plan §11)', () => {
 
   it("never lets a run reach Rune's own credentials", () => {
     expect(canReachCredential(sandbox({ product: 'aura' }), 'rune')).toBe(false);
+  });
+});
+
+describe('sandbox — writing branch names', () => {
+  it('writingBranchName yields the deterministic rune-writing/ ref for a slug', () => {
+    expect(writingBranchName('operating-from-memory')).toBe('rune-writing/operating-from-memory');
+  });
+
+  it('writingSlugFromBranch inverts writingBranchName', () => {
+    expect(writingSlugFromBranch(writingBranchName('operating-from-memory'))).toBe(
+      'operating-from-memory',
+    );
+  });
+
+  it('writingSlugFromBranch returns null for non-writing branches and malformed slugs', () => {
+    expect(writingSlugFromBranch('rune-work/09-expand-cockpit')).toBe(null);
+    expect(writingSlugFromBranch('main')).toBe(null);
+    expect(writingSlugFromBranch('rune-writing/')).toBe(null);
+    expect(writingSlugFromBranch('rune-writing/Bad Slug')).toBe(null);
+    expect(writingSlugFromBranch('rune-writing/a/b')).toBe(null);
+  });
+
+  it('writing branches never collide with work-run branches (distinct prefixes)', () => {
+    // Work-run GC force-deletes only rune-work/ refs; the writing prefix is what
+    // keeps a writing branch out of that path.
+    expect(writingBranchName('x').startsWith('rune-work/')).toBe(false);
   });
 });

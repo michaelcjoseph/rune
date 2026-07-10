@@ -84,6 +84,31 @@ export function workBranchName(projectSlug: string): string {
 }
 
 /**
+ * Stable per-TOPIC writing-run branch name — the writing engine's counterpart to
+ * `workBranchName` (a deliberate sibling, NOT a prefix parameter: every
+ * work-run caller wants `rune-work/` and threading a prefix through those hot
+ * paths buys nothing). `/blog <topic>` resumes an existing topic branch and
+ * starts a fresh one only when absent (same resume semantics as work runs, via
+ * `createWorktree`). The `rune-writing/` prefix is also what keeps writing
+ * branches out of work-run GC's force-delete path (prefix-guarded to
+ * `rune-work/`).
+ */
+export function writingBranchName(slug: string): string {
+  return `rune-writing/${slug}`;
+}
+
+/**
+ * Inverse of `writingBranchName` — the slug when `branch` is a writing branch,
+ * else null. Used by the production deps adapter to re-derive the slug the
+ * orchestration layer encoded in the branch, so a path-shaped critique target
+ * can never fork a second slug derivation.
+ */
+export function writingSlugFromBranch(branch: string): string | null {
+  const m = /^rune-writing\/([a-z0-9][a-z0-9-]*)$/.exec(branch);
+  return m?.[1] ?? null;
+}
+
+/**
  * The deterministic worktree path for a (product, project) under `worktreeRoot`. Distinct
  * projects always get distinct paths, so two concurrent runs never share a working tree.
  *
