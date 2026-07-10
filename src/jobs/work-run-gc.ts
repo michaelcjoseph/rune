@@ -18,7 +18,9 @@
  *                    branches checked out in any worktree, reusing the
  *                    `git worktree list --porcelain` parse), calls `planGc`, and
  *                    deletes the dirs + prunes the local branch refs — never a
- *                    branch a worktree has checked out.
+ *                    branch a worktree has checked out, and never a branch with
+ *                    commits not on its base branch (an incomplete project's
+ *                    resume point outlives its run dirs).
  *
  * Implemented in Phase 3; run best-effort on startup (`src/index.ts`) and on
  * each run completion (`work-runner.apply`).
@@ -79,6 +81,12 @@ export interface GcWorkRunsOpts {
    *  its OWN product's repo, so GC reads every repo's worktree list and prunes a
    *  run's branch in the repo named by its `product`. */
   productRepos: Record<string, string>;
+  /** Every registered product → its base branch, for the unmerged-branch check
+   *  before a prune. Sourced from product config (NOT the run summary, which
+   *  only carries `baseBranch` on merged terminals — absent in exactly the
+   *  incomplete-run case the check protects). A missing entry defaults to
+   *  'main', matching `readProductsConfig`'s parse-time default. */
+  productBaseBranches?: Record<string, string>;
   /** Run ids currently active (from `activeRuns`) — never pruned. */
   activeIds: Set<string>;
   /** Run ids with a non-terminal run-store status — never pruned. */
@@ -138,10 +146,12 @@ export function planGc(opts: PlanGcOpts): GcPlan {
  * branch-prune git calls (Phase C) run after, with awaits: that is safe because a
  * concurrent pass finds the deleted dir gone (its summary unreadable → not
  * prunable), and a duplicate `branch -D` of the same ref just no-ops with a
- * logged warning.
+ * logged warning. Phase C deletes a ref only after `rev-list --count
+ * <base>..<branch>` proves it merged; an unmerged (or unprovable) branch is
+ * kept as the project's durable resume point.
  */
 export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
-  const { workRunsDir, runGit, productRepos, activeIds, nonTerminalIds, maxRuns, maxBytes } = opts;
+  const { workRunsDir, runGit, productRepos, productBaseBranches, activeIds, nonTerminalIds, maxRuns, maxBytes } = opts;
 
   // --- Phase A: gather all inputs (the only awaits live here) ---
   let dirNames: string[];
@@ -221,9 +231,13 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
   }
 
   // --- Phase C: prune the deleted runs' branch refs (after the dirs are gone).
-  //     `-D` (force) because a run branch is intentionally never merged into the
-  //     checkout; a checked-out branch is already excluded via protectedIds, and
-  //     git refuses to delete a checked-out ref regardless. Best-effort. ---
+  //     `-D` (force) is issued only for a branch PROVEN merged into its base
+  //     branch — an unmerged `rune-work/` ref is an incomplete project's live
+  //     resume point (its only record of unmerged task closeouts) and is always
+  //     kept, however old its run dirs (docs/projects/bugs.md, 2026-07-08
+  //     project-21 data loss). A checked-out branch is already excluded via
+  //     protectedIds, and git refuses to delete a checked-out ref regardless.
+  //     Best-effort. ---
   for (const id of deleteIds) {
     const e = byId.get(id);
     const branch = e?.branch;
@@ -246,6 +260,32 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
     const repoPath = productRepos[product];
     if (!repoPath) {
       log.warn('gcWorkRuns: no repo for run product; skipping branch prune', { id, product, branch });
+      continue;
+    }
+    // Never delete a branch carrying commits not on its base branch. Dir-based
+    // retention can outlive an incomplete project's whole run history (global
+    // 3-run cap vs a project needing many attempts), so this check — not the
+    // retained-branch set above — is what makes the resume point durable.
+    // Fail-safe polarity: anything short of a provable "0 commits ahead" keeps
+    // the ref (a kept ref is free; a deleted one re-forks the project from
+    // scratch). A nonexistent branch errors here and is skipped — same net
+    // no-op as the old path's "branch prune failed" warning.
+    const baseBranch = productBaseBranches?.[product] ?? 'main';
+    try {
+      const { stdout } = await runGit(['rev-list', '--count', `${baseBranch}..${branch}`], { cwd: repoPath });
+      const ahead = Number.parseInt(stdout.trim(), 10);
+      if (!Number.isFinite(ahead) || ahead > 0) {
+        log.warn('gcWorkRuns: keeping unmerged work-run branch', { id, product, branch, baseBranch, ahead });
+        continue;
+      }
+    } catch (err) {
+      log.warn('gcWorkRuns: unmerged check failed; keeping branch', {
+        id,
+        product,
+        branch,
+        baseBranch,
+        error: (err as Error).message,
+      });
       continue;
     }
     try {

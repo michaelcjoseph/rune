@@ -20,6 +20,7 @@ import { join } from 'node:path';
 
 import { planGc, gcWorkRuns } from './work-run-gc.js';
 import type { GcRunEntry } from './work-run-gc.js';
+import { defaultRunGit } from './sandbox-runtime.js';
 import type { GitRunner } from './sandbox-runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -128,9 +129,14 @@ describe('gcWorkRuns', () => {
   }
 
   /** A GitRunner stub. `worktree list --porcelain` reports `checkedOutBranch`
-   *  as checked out in a worktree (so its run is protected). Records all calls
-   *  so branch-prune (`branch -d <ref>`) can be asserted. */
-  function makeGitStub(checkedOutBranch?: string) {
+   *  as checked out in a worktree (so its run is protected). `rev-list --count`
+   *  (the unmerged-branch check) answers `revListCount` — default '0\n'
+   *  (merged, prunable) — or throws when `revListError` is set. Records all
+   *  calls so branch-prune (`branch -d <ref>`) can be asserted. */
+  function makeGitStub(
+    checkedOutBranch?: string,
+    opts?: { revListCount?: string; revListError?: boolean },
+  ) {
     const calls: string[][] = [];
     const stub = vi.fn<GitRunner>().mockImplementation(async (args) => {
       calls.push([...args]);
@@ -139,6 +145,10 @@ describe('gcWorkRuns', () => {
           ? `worktree /some/path\nHEAD abc123\nbranch refs/heads/${checkedOutBranch}\n`
           : '';
         return { stdout: porcelain, stderr: '' };
+      }
+      if (args.includes('rev-list')) {
+        if (opts?.revListError) throw new Error('rev-list failed (stub)');
+        return { stdout: opts?.revListCount ?? '0\n', stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -253,10 +263,11 @@ describe('gcWorkRuns', () => {
     expect(branchPrune).toBeUndefined();
   });
 
-  it('force-deletes the shared branch only once its LAST run ages out', async () => {
+  it('force-deletes a MERGED shared branch only once its LAST run ages out', async () => {
     const SHARED = 'rune-work/09-expand-cockpit';
     for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
-    const { stub, calls } = makeGitStub();
+    // rev-list count 0 → the branch's work already landed on the base branch.
+    const { stub, calls } = makeGitStub(undefined, { revListCount: '0\n' });
 
     const result = await gcWorkRuns({
       workRunsDir,
@@ -270,6 +281,98 @@ describe('gcWorkRuns', () => {
 
     expect(result.deletedIds).toEqual(['run-0', 'run-1', 'run-2']);
     // No run references the branch anymore → it is finally pruned.
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D') && c.includes(SHARED));
+    expect(branchPrune).toBeDefined();
+  });
+
+  it('NEVER prunes an UNMERGED resume branch, even after ALL its run dirs age out', async () => {
+    // The 2026-07-08 project-21 data loss: an incomplete project's every run dir
+    // aged out of the retention window, the retained-branch guard lapsed, and
+    // `branch -D` destroyed the only record of its task closeouts. An unmerged
+    // branch (rev-list count > 0 against the base branch) is an incomplete
+    // project's live resume point and must survive dir GC unconditionally.
+    const SHARED = 'rune-work/21-parallel-product-chats';
+    for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
+    const { stub, calls } = makeGitStub(undefined, { revListCount: '2\n' });
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { rune: '/fake/repo' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0, // every run dir ages out → no dir-based retention protects the branch
+      maxBytes: 100_000,
+    });
+
+    // The dirs are pruned to honor the cap…
+    expect(result.deletedIds).toEqual(['run-0', 'run-1', 'run-2']);
+    // …the unmerged check ran against the default base branch…
+    const revList = calls.find(c => c.includes('rev-list'));
+    expect(revList).toEqual(['rev-list', '--count', `main..${SHARED}`]);
+    // …and the unmerged branch is NEVER force-deleted.
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D'));
+    expect(branchPrune).toBeUndefined();
+  });
+
+  it('keeps the branch when the unmerged check fails (fail-safe: cannot prove merged)', async () => {
+    const SHARED = 'rune-work/21-parallel-product-chats';
+    for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
+    const { stub, calls } = makeGitStub(undefined, { revListError: true });
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { rune: '/fake/repo' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0,
+      maxBytes: 100_000,
+    });
+
+    expect(result.deletedIds).toEqual(['run-0', 'run-1', 'run-2']);
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D'));
+    expect(branchPrune).toBeUndefined();
+  });
+
+  it('keeps the branch when the count is unparseable (fail-safe)', async () => {
+    const SHARED = 'rune-work/21-parallel-product-chats';
+    for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
+    const { stub, calls } = makeGitStub(undefined, { revListCount: 'not-a-number\n' });
+
+    await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { rune: '/fake/repo' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0,
+      maxBytes: 100_000,
+    });
+
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D'));
+    expect(branchPrune).toBeUndefined();
+  });
+
+  it('runs the unmerged check against the product\'s OWN base branch (productBaseBranches)', async () => {
+    const SHARED = 'rune-work/09-expand-cockpit';
+    seedRunOnBranch('run-0', 0, SHARED);
+    const { stub, calls } = makeGitStub(undefined, { revListCount: '0\n' });
+
+    await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { rune: '/fake/repo' },
+      productBaseBranches: { rune: 'develop' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0,
+      maxBytes: 100_000,
+    });
+
+    const revList = calls.find(c => c.includes('rev-list'));
+    expect(revList).toEqual(['rev-list', '--count', `develop..${SHARED}`]);
+    // Merged against develop → pruned.
     const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D') && c.includes(SHARED));
     expect(branchPrune).toBeDefined();
   });
@@ -290,10 +393,12 @@ describe('gcWorkRuns', () => {
     seed('run-rune', 0, 'rune', 'rune-work/09-cockpit');
     seed('run-aura', 1, 'aura', 'rune-work/03-mobile');
 
-    // A cwd-recording stub (makeGitStub records args only).
+    // A cwd-recording stub (makeGitStub records args only). Both branches are
+    // merged (rev-list count 0) so the prune proceeds.
     const calls: Array<{ args: string[]; cwd?: string }> = [];
     const stub = vi.fn<GitRunner>(async (args, opts) => {
       calls.push({ args: [...args], cwd: opts?.cwd });
+      if (args.includes('rev-list')) return { stdout: '0\n', stderr: '' };
       return { stdout: '', stderr: '' };
     });
 
@@ -365,4 +470,60 @@ describe('gcWorkRuns', () => {
     // The unprotected terminal runs are still pruned to honor the cap.
     expect(result.deletedIds.length).toBeGreaterThan(0);
   });
+
+  it('REAL git: an unmerged resume branch survives total age-out; once merged it is pruned', async () => {
+    // Integration proof of the actual rev-list semantics with defaultRunGit —
+    // GC's branch -D is the most destructive op in the codebase, so the guard
+    // gets one non-stubbed pin (temp-git precedent: team-task-deps.test.ts).
+    const BRANCH = 'rune-work/21-parallel-product-chats';
+    const repo = mkdtempSync(join(tmpdir(), 'work-run-gc-git-'));
+    const git = (args: string[]) => defaultRunGit(args, { cwd: repo });
+    try {
+      await git(['init', '-b', 'main']);
+      await git(['config', 'user.email', 'gc-test@rune.local']);
+      await git(['config', 'user.name', 'gc-test']);
+      writeFileSync(join(repo, 'base.txt'), 'base');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'base']);
+      await git(['checkout', '-b', BRANCH]);
+      writeFileSync(join(repo, 'closeout.txt'), 'task closeout');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'closeout: task 1']);
+      await git(['checkout', 'main']);
+
+      const branchExists = async () => {
+        try {
+          await git(['rev-parse', '--verify', `refs/heads/${BRANCH}`]);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const gcOpts = {
+        workRunsDir,
+        runGit: defaultRunGit,
+        productRepos: { rune: repo },
+        activeIds: new Set<string>(),
+        nonTerminalIds: new Set<string>(),
+        maxRuns: 0, // age every run dir out
+        maxBytes: 100_000,
+      };
+
+      // Pass 1: the branch carries an unmerged closeout commit → dirs pruned,
+      // branch survives.
+      seedRunOnBranch('run-0', 0, BRANCH);
+      const first = await gcWorkRuns(gcOpts);
+      expect(first.deletedIds).toEqual(['run-0']);
+      expect(await branchExists()).toBe(true);
+
+      // Pass 2: after the work lands on main, the branch is finally pruned.
+      await git(['merge', BRANCH]);
+      seedRunOnBranch('run-1', 1, BRANCH);
+      const second = await gcWorkRuns(gcOpts);
+      expect(second.deletedIds).toEqual(['run-1']);
+      expect(await branchExists()).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

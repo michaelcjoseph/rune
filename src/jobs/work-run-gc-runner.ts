@@ -38,10 +38,17 @@ export async function runWorkRunGc(): Promise<void> {
     // quietly rather than throwing — matches the best-effort posture of
     // cleanupOrphanWorktrees.
     let productRepos: Record<string, string>;
+    let productBaseBranches: Record<string, string>;
     try {
       const products = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
       productRepos = Object.fromEntries(
         Object.entries(products).map(([slug, p]) => [slug, p.repoPath]),
+      );
+      // Base branches feed the unmerged-branch check before a `branch -D` —
+      // product config is the source of truth (same field the fork/merge
+      // paths use), not the run summaries.
+      productBaseBranches = Object.fromEntries(
+        Object.entries(products).map(([slug, p]) => [slug, p.baseBranch]),
       );
     } catch {
       return; // no readable products.json → nothing to GC
@@ -70,6 +77,7 @@ export async function runWorkRunGc(): Promise<void> {
       workRunsDir: config.WORK_RUNS_DIR,
       runGit: defaultRunGit,
       productRepos,
+      productBaseBranches,
       activeIds,
       nonTerminalIds,
       maxRuns: config.WORK_RUN_RETENTION_MAX_RUNS,
