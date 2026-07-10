@@ -88,3 +88,6 @@ below it.
 
 - **Investigate recurring wiki-linter failures** — wiki-linter fails 26 times in 7 days
 
+- **Fix repeated wiki-linter agent failures** — wiki-linter agent fails repeatedly: 26 failures in 7d
+- **Fix recurring webview interaction failures** — webview interactions fail 3+ times in 24h
+
