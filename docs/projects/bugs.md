@@ -1,28 +1,5 @@
 ## Active
 
-- [ ] Gate/closeout validation timeouts capture no diagnostic for a pre-collection vitest wedge — the failure is invisible. **(surfaced by orchestrated run `f77bed15` on product `rune`, project `22-fix-run-dispatch`, 2026-07-10; the run burned its 10-min closeout budget and was SIGTERM-killed with zero actionable output, so the actual cause of the hang is unrecoverable from the logs)**
-
-  - **Severity:** Medium (the hang it hides is High: every rune-on-rune closeout dead-ends `dirty-uncommitted`, no work lands — but this entry is specifically about the *diagnostic blind spot*, not the hang itself).
-
-  - **Repro / evidence**
-    - Run `f77bed15` closeout ran `npm test` (`vitest run`) in the sandbox worktree, bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS = 600_000` (`src/config.ts:371`).
-    - `rune.log:55515`: `closeout validation command failed … "exitCode":143,"timedOut":true,"outputTail":"\n> rune@1.0.0 test\n> vitest run\n\n"`.
-    - The captured tail is *only* the npm banner — no `RUN v4.1.5` header. Vitest wedged during vite startup / dep-optimize, **before test collection**, and produced zero bytes for the full 10 minutes.
-    - Confirmed this session by reproduction: an isolated `vitest run` (main repo, symlinked worktree, and 3 concurrent cold-cache worktrees all sharing one `node_modules/.vite`) starts in <1s and streams output. The wedge only manifested in the real multi-agent run and is not reproducible in isolation, so **the captured artifact is the only forensic surface — and it captured nothing useful.**
-
-  - **Root cause (the blind spot, not the wedge)**
-    - `outputTail` is a **keep-the-end** rolling capture, capped at `MAX_VALIDATION_OUTPUT_TAIL_CHARS = 20_000` (`src/jobs/work-run-gate-runtime.ts:83`) / `CLOSEOUT_LOG_TAIL_CHARS = 2_000` (`src/jobs/orchestrated-work-runner.ts:898`). For a *pre-banner* wedge there is no end to keep — the tail is the ~30-char npm banner and nothing else.
-    - The `hanging-process` reporter in `vitest.config.ts` (added specifically for "the intermittent vitest hang") only fires *after* a run finishes but fails to exit — a wedge that never reaches test collection never triggers it.
-    - On timeout, `defaultRunValidationCommand` sends `SIGTERM` then `SIGKILL` (`src/jobs/work-run-gate-runtime.ts:189-194`). Neither signal makes Node emit a stack, so the wedged process dies without saying where it was stuck.
-
-  - **Fix shape** (direction — confirm signal mechanics before implementing)
-    - Before the SIGTERM/SIGKILL reap, capture *why* the child is stuck. Node does **not** dump JS stacks on `SIGQUIT`; the right tool is Node's diagnostic report: run the validation child with `NODE_OPTIONS=--report-on-signal --report-signal=SIGUSR2 --report-directory=<runDir>` and send `SIGUSR2` to the process group first. The report includes the JS stack + libuv open handles, which for a vite/esbuild optimize wedge points straight at the stuck call.
-    - Also persist a **head** capture (first N bytes), not only a keep-the-end tail — a startup wedge is diagnosed by the beginning of output, not the end.
-    - Consider a much shorter default budget for the per-task closeout (see #3 below) so a wedge fails fast with a report instead of after 10 idle minutes.
-
-  - **Acceptance**
-    - A validation command that wedges before emitting output leaves a durable artifact in the run dir that identifies where it was stuck (Node diagnostic report or equivalent), not just an empty tail.
-    - A test drives a validation child that hangs at startup and asserts the timeout path writes the diagnostic before reaping.
 - [ ] Work-run worktrees symlink `node_modules`, so vitest's cache / dep-optimize writes land in the shared tree — denied inside the sandbox, coupled across concurrent runs. **(surfaced by orchestrated run `f77bed15` on `rune` / `22-fix-run-dispatch`, 2026-07-10; both the QA and coder agents hit it and had to hand-roll a task-local vitest config to run any tests)**
 
   - **Severity:** Medium (forces every sandboxed agent to work around it; couples all concurrent runs' vite caches; a contributing factor — not proven the sole cause — of the closeout hang in the linked High-impact failure).
@@ -86,6 +63,8 @@
 (empty)
 
 ## Done
+
+- [x] Gate/closeout validation timeouts capture no diagnostic for a pre-collection vitest wedge — the failure is invisible. **(Fixed 2026-07-10 — validation commands now keep bounded 20K output head and tail captures and, when a durable run directory is supplied, inherit Node report-on-`SIGUSR2` options. On timeout Rune signals the entire process group, waits one second for report flush, then performs the existing `SIGTERM`/`SIGKILL` reap. Raw reports land in a temporary directory; before persistence Rune removes the inherited environment, scrubs secrets and host paths, and writes the sanitized JSON plus a command/head/tail text artifact under `<run>/validation-diagnostics/`. Closeout failures also persist labeled head/tail sections and diagnostic filenames. Live, recovery, release, legacy, and orchestrated merge gates all pass their run directory. A real-process regression test wedges before application output and verifies the durable report contains a JavaScript stack and libuv handles before the child is reaped.)**
 
 - [x] Update default chat model to be gpt-5.6-terra and reflect it as a clickable button option in the chat box. **(Fixed 2026-07-10 — `DEFAULT_CHAT_MODEL` and `CONVERSATION_MODEL` now default new Telegram, cockpit Home, and product chats to `gpt-5.6-terra`; the Home selector exposes Terra as the selected default and synchronizes to an existing webview session, product chat exposes the same clickable command, and `/gpt-5.6-terra` works on every chat surface. A provider-neutral chat adapter resolves aliases through model policy: Claude keeps its persistent CLI sessions, while Terra uses a persistent `codex exec` thread and `codex exec resume`; non-chat Codex callers remain ephemeral. Session persistence now records the real executor/thread id, migrates legacy sessions as Claude, resets provider state on cross-provider switches, and bootstraps the new provider from the bounded Rune transcript so visible context survives. Codex chat preserves global read-only/product-write postures, product env scrubbing, voice, operation tracking, and cancellation. `/fresh` summarizes Codex chats from Rune's durable transcript. Covered by adapter, Codex args, session migration, handler, closeout, selector, and product-chat tests; live two-turn Terra acceptance returned `READY` then resumed the same thread and recalled `cobalt`.)**
 

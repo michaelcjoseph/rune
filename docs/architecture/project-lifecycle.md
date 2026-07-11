@@ -93,7 +93,7 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 Ordered so every commit is finalizer-ready:
 
 1. Compute **both** the context update and the checkbox tick (`markSelectedTaskComplete`, ticks exactly the selected task by text+section, refuses a stale match) **before** writing either.
-2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with the failing output tail, and the scrubbed tail feeds back to the coder as `GateRejectionFeedback` (qa→coder, `implementation-diff`) for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs.
+2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with bounded output head + tail while the scrubbed tail feeds back to the coder as `GateRejectionFeedback` (qa→coder, `implementation-diff`) for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs. A timeout first requests Node diagnostic reports with `SIGUSR2`, sanitizes them, and stores them with a command/head/tail artifact under `<run>/validation-diagnostics/` before the normal process-group reap.
 3. Persist context, then the tick.
 4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
 5. `verifyCleanWorktree` — `git status --porcelain` empty.

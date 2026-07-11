@@ -619,21 +619,25 @@ function buildOrchestrationDeps(args: {
     // v1 these are the same fast checks the finalizer gate uses.) No commands ⇒
     // pass — the project-level finalizer gate still owns the full merge gate.
     runCloseoutChecks: async (task) => {
+      const runDir = join(args.workRunsDir, descriptor.id);
       const validation = await defaultRunValidationCommands(
         args.validationCommands,
         sandbox.worktree,
         config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+        undefined,
+        join(runDir, 'validation-diagnostics'),
       );
       if (validation.ok) return { ok: true };
       const scrub = (text: string): string => redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
       const command = scrub(validation.command);
+      const outputHead = scrub(validation.result.outputHead ?? '');
       const outputTail = scrub(validation.result.outputTail);
+      const diagnosticArtifacts = validation.result.diagnosticArtifacts ?? [];
       const outcome = validation.result.timedOut ? 'timed out' : `exit ${validation.result.exitCode}`;
       // Durable artifact in the run dir — the worktree (and with it the diff
       // that caused the red suite) is GC'd, so this file is the only place the
       // failing output survives. Best-effort: never blocks the red verdict.
       try {
-        const runDir = join(args.workRunsDir, descriptor.id);
         mkdirSync(runDir, { recursive: true });
         appendFileSync(
           join(runDir, CLOSEOUT_VALIDATION_FAILURE_FILE),
@@ -641,7 +645,9 @@ function buildOrchestrationDeps(args: {
             `task: ${task.id} — ${task.text}\n` +
             `command: ${command}\n` +
             `outcome: ${outcome}\n\n` +
-            `${outputTail || '(no output captured)'}\n\n`,
+            `diagnostics: ${diagnosticArtifacts.length > 0 ? diagnosticArtifacts.map((name) => `validation-diagnostics/${name}`).join(', ') : '(none)'}\n\n` +
+            `=== output head ===\n${outputHead || '(no output captured)'}\n\n` +
+            `=== output tail ===\n${outputTail || '(no output captured)'}\n\n`,
           'utf8',
         );
       } catch (err) {
@@ -657,6 +663,8 @@ function buildOrchestrationDeps(args: {
         command,
         exitCode: validation.result.exitCode,
         timedOut: validation.result.timedOut,
+        diagnosticArtifacts,
+        outputHead: outputHead.slice(0, CLOSEOUT_LOG_TAIL_CHARS),
         outputTail: outputTail.slice(-CLOSEOUT_LOG_TAIL_CHARS),
       });
       args.emit?.({
@@ -667,7 +675,7 @@ function buildOrchestrationDeps(args: {
           command,
           exitCode: validation.result.exitCode,
           timedOut: validation.result.timedOut,
-          line: `closeout validation failed: ${command} (${outcome}) — output tail saved to ${CLOSEOUT_VALIDATION_FAILURE_FILE}`,
+          line: `closeout validation failed: ${command} (${outcome}) — output head/tail saved to ${CLOSEOUT_VALIDATION_FAILURE_FILE}`,
         },
       });
       // Already-scrubbed payload — the orchestrator threads it into the coder
@@ -1499,6 +1507,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   tasksRemaining: gateTasksRemaining,
                   concurrentRun: hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+                  validationArtifactsDir: join(deps.workRunsDir, descriptor.id, 'validation-diagnostics'),
                 }),
               ),
             alert: (reason) => {

@@ -32,6 +32,9 @@
  */
 
 import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 // Import `GateResult` from the gate module (its canonical home), NOT the
 // finalizer — the finalizer imports `runGate` from here once P1.5 lands, so
@@ -40,6 +43,7 @@ import { evaluateGate, type GateFacts, type GateResult } from './work-run-gate.j
 import { registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import { scrubPathsInText } from '../ai/tool-labels.js';
 import { redactSecrets } from './work-run-transcript.js';
 import config from '../config.js';
 
@@ -71,6 +75,8 @@ export interface GateRuntimeOpts {
   concurrentRun: boolean;
   /** Per-command budget (WORK_RUN_GATE_COMMAND_TIMEOUT_MS). */
   commandTimeoutMs: number;
+  /** Durable per-run directory for timeout output and sanitized Node reports. */
+  validationArtifactsDir?: string;
 }
 
 /** Result of one validation command run in the integration worktree. */
@@ -81,6 +87,11 @@ export interface GateRuntimeOpts {
  * TREE_STATE_DIFF_MAX_CHARS in orchestrated-work-runner.ts).
  */
 export const MAX_VALIDATION_OUTPUT_TAIL_CHARS = 20_000;
+/** Keep-the-start companion to the rolling tail for startup failures. */
+export const MAX_VALIDATION_OUTPUT_HEAD_CHARS = 20_000;
+
+/** Give Node time to flush its diagnostic report before normal process reaping. */
+const VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS = 1_000;
 
 /**
  * After the child's `exit`, wait at most this long for `close` (stream flush)
@@ -99,6 +110,10 @@ export interface ValidationCommandResult {
   /** Merged stdout+stderr rolling tail (arrival order), capped at
    *  MAX_VALIDATION_OUTPUT_TAIL_CHARS. Empty string when no output. */
   outputTail: string;
+  /** Merged stdout+stderr beginning, capped at MAX_VALIDATION_OUTPUT_HEAD_CHARS. */
+  outputHead?: string;
+  /** Basenames of durable timeout artifacts written under the requested dir. */
+  diagnosticArtifacts?: string[];
 }
 
 /**
@@ -134,7 +149,59 @@ export interface GateRuntimeIO {
     command: string,
     cwd: string,
     timeoutMs: number,
+    diagnosticDir?: string,
   ) => Promise<ValidationCommandResult>;
+}
+
+function sanitizeDiagnosticText(raw: string): string {
+  return redactSecrets(scrubAbsolutePaths(scrubPathsInText(raw)));
+}
+
+function persistTimeoutDiagnostics(opts: {
+  command: string;
+  outputHead: string;
+  outputTail: string;
+  rawReportDir?: string;
+  diagnosticDir?: string;
+  pid?: number;
+}): string[] {
+  const { diagnosticDir, rawReportDir } = opts;
+  if (!diagnosticDir) return [];
+  const artifacts: string[] = [];
+  try {
+    mkdirSync(diagnosticDir, { recursive: true });
+    const outputName = `validation-timeout-${opts.pid ?? 'unknown'}.txt`;
+    writeFileSync(join(diagnosticDir, outputName), sanitizeDiagnosticText(
+      `command: ${opts.command}\n\n=== output head ===\n${opts.outputHead || '(no output captured)'}\n\n` +
+      `=== output tail ===\n${opts.outputTail || '(no output captured)'}\n`,
+    ), 'utf8');
+    artifacts.push(outputName);
+
+    if (rawReportDir) {
+      for (const reportName of readdirSync(rawReportDir).filter((name) => name.endsWith('.json'))) {
+        try {
+          const report = JSON.parse(readFileSync(join(rawReportDir, reportName), 'utf8')) as Record<string, unknown>;
+          // Node reports include the entire inherited environment. Never persist
+          // credentials into the durable run artifact directory.
+          delete report['environmentVariables'];
+          const durableName = `validation-${basename(reportName)}`;
+          writeFileSync(
+            join(diagnosticDir, durableName),
+            sanitizeDiagnosticText(JSON.stringify(report, null, 2)) + '\n',
+            'utf8',
+          );
+          artifacts.push(durableName);
+        } catch (err) {
+          log.warn('validation diagnostic report could not be sanitized', {
+            error: (err as Error).message,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('validation timeout artifact write failed', { error: (err as Error).message });
+  }
+  return artifacts;
 }
 
 /**
@@ -150,21 +217,42 @@ function defaultRunValidationCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
+  diagnosticDir?: string,
 ): Promise<ValidationCommandResult> {
   return new Promise<ValidationCommandResult>((resolve) => {
     const [bin, ...args] = command.trim().split(/\s+/);
     if (!bin) {
       // An empty command can't pass — treat as a non-zero (red) result.
-      resolve({ exitCode: 1, timedOut: false, outputTail: '' });
+      resolve({ exitCode: 1, timedOut: false, outputHead: '', outputTail: '', diagnosticArtifacts: [] });
       return;
     }
-    const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    let rawReportDir: string | undefined;
+    try {
+      if (diagnosticDir) rawReportDir = mkdtempSync(join(tmpdir(), 'rune-validation-report-'));
+    } catch (err) {
+      log.warn('validation diagnostic temp directory creation failed', { error: (err as Error).message });
+    }
+    const reportOptions = rawReportDir
+      ? `--report-on-signal --report-signal=SIGUSR2 --report-directory=${JSON.stringify(rawReportDir)}`
+      : '';
+    const child = spawn(bin, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+      env: reportOptions
+        ? { ...process.env, NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} ${reportOptions}`.trim() }
+        : process.env,
+    });
     registerActiveProcess(child);
 
-    // Merged stdout+stderr tail in arrival order, capped as it streams so a
-    // chatty suite can't grow memory unbounded.
+    // Merged stdout+stderr head + tail in arrival order, both bounded as they
+    // stream so a chatty suite can't grow memory unbounded.
+    let outputHead = '';
     let outputTail = '';
     const capture = (chunk: string): void => {
+      if (outputHead.length < MAX_VALIDATION_OUTPUT_HEAD_CHARS) {
+        outputHead += chunk.slice(0, MAX_VALIDATION_OUTPUT_HEAD_CHARS - outputHead.length);
+      }
       outputTail = (outputTail + chunk).slice(-MAX_VALIDATION_OUTPUT_TAIL_CHARS);
     };
     child.stdout?.setEncoding('utf8');
@@ -175,7 +263,10 @@ function defaultRunValidationCommand(
     let timedOut = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let diagnosticTimer: NodeJS.Timeout | undefined;
     let drainTimer: NodeJS.Timeout | undefined;
+    let diagnosticGracePending = false;
+    let deferredFinish: { code: number | null } | undefined;
     const killGroup = (signal: NodeJS.Signals): void => {
       if (child.pid === undefined) return;
       try {
@@ -188,20 +279,40 @@ function defaultRunValidationCommand(
     // shutdown can't hold the process alive for the full timeout window.
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup('SIGTERM');
-      killTimer = setTimeout(() => killGroup('SIGKILL'), config.WORK_RUN_REAP_GRACE_MS);
-      killTimer.unref();
+      const reap = (): void => {
+        diagnosticGracePending = false;
+        killGroup('SIGTERM');
+        killTimer = setTimeout(() => killGroup('SIGKILL'), config.WORK_RUN_REAP_GRACE_MS);
+        killTimer.unref();
+        if (deferredFinish) finish(deferredFinish.code);
+      };
+      if (rawReportDir) {
+        diagnosticGracePending = true;
+        killGroup('SIGUSR2');
+        diagnosticTimer = setTimeout(reap, VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS);
+      } else {
+        reap();
+      }
     }, timeoutMs);
     timer.unref();
 
     const finish = (exitCode: number | null): void => {
       if (settled) return;
+      if (diagnosticGracePending) {
+        deferredFinish = { code: exitCode };
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (diagnosticTimer) clearTimeout(diagnosticTimer);
       if (drainTimer) clearTimeout(drainTimer);
       unregisterActiveProcess(child);
-      resolve({ exitCode, timedOut, outputTail });
+      const diagnosticArtifacts = timedOut
+        ? persistTimeoutDiagnostics({ command, outputHead, outputTail, rawReportDir, diagnosticDir, pid: child.pid })
+        : [];
+      if (rawReportDir) rmSync(rawReportDir, { recursive: true, force: true });
+      resolve({ exitCode, timedOut, outputHead, outputTail, diagnosticArtifacts });
     };
     // `close` is load-bearing: it fires only after both piped streams end, so
     // the captured tail is complete. The `exit`-keyed drain fallback bounds the
@@ -231,9 +342,10 @@ export async function runValidationCommands(
   cwd: string,
   timeoutMs: number,
   runValidationCommand: GateRuntimeIO['runValidationCommand'] = defaultRunValidationCommand,
+  diagnosticDir?: string,
 ): Promise<ValidationCommandListResult> {
   for (const command of commands) {
-    const result = await runValidationCommand(command, cwd, timeoutMs);
+    const result = await runValidationCommand(command, cwd, timeoutMs, diagnosticDir);
     if (result.timedOut || result.exitCode !== 0) {
       return { ok: false, command, result };
     }
@@ -324,6 +436,7 @@ export async function runGate(
         opts.integrationWorktree,
         opts.commandTimeoutMs,
         runValidationCommand,
+        opts.validationArtifactsDir,
       );
       if (!validation.ok) {
         validationTimedOut = validation.result.timedOut;

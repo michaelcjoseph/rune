@@ -496,6 +496,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
           tasksRemaining: productFacts.transitions.tasksRemaining,
           concurrentRun: hasConcurrentRunForProduct(run.product, run.id),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+          validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
         }),
       ),
     alert: (reason: GateFailReason) => {

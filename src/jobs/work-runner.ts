@@ -846,6 +846,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 // finalize-setup snapshot.
                 concurrentRun: hasConcurrentRun(),
                 commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+                validationArtifactsDir: join(config.WORK_RUNS_DIR, descriptor.id, 'validation-diagnostics'),
               }),
             ),
           // Gate refused → the run holds at branch-complete off `main`. Never a

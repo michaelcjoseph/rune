@@ -349,6 +349,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             tasksRemaining: gateTasksRemaining,
             concurrentRun: false,
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+            validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
           });
         },
         mergeBranch: async () => {

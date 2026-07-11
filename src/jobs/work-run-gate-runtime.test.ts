@@ -18,13 +18,14 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultRunGit } from './sandbox-runtime.js';
 import {
   runGate,
   runValidationCommands,
+  MAX_VALIDATION_OUTPUT_HEAD_CHARS,
   MAX_VALIDATION_OUTPUT_TAIL_CHARS,
   type GateRuntimeOpts,
   type GateRuntimeIO,
@@ -176,17 +177,24 @@ describe('runGate — test before mutating main (P1.5)', () => {
     const io: GateRuntimeIO = { runGit: defaultRunGit, runValidationCommand };
 
     const before = baseState();
+    const diagnosticsDir = join(tmpRoot, 'durable-run', 'validation-diagnostics');
 
     // RED now: notImplemented. GREEN when the impl runs each validation command
     // with cwd === the integration worktree (never the product repo's base
     // checkout), so a command that writes files can't dirty local `main`.
-    await runGate(gateOpts(), io);
+    await runGate(gateOpts({ validationArtifactsDir: diagnosticsDir }), io);
 
     expect(runValidationCommand).toHaveBeenCalled();
     for (const [, cwd] of runValidationCommand.mock.calls) {
       expect(cwd).toBe(integrationWorktree);
       expect(cwd).not.toBe(repoPath);
     }
+    expect(runValidationCommand).toHaveBeenCalledWith(
+      'npm test',
+      integrationWorktree,
+      600_000,
+      diagnosticsDir,
+    );
     // cwd-routing is the path most likely to leak a dirty-`main` side effect —
     // assert the product repo is still byte-for-byte unchanged here too.
     expect(baseState()).toEqual(before);
@@ -246,11 +254,51 @@ describe('runValidationCommands', () => {
     expect(listResult.result.outputTail.endsWith('TAIL-END')).toBe(true);
   });
 
+  it('bounds outputHead to MAX_VALIDATION_OUTPUT_HEAD_CHARS keeping the beginning', async () => {
+    const command = 'node -e process.stdout.write("HEAD-START"+"x".repeat(30000));process.exit(1)';
+    const listResult = await runValidationCommands([command], tmpRoot, 5_000);
+    if (listResult.ok) throw new Error('expected a failed validation');
+    expect(listResult.result.outputHead?.length).toBe(MAX_VALIDATION_OUTPUT_HEAD_CHARS);
+    expect(listResult.result.outputHead?.startsWith('HEAD-START')).toBe(true);
+  });
+
   it('a timed-out command still captures the partial output tail', async () => {
     const command = 'node -e process.stdout.write("EARLY-MARKER");setTimeout(()=>{},120000)';
     const listResult = await runValidationCommands([command], tmpRoot, 1_000);
     if (listResult.ok) throw new Error('expected a failed validation');
     expect(listResult.result.timedOut).toBe(true);
     expect(listResult.result.outputTail).toContain('EARLY-MARKER');
+  });
+
+  it('captures a durable diagnostic report before reaping a silent startup wedge', async () => {
+    const diagnosticsDir = join(tmpRoot, 'validation-diagnostics');
+    const command = 'node -e setTimeout(()=>{},120000)';
+    process.env['RUNE_DIAGNOSTIC_TEST_SECRET'] = 'PLANTED-DIAGNOSTIC-SECRET';
+    try {
+      const listResult = await runValidationCommands(
+        [command],
+        tmpRoot,
+        50,
+        undefined,
+        diagnosticsDir,
+      );
+      if (listResult.ok) throw new Error('expected a failed validation');
+
+      expect(listResult.result.timedOut).toBe(true);
+      expect(listResult.result.outputHead).toContain('Writing Node.js report');
+      expect(listResult.result.outputTail).toContain('Node.js report completed');
+      expect(listResult.result.diagnosticArtifacts?.length).toBeGreaterThan(0);
+
+      const reportName = readdirSync(diagnosticsDir).find((name) => name.endsWith('.json'));
+      expect(reportName).toBeDefined();
+      const rawReport = readFileSync(join(diagnosticsDir, reportName!), 'utf8');
+      const report = JSON.parse(rawReport) as Record<string, unknown>;
+      expect(report['environmentVariables']).toBeUndefined();
+      expect(rawReport).not.toContain('PLANTED-DIAGNOSTIC-SECRET');
+      expect(report['javascriptStack']).toBeTruthy();
+      expect(Array.isArray(report['libuv'])).toBe(true);
+    } finally {
+      delete process.env['RUNE_DIAGNOSTIC_TEST_SECRET'];
+    }
   });
 });
