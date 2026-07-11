@@ -311,7 +311,7 @@ describe('ai/codex', () => {
 
     it('always includes --ephemeral and --skip-git-repo-check in spawn args', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
-      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      spawnMock.mockImplementation(() => createChild({ stdout: 'ok' }));
 
       const { runCodex } = await import('./codex.js');
       await runCodex('my prompt');
@@ -319,6 +319,24 @@ describe('ai/codex', () => {
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).toContain('--ephemeral');
       expect(args).toContain('--skip-git-repo-check');
+    });
+
+    it('creates and resumes persistent chat threads without changing ephemeral defaults', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockImplementation(() => createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('first', { persistentSession: true, sandboxMode: 'read-only' });
+      let args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--ephemeral');
+      expect(args).toContain('-s');
+
+      await runCodex('next', { persistentSession: true, resumeSessionId: 'thread-123', sandboxMode: 'read-only' });
+      args = spawnMock.mock.calls[1]![1] as string[];
+      expect(args.slice(0, 2)).toEqual(['exec', 'resume']);
+      expect(args).toContain('thread-123');
+      expect(args).not.toContain('-s');
+      expect(args.at(-1)).toBe('next');
     });
 
     it('passes -m flag when model option is provided', async () => {

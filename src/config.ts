@@ -299,8 +299,8 @@ const config = {
    *  than the resolver, but much shorter than CLAUDE_TIMEOUT_MS (which is
    *  scoped to Opus agent runs that read/write vault files). */
   HAIKU_SCAN_TIMEOUT_MS: 60_000,
-  DEFAULT_CHAT_MODEL: 'opus',
-  CONVERSATION_MODEL: 'opus',
+  DEFAULT_CHAT_MODEL: 'gpt-5.6-terra',
+  CONVERSATION_MODEL: 'gpt-5.6-terra',
   ONESHOT_MODEL: 'opus',
   AGENT_MODEL: 'opus',
   CLASSIFIER_MODEL: 'haiku',

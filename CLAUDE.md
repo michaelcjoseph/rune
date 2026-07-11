@@ -41,7 +41,7 @@ Detailed reference, read on demand (not loaded every session):
 `src/` layout (deep per-file detail → `docs/architecture/module-reference.md`):
 
 - **`index.ts`, `config.ts`** — entry point (boot + recovery sequence) + typed env config.
-- **`ai/`** — all Claude/Codex CLI spawning (`claude.ts` is the only Claude spawn chokepoint) + tool labels.
+- **`ai/`** — provider-aware chat routing + all Claude/Codex CLI spawning (`claude.ts` is the only Claude spawn chokepoint) + tool labels.
 - **`bot/`** — Telegram bot, slash-command handlers (`commands/`), free-form resolver, skill registry.
 - **`transport/`** — `MessageSender` (TG + webview), notification bus, mutation pipeline, in-flight op tracking, approval actions.
 - **`reviews/`** — session-based reviews (daily…yearly, health, blog) + planning sessions.
@@ -102,7 +102,7 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 
 - **TypeScript** runs directly through `node --import ./scripts/register-ts.mjs` (a local `module.registerHooks()` loader) — no build step for dev or prod. **ESM** (`"type": "module"`) — all imports use `.js` extensions.
 - All timestamps use `America/Chicago` (`src/utils/time.ts`). Config reads from env vars; defaults in `src/config.ts`.
-- **Claude CLI spawning is centralized in `src/ai/claude.ts`** — never spawn `claude` directly elsewhere. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` keep binary resolution + shutdown tracking centralized for external spawners. Codex spawns go through `src/ai/codex.ts`.
+- **AI spawning is centralized:** Claude spawns go through `src/ai/claude.ts`; Codex spawns go through `src/ai/codex.ts`. Provider-neutral conversation turns go through `src/ai/chat.ts`, which resolves the model policy before calling either primitive. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` keep binary resolution + shutdown tracking centralized for external spawners.
 - **Message delivery uses the `MessageSender` interface** (`src/transport/sender.ts`) — handlers and commands never import `TelegramBot` directly for sending; bot is only passed where needed for file downloads (photo handler).
 - Vault files use `readVaultFile` / `writeVaultFile` / `appendVaultFile` (`src/vault/files.ts`) — paths relative to vault root, boundary-asserted. Workspace files use the `src/workspace/files.ts` equivalents. KB agents **must not** write outside `knowledge/`.
 - **Autonomous codebase operations go through the mutation pipeline** (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`; never spawn Claude CLI for project work directly. Supervision writes are fail-safe (errors logged, never propagated).

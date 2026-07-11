@@ -6,13 +6,16 @@ import {
   createSession,
   updateSession,
   setSessionModel,
+  setSessionExecutor,
+  getSessionMessages,
   appendMessageToSession,
   buildSessionSystemPrompt,
   resolveProductChatWorkspace,
   type Transport,
   type SessionScope,
 } from '../../vault/sessions.js';
-import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
+import { runAgent } from '../../ai/claude.js';
+import { askChatWithContext, resolveChatModel } from '../../ai/chat.js';
 import { createLogger } from '../../utils/logger.js';
 import { handleFresh } from '../commands/fresh.js';
 import { handleFreshFull } from '../commands/fresh-full.js';
@@ -212,6 +215,7 @@ export async function dispatchText(
   if (text.startsWith('/opus')) return withCommandLog('opus', () => handleModelSwitch(sender, userId, transport, 'opus', scope));
   if (text.startsWith('/sonnet')) return withCommandLog('sonnet', () => handleModelSwitch(sender, userId, transport, 'sonnet', scope));
   if (text.startsWith('/haiku')) return withCommandLog('haiku', () => handleModelSwitch(sender, userId, transport, 'haiku', scope));
+  if (text.startsWith('/gpt-5.6-terra')) return withCommandLog('gpt-5.6-terra', () => handleModelSwitch(sender, userId, transport, 'gpt-5.6-terra', scope));
   if (text.startsWith('/status')) return withCommandLog('status', () => (
     scope ? handleStatus(sender, userId, transport, scope) : handleStatus(sender, userId, transport)
   ));
@@ -500,10 +504,13 @@ async function handleConversation(
       : createSession(userId, transport, text, config.CONVERSATION_MODEL);
   }
 
+  const priorMessages = [...(scope
+    ? getSessionMessages(userId, transport, scope)
+    : getSessionMessages(userId, transport))];
   if (scope) appendMessageToSession(userId, transport, 'user', text, scope);
   else appendMessageToSession(userId, transport, 'user', text);
 
-  sender.startTyping(userId, 'Asking Claude');
+  sender.startTyping(userId, `Asking ${session.model}`);
   try {
     // A product chat with a resolvable repo becomes a write-enabled agent. Bash
     // starts from repoRoot; Edit/Write are limited to workRoot. Global chats —
@@ -511,21 +518,18 @@ async function handleConversation(
     // vault cwd.
     const workspace = scope?.kind === 'product' ? resolveProductChatWorkspace(scope.product) : null;
     const writeEnabled = !!workspace;
-    const result = await askClaudeWithContext(
-      text,
-      session.sessionId,
-      buildSessionSystemPrompt({ scope, writeEnabled }),
-      {
-        model: session.model,
-        allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
-        opLabel: 'chat',
-        voice: true,
-        ...(scope?.kind === 'product' ? { product: scope.product } : {}),
-        ...(workspace
-          ? { cwd: workspace.repoRoot, writableRoots: [workspace.workRoot], envMode: 'product-chat' as const }
-          : {}),
-      },
-    );
+    const result = await askChatWithContext({
+      ...(session.executor === undefined ? { legacyClaudeSessionId: session.sessionId } : {}),
+      message: text,
+      model: session.model,
+      systemPrompt: buildSessionSystemPrompt({ scope, writeEnabled }),
+      priorMessages,
+      executor: session.executor ?? null,
+      ...(workspace ? { cwd: workspace.repoRoot, writableRoot: workspace.workRoot } : {}),
+      writeEnabled,
+      allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
+      ...(scope?.kind === 'product' ? { product: scope.product } : {}),
+    });
 
     if (result.error) {
       log.error('Conversation error', { error: result.error, sessionId: session.sessionId });
@@ -534,6 +538,8 @@ async function handleConversation(
     }
 
     const rawReply = result.text!;
+    if (scope) setSessionExecutor(userId, transport, result.executor, scope);
+    else setSessionExecutor(userId, transport, result.executor);
     if (scope) {
       appendMessageToSession(userId, transport, 'assistant', rawReply, scope);
       updateSession(userId, transport, scope);
@@ -633,6 +639,10 @@ async function handleModelSwitch(
     await sender.send(userId, `Switched to ${model}. New session started.`);
     return;
   }
+  if (resolveChatModel(session.model).format !== resolveChatModel(model).format) {
+    if (scope) setSessionExecutor(userId, transport, null, scope);
+    else setSessionExecutor(userId, transport, null);
+  }
   if (scope) setSessionModel(userId, transport, model, scope);
   else setSessionModel(userId, transport, model);
   await sender.send(userId, `Switched to ${model}.`);
@@ -714,8 +724,9 @@ Send any message to start a multi-turn chat with your vault. Rune leans Socratic
 
 - \`/whoop\` — Whoop connection status or auth link
 
-**Model** (conversation defaults to opus)
+**Model** (conversation defaults to gpt-5.6-terra)
 
+- \`/gpt-5.6-terra\` — default OpenAI chat model
 - \`/opus\` — max capability
 - \`/sonnet\` — balanced
 - \`/haiku\` — fast responses`;

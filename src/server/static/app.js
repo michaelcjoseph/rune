@@ -581,6 +581,7 @@
     // explicitly. Collapsing them hid which thread `/clear` here would touch.
     const sessionEl = document.getElementById('session-content');
     const sessions = state.sessions || { webview: null, telegram: null };
+    if (modelSelect && sessions.webview?.model) modelSelect.value = sessions.webview.model;
     const sessionLine = (label, s) => s
       ? `<div>${label}: ${s.sessionId.slice(0, 8)} · ${s.model} · ${s.messageCount} msgs</div>`
       : `<div class="muted">${label}: none</div>`;

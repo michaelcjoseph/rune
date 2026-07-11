@@ -56,9 +56,11 @@ export async function closeConversation(
   if (!session) return { ok: false, error: 'no-session' };
 
   try {
-    let result = await summarizeSession(session.sessionId);
+    const messages = scope ? getSessionMessages(chatId, transport, scope) : getSessionMessages(chatId, transport);
+    let result = session.executor?.format === 'codex'
+      ? await summarizeConversationMessages(messages)
+      : await summarizeSession(session.executor?.sessionId ?? session.sessionId);
     if (result.error && isMissingClaudeSessionError(result.error)) {
-      const messages = scope ? getSessionMessages(chatId, transport, scope) : getSessionMessages(chatId, transport);
       if (messages.length > 0) {
         log.warn('Claude session missing during /fresh; summarizing stored transcript', {
           sessionId: session.sessionId,

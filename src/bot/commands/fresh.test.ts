@@ -219,6 +219,23 @@ describe('bot/commands/fresh', () => {
       expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
     });
 
+    it('summarizes a Codex-backed conversation directly from the stored transcript', async () => {
+      getSessionMock.mockReturnValue({
+        sessionId: 'rune-session',
+        executor: { format: 'codex', sessionId: 'codex-thread' },
+      });
+      summarizeMessagesMock.mockResolvedValue({
+        text: 'Codex conversation summary\nKB-worthy: no',
+        error: null,
+      });
+
+      const result = await closeConversation(123, 'telegram');
+
+      expect(result).toMatchObject({ ok: true, journalSummary: 'Codex conversation summary' });
+      expect(summarizeMock).not.toHaveBeenCalled();
+      expect(summarizeMessagesMock).toHaveBeenCalledWith(getSessionMessagesMock.mock.results[0]?.value);
+    });
+
     it('returns { ok: false } and deletes session when summarizeSession throws', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-throw' });
       summarizeMock.mockRejectedValue(new Error('network error'));

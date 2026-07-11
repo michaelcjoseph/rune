@@ -33,12 +33,14 @@ const mockSummarizeSession = vi.fn<(...args: unknown[]) => Promise<{ text: strin
 const mockRunAgent = vi.fn<(...args: unknown[]) => Promise<{ text: string | null; error: string | null }>>();
 vi.mock('../../ai/claude.js', () => ({
   summarizeSession: (...args: unknown[]) => mockSummarizeSession(...args),
+  summarizeConversationMessages: vi.fn(),
   runAgent: (...args: unknown[]) => mockRunAgent(...args),
 }));
 
 vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(() => ({ sessionId: 'test-session-1', messageCount: 5, firstMessage: 'hello' })),
+  getSessionMessages: vi.fn(() => []),
   deleteSession: vi.fn(),
   transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));

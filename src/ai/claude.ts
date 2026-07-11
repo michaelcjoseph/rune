@@ -180,7 +180,7 @@ function scrubProductChatEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export type ClaudeChildEnvMode = 'default' | 'product-chat';
 
-function buildClaudeChildEnv(mode: ClaudeChildEnvMode): NodeJS.ProcessEnv {
+export function buildClaudeChildEnv(mode: ClaudeChildEnvMode): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   // RUNE_WORKSPACE_DIR is governed solely by config.WORKSPACE_DIR (bugs.md #5):
   // set it when configured, strip any inherited value otherwise, so a child
@@ -579,7 +579,10 @@ function askClaudeSession(
       : systemPrompt;
     if (composedSystemPrompt) args.push('--append-system-prompt', composedSystemPrompt);
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
-    args.push('--model', model || config.DEFAULT_CHAT_MODEL);
+    // This is the Claude-only primitive. Provider-neutral chat resolves before
+    // reaching here, so its fallback must remain a Claude alias even when the
+    // application's default chat model is OpenAI-backed.
+    args.push('--model', model || config.ONESHOT_MODEL);
     const opMeta: OpMeta | undefined = opLabel
       ? { kind: 'chat', label: opLabel, ...(product ? { scope: product } : {}) }
       : undefined;
@@ -603,7 +606,7 @@ export async function askClaude(message: string, sessionId: string, model?: stri
  *  carries the most knobs (model, tools, op-label, voice) — positional made
  *  call sites pass `undefined, undefined` to reach the trailing flags. */
 export interface AskClaudeWithContextOpts {
-  /** Override the default chat model (`config.DEFAULT_CHAT_MODEL`). */
+  /** Select the Claude model for this provider-specific call. */
   model?: string;
   /** Restrict the CLI tool allowlist. Omit to use Claude's defaults. */
   allowedTools?: string[];
@@ -963,7 +966,7 @@ KB-worthy means this conversation produced insights worth ingesting into the kno
 
 /** Summarize a session for journal logging */
 export async function summarizeSession(sessionId: string): Promise<ClaudeResult> {
-  return askClaude(SESSION_SUMMARY_INSTRUCTIONS, sessionId, config.DEFAULT_CHAT_MODEL, undefined, true);
+  return askClaude(SESSION_SUMMARY_INSTRUCTIONS, sessionId, config.ONESHOT_MODEL, undefined, true);
 }
 
 export interface ConversationSummaryMessage {

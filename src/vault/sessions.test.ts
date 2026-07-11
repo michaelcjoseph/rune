@@ -19,6 +19,7 @@ vi.mock('../config.js', () => ({
     PRODUCTS_CONFIG_FILE: productsConfigFile,
     WORKSPACE_DIR: workspaceDir,
     VAULT_DIR: vaultDir,
+    DEFAULT_CHAT_MODEL: 'gpt-5.6-terra',
   },
   // Required by transitively-imported ai/claude.js, which builds an MCP
   // config path at module load.
@@ -32,6 +33,7 @@ const {
   updateSession,
   deleteSession,
   setSessionModel,
+  setSessionExecutor,
   getAllSessions,
   restoreSessions,
   persistSessions,
@@ -728,6 +730,13 @@ describe('vault/sessions', () => {
   });
 
   describe('persistence', () => {
+    it('creates new sessions with the Terra default and no executor thread yet', () => {
+      const session = createSession(123, 'telegram', 'test');
+      expect(session.model).toBe('gpt-5.6-terra');
+      expect(session.executor).toBeNull();
+      setSessionExecutor(123, 'telegram', { format: 'codex', sessionId: 'thread-1' });
+      expect(getSession(123, 'telegram')?.executor).toEqual({ format: 'codex', sessionId: 'thread-1' });
+    });
     it('writes sessions to disk on create', () => {
       createSession(123, 'telegram', 'test');
       expect(existsSync(sessionsFile)).toBe(true);

@@ -69,13 +69,19 @@ export interface BuildSessionSystemPromptInput {
   writeEnabled?: boolean;
 }
 
-interface Session {
+export interface ConversationExecutor {
+  format: 'claude' | 'codex';
+  sessionId?: string;
+}
+
+export interface Session {
   sessionId: string;
   lastActivity: string;
   messageCount: number;
   firstMessage: string;
   model: string;
   messages: ConversationMessage[];
+  executor?: ConversationExecutor | null;
 }
 
 export const VAULT_SYSTEM_PROMPT_BASE = `You are Rune, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
@@ -407,6 +413,7 @@ export function createSession(
     firstMessage: (firstMessage || '').slice(0, 100),
     model: model || config.DEFAULT_CHAT_MODEL,
     messages: [],
+    executor: null,
   };
   sessions.set(sessionKeyForScope(userId, transport, scope), session);
   persistSessions();
@@ -437,6 +444,23 @@ export function setSessionModel(
   persistSessions();
 }
 
+export function setSessionExecutor(
+  userId: number,
+  transport: Transport,
+  executor: ConversationExecutor | null,
+  scope: SessionScope = { kind: 'global' },
+): void {
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
+  if (!session) return;
+  const sameClaudeSession = executor?.format === 'claude' &&
+    executor.sessionId === session.executor?.sessionId;
+  if (session.executor?.format === 'claude' && session.executor.sessionId && !sameClaudeSession) {
+    cleanupSession(session.executor.sessionId);
+  }
+  session.executor = executor;
+  persistSessions();
+}
+
 export function deleteSession(
   userId: number,
   transport: Transport,
@@ -444,7 +468,9 @@ export function deleteSession(
 ): void {
   const key = sessionKeyForScope(userId, transport, scope);
   const session = sessions.get(key);
-  if (session) cleanupSession(session.sessionId);
+  if (session?.executor?.format === 'claude' && session.executor.sessionId) {
+    cleanupSession(session.executor.sessionId);
+  }
   sessions.delete(key);
   persistSessions();
 }
@@ -518,6 +544,12 @@ export function restoreSessions(): void {
     let migrated = 0;
     for (const [rawKey, session] of entries) {
       if (!session.messages) session.messages = [];
+      // Sessions persisted before provider-aware chat were Claude-backed.
+      if (!session.model) session.model = 'opus';
+      if (session.executor === undefined) {
+        session.executor = { format: 'claude', sessionId: session.sessionId };
+        migrated++;
+      }
       // Legacy format: bare numeric key with no transport prefix. Treat
       // these as 'telegram' since they predate the webview transport.
       let key: string;

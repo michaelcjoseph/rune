@@ -24,6 +24,7 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
 import { scrubPathsInText } from './tool-labels.js';
+import { isCancelled, registerOp, unregisterOp } from '../transport/in-flight.js';
 
 const log = createLogger('codex');
 
@@ -202,6 +203,15 @@ export interface RunCodexOpts {
    *  parsed JSON objects are delivered as-is; malformed lines are delivered
    *  as a scrubbed raw fallback event instead of crashing the run. */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** Keep the Codex thread on disk so a later call can resume it. Existing
+   * callers remain ephemeral unless they explicitly opt in. */
+  persistentSession?: boolean;
+  /** Resume a previously-created persistent Codex thread. */
+  resumeSessionId?: string;
+  /** User-facing operation tracking for interactive chat calls. */
+  opLabel?: string;
+  /** Optional product scope attached to the operation feed. */
+  product?: string;
 }
 
 export interface CodexResult {
@@ -241,10 +251,16 @@ export async function runCodex(
   const timeout = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const cwd = opts.cwd ?? PROJECT_ROOT;
 
-  const args: string[] = ['exec', '--ephemeral', '--skip-git-repo-check'];
+  const args: string[] = ['exec'];
+  if (opts.resumeSessionId) args.push('resume');
+  if (!opts.persistentSession) args.push('--ephemeral');
+  args.push('--skip-git-repo-check');
   if (opts.model) args.push('-m', opts.model);
-  if (opts.sandboxMode) args.push('-s', opts.sandboxMode);
+  // `codex exec resume` restores the original thread's sandbox policy and does
+  // not accept `-s`; only initial calls may set it.
+  if (opts.sandboxMode && !opts.resumeSessionId) args.push('-s', opts.sandboxMode);
   if (opts.onEvent) args.push('--json');
+  if (opts.resumeSessionId) args.push(opts.resumeSessionId);
   // Prompt is the final positional arg — matches the CLI's documented usage.
   args.push(prompt);
 
@@ -266,6 +282,13 @@ export async function runCodex(
     });
 
     registerActiveProcess(child);
+    const op = opts.opLabel ? registerOp({
+      kind: 'chat',
+      label: opts.opLabel,
+      ...(opts.product ? { scope: opts.product } : {}),
+      userId: config.TELEGRAM_USER_ID,
+      child,
+    }) : null;
 
     let stdout = '';
     let stderr = '';
@@ -337,6 +360,7 @@ export async function runCodex(
     child.on('error', (err: Error) => {
       clearTimeout(timer);
       unregisterActiveProcess(child);
+      if (op) unregisterOp(op.opId, 'error', err.message);
       log.error('codex spawn error', { error: err.message });
       finish({ text: null, error: err.message });
     });
@@ -346,11 +370,18 @@ export async function runCodex(
       unregisterActiveProcess(child);
       flushStdoutEventRemainder();
 
+      if (op && isCancelled(op.opId)) {
+        unregisterOp(op.opId, 'cancelled', 'Cancelled by user');
+        finish({ text: null, error: 'Cancelled by user' });
+        return;
+      }
+
       // Treat both signal=SIGTERM and code=143 (POSIX 128+SIGTERM) as the
       // timeout outcome — mirrors the Claude wrapper's convention so the
       // two executors report timeouts the same way.
       const timedOut = signal === 'SIGTERM' || code === 143;
       if (timedOut) {
+        if (op) unregisterOp(op.opId, 'error', `codex exec timed out after ${timeout}ms`);
         finish({
           text: stdout || null,
           error: `codex exec timed out after ${timeout}ms`,
@@ -359,6 +390,7 @@ export async function runCodex(
       }
 
       if (code === 0) {
+        if (op) unregisterOp(op.opId, 'success');
         // Trim trailing newlines for parity with Claude's wrapper — callers
         // that compare against expected strings won't trip on a stray `\n`.
         finish({ text: stdout.trim(), error: null, exitCode: 0 });
@@ -368,6 +400,7 @@ export async function runCodex(
       // Non-zero exit: surface stderr verbatim when present, otherwise the
       // canonical "exited with code N" message. Match Claude's pattern.
       const error = stderr.trim() || `codex exec exited with code ${code}`;
+      if (op) unregisterOp(op.opId, 'error', error);
       finish({ text: stdout || null, error, exitCode: code ?? undefined });
     });
   });

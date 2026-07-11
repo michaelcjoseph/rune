@@ -7,10 +7,11 @@ vi.mock('../../config.js', () => ({
 
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
+  getSessionMessages: vi.fn(() => []),
   deleteSession: vi.fn(),
   transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
-vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
+vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn(), summarizeConversationMessages: vi.fn() }));
 vi.mock('../../vault/journal.js', () => ({
   appendToJournal: vi.fn(),
   saveConversationSource: vi.fn(() => 'knowledge/raw/conversations/test-conversation.md'),

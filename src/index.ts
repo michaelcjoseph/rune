@@ -141,7 +141,9 @@ rotateStreamLogIfLarge();
 // Restore sessions from previous run
 restoreSessions();
 for (const { session } of getAllSessions()) {
-  markSessionCreated(session.sessionId);
+  if (session.executor?.format === 'claude' && session.executor.sessionId) {
+    markSessionCreated(session.executor.sessionId);
+  }
 }
 restoreReviewSessions();
 for (const [, session] of getAllReviewSessions()) {

@@ -234,7 +234,7 @@ describe('ai/claude', () => {
   });
 
   describe('askClaude (session)', () => {
-    it('uses --session-id and the default chat model for new sessions', async () => {
+    it('uses --session-id and the Claude one-shot model for new sessions', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
       await askClaude('hello', 'new-sess');
       expect(spawnMock).toHaveBeenCalledWith(
@@ -1115,12 +1115,12 @@ Synthesize from provided context only.`);
   });
 
   describe('summarizeSession', () => {
-    it('uses the default chat model', async () => {
-      // First call creates the session with haiku (not the default)
+    it('uses the Claude one-shot model', async () => {
+      // First call creates the session with haiku (not the one-shot model)
       spawnMock.mockReturnValue(createChild({ stdout: 'first reply' }));
       await askClaude('hello', 'sum-sess', 'haiku');
 
-      // summarizeSession passes config.DEFAULT_CHAT_MODEL (opus in this test config)
+      // summarizeSession passes config.ONESHOT_MODEL (opus in this test config)
       spawnMock.mockReturnValue(createChild({ stdout: 'Topic: test\nDiscussion: stuff' }));
       const result = await summarizeSession('sum-sess');
       expect(result.text).toBe('Topic: test\nDiscussion: stuff');

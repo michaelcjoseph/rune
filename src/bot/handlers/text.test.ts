@@ -20,6 +20,8 @@ vi.mock('../../vault/sessions.js', () => ({
   createSession: vi.fn(),
   updateSession: vi.fn(),
   setSessionModel: vi.fn(),
+  setSessionExecutor: vi.fn(),
+  getSessionMessages: vi.fn(() => []),
   appendMessageToSession: vi.fn(),
   buildSessionSystemPrompt: vi.fn(({ scope }: { scope?: { kind: string; product?: string } } = {}) => [
     'You are Rune, the user\'s second-brain conversational layer.',
@@ -254,6 +256,14 @@ describe('text handler routing', () => {
   it('routes /status', async () => {
     await handleTextMessage(mockSender(), msg('/status'));
     expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
+  });
+
+  it('routes /gpt-5.6-terra to the chat model switch', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const setSessionModelMock = setSessionModel as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    await handleTextMessage(mockSender(), msg('/gpt-5.6-terra'));
+    expect(setSessionModelMock).toHaveBeenCalledWith(100, 'telegram', 'gpt-5.6-terra');
   });
 
   it('routes /learn with text', async () => {
@@ -1012,11 +1022,11 @@ describe('handleConversation — startTyping label', () => {
     askMock.mockResolvedValue({ text: 'hello back', error: null });
   });
 
-  it('calls startTyping with "Asking Claude" for conversation turn', async () => {
+  it('calls startTyping with the selected model for a conversation turn', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('hi there'));
 
-    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Asking Claude');
+    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Asking haiku');
   });
 
   it('does not call startTyping with the old "Thinking…" label', async () => {

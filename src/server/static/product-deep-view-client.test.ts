@@ -3717,7 +3717,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const root = makeRoot();
     const sendChat = vi.fn(async () => ({ ok: true }));
 
-    const requiredCommands = ['/fresh', '/fresh-full', '/clear', '/opus', '/sonnet', '/haiku'];
+    const requiredCommands = ['/fresh', '/fresh-full', '/clear', '/gpt-5.6-terra', '/opus', '/sonnet', '/haiku'];
     const html = renderProductDeepView(productView());
 
     for (const command of requiredCommands) {

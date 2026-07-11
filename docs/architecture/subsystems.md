@@ -4,6 +4,16 @@ Architecture mechanics that don't change what Claude does in a typical session b
 
 ---
 
+## Provider-aware chat sessions
+
+Telegram, cockpit Home, and product chat all enter through `askChatWithContext()` (`src/ai/chat.ts`). It resolves the session's selected alias through `policies/model-policy.json` and delegates to `askClaudeWithContext` or `runCodex`; the transport handler does not choose a provider itself. `DEFAULT_CHAT_MODEL` and `CONVERSATION_MODEL` are `gpt-5.6-terra`, while Claude-only one-shots, agents, and session summarization retain Claude aliases.
+
+Each persisted `Session` keeps Rune's public `sessionId` plus optional executor metadata `{format:'claude'|'codex', sessionId?}`. New sessions begin unbound. Restored records that predate executor metadata migrate to Claude using the legacy Rune session id. Same-provider turns resume the bound Claude session or persistent Codex thread; switching providers clears that binding and bootstraps the target provider from a stored transcript capped at 40,000 characters. This carries visible conversation context across providers without treating one provider's private session/tool state as portable. `/fresh` resumes Claude-backed sessions for summarization but summarizes Codex-backed sessions from the stored transcript.
+
+Codex persistence is opt-in at the primitive: chat passes `persistentSession:true`, captures `thread.started`, then calls `codex exec resume` with the stored thread id. All pre-existing `runCodex` callers remain `--ephemeral` by default. Both providers register chat operations with the shared in-flight registry, so `/cancel`, cockpit status, shutdown tracking, and path scrubbing retain the same behavior. Product chat also preserves its repo cwd, write/read-only mode, and secret-scrubbed environment; global chat remains read-only.
+
+The Home selector includes GPT-5.6 Terra and synchronizes to the active webview session model; with no session, Terra is selected. Product chat exposes `/gpt-5.6-terra` alongside the Claude quick commands. Existing sessions retain their persisted model rather than being silently moved to the new default.
+
 ## In-flight op tracking
 
 Every `execClaude()` spawn registers an `InFlightOp` (`src/transport/in-flight.ts`) and emits `BusOpEvent` frames (start/progress/end). TG shows a tracker message ("🤔 agent · 12s · /cancel") that edits every ~10s and deletes on end; the webview shows a cancellable pill. `cancelOp(id)` SIGTERMs the child. `/cancel [opId-prefix]` kills the user's most recent op (or by id). Classifier ops are filtered from senders to avoid resolver spam.

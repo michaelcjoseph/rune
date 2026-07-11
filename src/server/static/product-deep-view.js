@@ -775,7 +775,7 @@ function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'oper
   `</section>`;
 }
 
-const PRODUCT_CHAT_COMMANDS = ['/fresh', '/fresh-full', '/clear', '/opus', '/sonnet', '/haiku'];
+const PRODUCT_CHAT_COMMANDS = ['/fresh', '/fresh-full', '/clear', '/gpt-5.6-terra', '/opus', '/sonnet', '/haiku'];
 
 function renderChatCommands() {
   return `<div class="deep-chat-commands" aria-label="Chat commands">` +
