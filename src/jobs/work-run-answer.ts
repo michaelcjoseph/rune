@@ -16,6 +16,7 @@ import { readAllRuns, upsertRun } from './supervision-store.js';
 import { defaultReleaseRuntimeDeps } from './work-run-release.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createTranscriptSink, redactSecrets } from './work-run-transcript.js';
 import { parseAskUserQuestionEnvelope, pendingCheckForQuestion, type WorkRunParkedQuestion } from './work-run-question.js';
+import { vitestCacheDirFor } from './sandbox-runtime.js';
 
 const log = createLogger('work-run-answer');
 
@@ -121,6 +122,7 @@ async function runContinuation(run: SupervisedRun, optionId: string, ctx: ApplyC
       ...process.env,
       RUNE_PROJECT_ROOT: PROJECT_ROOT,
       ...(config.WORKSPACE_DIR ? { RUNE_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+      RUNE_VITEST_CACHE_DIR: vitestCacheDirFor(worktree),
     },
   });
   registerActiveProcess(child);

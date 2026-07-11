@@ -28,7 +28,7 @@
 
 import { readFileSync } from 'node:fs';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
-import { getProductConfig } from './sandbox-runtime.js';
+import { getProductConfig, vitestCacheDirFor } from './sandbox-runtime.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('credential-injector');
@@ -205,5 +205,10 @@ export function buildSandboxEnv(
     ? readCredentials(product.credentialsFile)
     : {};
 
-  return { ...baseEnv, ...creds };
+  return {
+    ...baseEnv,
+    ...creds,
+    // Rune owns this value: inherited/product values must never couple runs.
+    RUNE_VITEST_CACHE_DIR: vitestCacheDirFor(sandbox.worktree),
+  };
 }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
-import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, type GitRunner } from './sandbox-runtime.js';
+import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type StreamJsonEnvelope, type TranscriptSink } from './work-run-transcript.js';
 import { parseWorkRunSentinel, type WorkRunSentinel } from './work-run-sentinel.js';
 import { parseAskUserQuestionEnvelope, pendingCheckForQuestion, type ParsedAskUserQuestion, type WorkRunParkedQuestion } from './work-run-question.js';
@@ -449,6 +449,8 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           ...process.env,
           RUNE_PROJECT_ROOT: PROJECT_ROOT,
           ...(config.WORKSPACE_DIR ? { RUNE_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+          // Derived last so inherited values cannot couple concurrent runs.
+          RUNE_VITEST_CACHE_DIR: vitestCacheDirFor(sandbox.worktree),
         },
       });
 

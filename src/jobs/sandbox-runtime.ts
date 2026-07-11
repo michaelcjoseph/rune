@@ -20,9 +20,10 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   isContainedIn,
@@ -35,6 +36,25 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('sandbox-runtime');
 
 const execFile = promisify(execFileCb);
+
+const VITEST_CACHE_ROOT = join(tmpdir(), 'rune-vitest-cache');
+
+/** Deterministic, opaque cache directory for one absolute worktree path. */
+export function vitestCacheDirFor(worktreePath: string): string {
+  const digest = createHash('sha256').update(resolve(worktreePath)).digest('hex');
+  return join(VITEST_CACHE_ROOT, digest);
+}
+
+/** Best-effort cache teardown. Cleanup failures never mask worktree lifecycle results. */
+export function removeVitestCache(worktreePath: string): boolean {
+  try {
+    rmSync(vitestCacheDirFor(worktreePath), { recursive: true, force: true });
+    return true;
+  } catch (err) {
+    log.warn('removeVitestCache: cleanup failed', { error: (err as Error).message });
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -551,6 +571,7 @@ async function removeWorktreeAfterReconciliationFailure(
 ): Promise<void> {
   try {
     await runGit(['worktree', 'remove', '--force', worktree], { cwd: repoPath });
+    removeVitestCache(worktree);
   } catch (removeErr) {
     log.warn(
       'Failed to remove worktree after resume base reconciliation failure',
@@ -767,6 +788,7 @@ async function reclaimPreservedWorktree(
         `${(err as Error).message} — remove it manually (git worktree remove --force) and retry`,
     );
   }
+  removeVitestCache(worktree);
   log.warn('createWorktree: reclaimed clean preserved worktree', { worktree });
 }
 
@@ -809,6 +831,7 @@ export async function destroyWorktree(
     const stderr = (err as { stderr?: string })?.stderr ?? '';
     if (/not a working tree/i.test(stderr)) {
       // Already gone — idempotent success.
+      removeVitestCache(sandbox.worktree);
       return;
     }
     throw new Error(
@@ -816,6 +839,7 @@ export async function destroyWorktree(
         `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
     );
   }
+  removeVitestCache(sandbox.worktree);
 }
 
 // ---------------------------------------------------------------------------
@@ -916,6 +940,7 @@ export async function cleanupOrphanWorktrees(opts: CleanupOpts): Promise<string[
       if (resumableWorktrees.has(dir)) continue;
       try {
         rmSync(dir, { recursive: true, force: true });
+        removeVitestCache(dir);
         removed.push(dir);
       } catch (err) {
         log.warn('cleanupOrphanWorktrees: rm failed', {

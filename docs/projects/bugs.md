@@ -1,29 +1,5 @@
 ## Active
 
-- [ ] Work-run worktrees symlink `node_modules`, so vitest's cache / dep-optimize writes land in the shared tree — denied inside the sandbox, coupled across concurrent runs. **(surfaced by orchestrated run `f77bed15` on `rune` / `22-fix-run-dispatch`, 2026-07-10; both the QA and coder agents hit it and had to hand-roll a task-local vitest config to run any tests)**
-
-  - **Severity:** Medium (forces every sandboxed agent to work around it; couples all concurrent runs' vite caches; a contributing factor — not proven the sole cause — of the closeout hang in the linked High-impact failure).
-
-  - **Repro / evidence**
-    - `provisionWorktreeNodeModules` symlinks the product repo's `node_modules` into each fresh worktree — `symlinkSync(src, dest, 'dir')` (`src/jobs/sandbox-runtime.ts:339-343`) — to avoid a per-run `npm ci`.
-    - Vitest/Vite writes its transient config bundle + dep-optimize cache to `node_modules/.vite`, which resolves through that symlink back to the **shared** repo `node_modules` (read-only inside `sandbox-exec`).
-    - Run `f77bed15` transcript: QA @ 18:37 — "the focused suite is blocked by the shared, read-only `node_modules` symlink: Vitest cannot create its transient config bundle … using a task-local Vitest config under `/private/tmp`." Coder @ 18:42 — "a validation retry hit a sandbox write error in Vitest's cache directory under the shared `node_modules` symlink."
-    - Every agent that runs vitest inside the sandbox pays this tax and must invent its own `/tmp` cache/config workaround; the non-sandboxed closeout gate has no such escape hatch.
-
-  - **Root cause**
-    - Vite's `cacheDir` defaults to `node_modules/.vite`; `vitest.config.ts` sets no override. With `node_modules` symlinked to a shared, sandbox-read-only tree, the cache write is denied for sandboxed callers and shared (coupled) for non-sandboxed ones.
-
-  - **Fix shape**
-    - Give each run an isolated, writable vite cache off the symlinked `node_modules`. Make it env-overridable in config: `cacheDir: process.env.RUNE_VITEST_CACHE_DIR ?? 'node_modules/.vite'` in `vitest.config.ts`, and have the sandbox/gate set `RUNE_VITEST_CACHE_DIR` to a per-run writable dir (worktree-local, outside the symlink, or `/tmp/<runId>`).
-    - This removes the sandbox write-denial for agents and decouples concurrent runs' caches, and it lets agents drop their bespoke `/tmp` workarounds.
-
-  - **Things to watch**
-    - This is **not** confirmed as the cause of the closeout *hang* — this session's reproductions showed a non-sandboxed `vitest run` against a symlinked `node_modules` starts fine. It is a confirmed, independent friction (sandboxed agents cannot run vitest without a workaround) that is worth fixing on its own and removes one variable from the hang investigation.
-    - If a per-run cacheDir is used, ensure it is cleaned up (or lives under the GC'd run dir) so `/tmp` doesn't accumulate stale optimize bundles.
-
-  - **Acceptance**
-    - A sandboxed agent can run `vitest run` in its worktree without a write-denial and without a hand-rolled `/tmp` config.
-    - Two concurrent runs do not share a vite cache dir.
 - [ ] Per-task closeout gate runs the whole repo suite (with a 10-min budget) instead of the task's affected suite — N× cost, and it eats the vite wedge once per task. **(related to the `f77bed15` / `22-fix-run-dispatch` hang, 2026-07-10; a blast-radius + speed fix, explicitly NOT a cure for the wedge itself — see the two Active entries above)**
 
   - **Severity:** Medium (performance / blast-radius; not a correctness bug — nothing incorrect lands, it's slow and it amplifies the hang's exposure).
@@ -63,6 +39,8 @@
 (empty)
 
 ## Done
+
+- [x] Work-run worktrees symlink `node_modules`, so Vitest cache writes landed in the shared tree — sandbox-denied and coupled across runs. **(Fixed 2026-07-10 — Rune now derives an opaque SHA-256 cache directory under the OS temp root from each absolute worktree path and forces `RUNE_VITEST_CACHE_DIR` into scoped agent, legacy work-run, closeout, and merge-gate validation environments after inherited/product values. `vitest.config.cjs` uses that value as Vite's top-level `cacheDir`, while bare local runs retain `node_modules/.vite`; CommonJS avoids Vite's separate ESM config bundle under `node_modules/.vite-temp`. Normal/idempotent destruction, clean preserved-worktree reclaim, reconciliation rollback, integration-gate teardown, and orphan cleanup remove only the matching cache best-effort; parked worktrees keep theirs until reclaim/destruction. Covered by derivation/opacity/distinctness, env precedence/spawn propagation, cleanup lifecycle, config-load, focused Vitest, and concurrent-worktree acceptance.)**
 
 - [x] Gate/closeout validation timeouts capture no diagnostic for a pre-collection vitest wedge — the failure is invisible. **(Fixed 2026-07-10 — validation commands now keep bounded 20K output head and tail captures and, when a durable run directory is supplied, inherit Node report-on-`SIGUSR2` options. On timeout Rune signals the entire process group, waits one second for report flush, then performs the existing `SIGTERM`/`SIGKILL` reap. Raw reports land in a temporary directory; before persistence Rune removes the inherited environment, scrubs secrets and host paths, and writes the sanitized JSON plus a command/head/tail text artifact under `<run>/validation-diagnostics/`. Closeout failures also persist labeled head/tail sections and diagnostic filenames. Live, recovery, release, legacy, and orchestrated merge gates all pass their run directory. A real-process regression test wedges before application output and verifies the durable report contains a JavaScript stack and libuv handles before the child is reaped.)**
 

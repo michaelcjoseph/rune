@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultRunGit } from './sandbox-runtime.js';
+import { defaultRunGit, vitestCacheDirFor } from './sandbox-runtime.js';
 import {
   runGate,
   runValidationCommands,
@@ -203,6 +203,19 @@ describe('runGate — test before mutating main (P1.5)', () => {
 });
 
 describe('runValidationCommands', () => {
+  it('forces a validation-worktree-specific Vitest cache into the child environment', async () => {
+    const command = 'node -e console.log(process.env.RUNE_VITEST_CACHE_DIR)';
+    const result = await runValidationCommands([command], tmpRoot, 5_000);
+    expect(result).toEqual({ ok: true });
+    // A passing command does not expose output through the list result, so run
+    // a controlled non-zero command to inspect the captured environment value.
+    const inspect = await runValidationCommands([
+      'node -e console.error(process.env.RUNE_VITEST_CACHE_DIR);process.exit(1)',
+    ], tmpRoot, 5_000);
+    if (inspect.ok) throw new Error('expected inspection command to fail');
+    expect(inspect.result.outputTail).toContain(vitestCacheDirFor(tmpRoot));
+  });
+
   it('passes when every command exits 0', async () => {
     await expect(runValidationCommands([
       'node -e process.exit(0)',
@@ -278,7 +291,9 @@ describe('runValidationCommands', () => {
       const listResult = await runValidationCommands(
         [command],
         tmpRoot,
-        50,
+        // Leave enough startup headroom under the fully parallel suite for
+        // Node to install its report-on-signal handler before Rune times out.
+        500,
         undefined,
         diagnosticsDir,
       );

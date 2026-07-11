@@ -94,6 +94,7 @@ vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  vitestCacheDirFor: (worktree: string) => `/tmp/isolated-vitest/${worktree.split('/').at(-1)}`,
   // Phase 3.5: the gated-merge wiring reads the product config (baseBranch /
   // repoPath / validationCommands) in the common apply() path. A noop run never
   // reaches the gate/merge, so this just needs to resolve.

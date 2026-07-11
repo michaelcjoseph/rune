@@ -61,6 +61,10 @@ Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journ
 - **`PRODUCTS_CONFIG_FILE`** — override for the per-product config path (default `<project-root>/policies/products.json`); exposed via `config.PRODUCTS_CONFIG_FILE` (a getter). Lets the live-acceptance harness point at a throwaway products.json; production leaves it unset.
 - **`LAUNCHD_LABEL`** — launchd service label the cockpit "Restart server" button kickstarts (default `com.jarvis.daemon`); exposed via `config.LAUNCHD_LABEL`. Override if the daemon is loaded under a different label.
 
+### Internal work-run environment
+
+- **`RUNE_VITEST_CACHE_DIR`** — Rune-owned cache path injected into sandboxed agent, initial and answer-resumed legacy work-run, closeout-validation, and integration-gate processes. Rune derives an opaque deterministic directory at `<os-temp>/rune-vitest-cache/<sha256(absolute-worktree-path)>` and assigns it after inherited environment and product credentials, so callers cannot couple concurrent worktrees by overriding it. `vitest.config.cjs` uses this value as Vite's top-level `cacheDir`; ordinary local Vitest runs fall back to `node_modules/.vite`. The cache follows the worktree lifecycle: parked/preserved worktrees retain it, while destruction, reclaim, reconciliation rollback, integration-gate teardown, and orphan cleanup remove it best-effort. This is an internal handoff contract, not a `.env.local`/`src/config.ts` operator setting; external products using another Vite config must opt in to the variable themselves.
+
 ---
 
 ## `logs/` file inventory

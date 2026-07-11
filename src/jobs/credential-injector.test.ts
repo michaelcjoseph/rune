@@ -32,6 +32,7 @@ import {
   DEFAULT_BASE_ENV_KEYS,
   type BuildSandboxEnvOpts,
 } from './credential-injector.js';
+import { vitestCacheDirFor } from './sandbox-runtime.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,6 +289,20 @@ describe('DEFAULT_BASE_ENV_KEYS', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildSandboxEnv', () => {
+  it('forces the worktree-derived Vitest cache over inherited and credential values', () => {
+    vi.stubEnv('RUNE_VITEST_CACHE_DIR', '/tmp/inherited-shared-cache');
+    const credsFile = join(tmpDir, '.env.aura');
+    writeFileSync(credsFile, 'RUNE_VITEST_CACHE_DIR=/tmp/product-shared-cache\n');
+    const credsFileB = join(tmpDir, '.env.assay');
+    writeFileSync(credsFileB, '');
+    const configPath = writeProductsJson(tmpDir, credsFile, credsFileB);
+    const sandbox = makeSandbox('aura');
+
+    const result = buildSandboxEnv(sandbox, { productsConfigPath: configPath });
+
+    expect(result['RUNE_VITEST_CACHE_DIR']).toBe(vitestCacheDirFor(sandbox.worktree));
+  });
+
   it('happy path: returns base env merged with product credentials', () => {
     const credsFile = join(tmpDir, '.env.aura');
     writeFileSync(credsFile, 'AURA_API_KEY=my-secret-key\n');

@@ -35,7 +35,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { defaultRunGit, removeVitestCache, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
 // Import `GateResult` from the gate module (its canonical home), NOT the
 // finalizer — the finalizer imports `runGate` from here once P1.5 lands, so
 // pulling the type from the finalizer would form an import cycle.
@@ -239,9 +239,14 @@ function defaultRunValidationCommand(
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
-      env: reportOptions
-        ? { ...process.env, NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} ${reportOptions}`.trim() }
-        : process.env,
+      env: {
+        ...process.env,
+        ...(reportOptions
+          ? { NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} ${reportOptions}`.trim() }
+          : {}),
+        // Derived last so inherited values cannot couple validation worktrees.
+        RUNE_VITEST_CACHE_DIR: vitestCacheDirFor(cwd),
+      },
     });
     registerActiveProcess(child);
 
@@ -468,5 +473,6 @@ export async function runGate(
         });
       });
     }
+    removeVitestCache(opts.integrationWorktree);
   }
 }

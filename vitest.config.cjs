@@ -1,6 +1,7 @@
-import { defineConfig } from 'vitest/config';
+const { defineConfig } = require('vitest/config');
 
-export default defineConfig({
+module.exports = defineConfig({
+  cacheDir: process.env.RUNE_VITEST_CACHE_DIR ?? 'node_modules/.vite',
   test: {
     include: ['src/**/*.test.ts', 'cli/**/*.test.ts', 'scripts/**/*.test.ts'],
     setupFiles: ['src/test/setup-env.ts'],

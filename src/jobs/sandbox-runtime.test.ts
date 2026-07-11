@@ -35,9 +35,45 @@ import {
   linkWorktreeDeps,
   destroyWorktree,
   cleanupOrphanWorktrees,
+  vitestCacheDirFor,
+  removeVitestCache,
   type ProductConfig,
   type GitRunner,
 } from './sandbox-runtime.js';
+
+describe('worktree Vitest cache isolation', () => {
+  it('derives a stable opaque cache path under the OS temp root', () => {
+    const worktree = join(tmpdir(), 'worktrees', 'rune', '01-test');
+    const cache = vitestCacheDirFor(worktree);
+
+    expect(cache).toBe(vitestCacheDirFor(worktree));
+    expect(cache.startsWith(join(tmpdir(), 'rune-vitest-cache') + '/')).toBe(true);
+    expect(cache).not.toContain(worktree);
+    expect(cache).not.toContain('01-test');
+  });
+
+  it('derives distinct cache paths for distinct worktrees', () => {
+    expect(vitestCacheDirFor('/tmp/worktrees/rune/01-test'))
+      .not.toBe(vitestCacheDirFor('/tmp/worktrees/aura/01-test'));
+  });
+
+  it('removes only the cache belonging to the requested worktree and is idempotent', () => {
+    const first = join(tmpDir, 'first-worktree');
+    const second = join(tmpDir, 'second-worktree');
+    const firstCache = vitestCacheDirFor(first);
+    const secondCache = vitestCacheDirFor(second);
+    mkdirSync(firstCache, { recursive: true });
+    mkdirSync(secondCache, { recursive: true });
+    writeFileSync(join(firstCache, 'cache-entry'), 'first');
+    writeFileSync(join(secondCache, 'cache-entry'), 'second');
+
+    expect(removeVitestCache(first)).toBe(true);
+    expect(removeVitestCache(first)).toBe(true);
+    expect(existsSync(firstCache)).toBe(false);
+    expect(existsSync(secondCache)).toBe(true);
+    removeVitestCache(second);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1091,6 +1127,8 @@ describe('destroyWorktree', () => {
     const configPath = writeProductsJson(tmpDir);
     const runGit = makeRunGit();
     const spec = makeSpec();
+    const cache = vitestCacheDirFor(spec.worktree);
+    mkdirSync(cache, { recursive: true });
 
     await destroyWorktree(spec, { productsConfigPath: configPath, runGit });
 
@@ -1101,6 +1139,7 @@ describe('destroyWorktree', () => {
     expect(calledArgs).toContain('--force');
     expect(calledArgs).toContain(WORKTREE_PATH);
     expect(calledOpts?.cwd).toBe(FIXTURE_PRODUCTS.aura.repoPath);
+    expect(existsSync(cache)).toBe(false);
   });
 
   it('is idempotent: does not throw when runGit stderr says "not a working tree"', async () => {
@@ -1110,11 +1149,14 @@ describe('destroyWorktree', () => {
     });
     const runGit = vi.fn().mockRejectedValue(err);
     const spec = makeSpec();
+    const cache = vitestCacheDirFor(spec.worktree);
+    mkdirSync(cache, { recursive: true });
 
     // Must resolve without throwing
     await expect(
       destroyWorktree(spec, { productsConfigPath: configPath, runGit }),
     ).resolves.toBeUndefined();
+    expect(existsSync(cache)).toBe(false);
   });
 
   it('rethrows on failures unrelated to "not a working tree"', async () => {
@@ -1124,10 +1166,14 @@ describe('destroyWorktree', () => {
     });
     const runGit = vi.fn().mockRejectedValue(err);
     const spec = makeSpec();
+    const cache = vitestCacheDirFor(spec.worktree);
+    mkdirSync(cache, { recursive: true });
 
     await expect(
       destroyWorktree(spec, { productsConfigPath: configPath, runGit }),
     ).rejects.toThrow(/git repository|worktree/i);
+    expect(existsSync(cache)).toBe(true);
+    removeVitestCache(spec.worktree);
   });
 
   it('rethrows with a clear error on a non-zero exit with no stderr', async () => {
@@ -1243,6 +1289,8 @@ describe('cleanupOrphanWorktrees', () => {
     const worktreeRoot = join(tmpDir, 'worktrees');
     const orphanDir = join(worktreeRoot, 'aura', '99-orphan');
     mkdirSync(orphanDir, { recursive: true });
+    const orphanCache = vitestCacheDirFor(orphanDir);
+    mkdirSync(orphanCache, { recursive: true });
 
     const runGit = vi.fn().mockImplementation(async (args: string[]) => {
       if (args.includes('prune')) return { stdout: '', stderr: '' };
@@ -1265,6 +1313,7 @@ describe('cleanupOrphanWorktrees', () => {
     expect(result).toContain(orphanDir);
     // The orphan dir must have been removed
     expect(existsSync(orphanDir)).toBe(false);
+    expect(existsSync(orphanCache)).toBe(false);
   });
 
   it('removes only the orphan when there are two on-disk dirs and one is registered', async () => {

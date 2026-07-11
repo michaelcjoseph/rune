@@ -126,6 +126,7 @@ vi.mock('./sandbox-runtime.js', () => ({
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
   getProductConfig: mockGetProductConfig,
   readProductsConfig: mockReadProductsConfig,
+  vitestCacheDirFor: (worktree: string) => `/tmp/isolated-vitest/${worktree.split('/').at(-1)}`,
 }));
 
 // --- Phase 3.5 (live gated-merge activation) test seams ---
@@ -585,6 +586,7 @@ describe('workRunApplier', () => {
       // prerequisite for reaping orphaned grandchildren that would otherwise
       // wedge the run open (docs/projects/bugs.md).
       expect(spawnOpts.detached).toBe(true);
+      expect(spawnOpts.env.RUNE_VITEST_CACHE_DIR).toBe('/tmp/isolated-vitest/06-webview');
     });
 
     it('yields a completed terminal event on exit code 0', async () => {
