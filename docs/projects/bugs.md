@@ -1,28 +1,5 @@
 ## Active
 
-- [ ] Per-task closeout gate runs the whole repo suite (with a 10-min budget) instead of the task's affected suite — N× cost, and it eats the vite wedge once per task. **(related to the `f77bed15` / `22-fix-run-dispatch` hang, 2026-07-10; a blast-radius + speed fix, explicitly NOT a cure for the wedge itself — see the two Active entries above)**
-
-  - **Severity:** Medium (performance / blast-radius; not a correctness bug — nothing incorrect lands, it's slow and it amplifies the hang's exposure).
-
-  - **Context — two gates, both currently full-suite**
-    - **Per-task closeout** (`src/jobs/orchestrated-work-runner.ts:621` `runCloseoutChecks`) runs after every task in the task's sandbox worktree. Today it reuses the product's `validationCommands` verbatim — its own comment: "for v1 these are the same fast checks the finalizer gate uses."
-    - **Final merge gate** (`src/jobs/work-run-gate-runtime.ts` `runGate`) runs `validationCommands` in a throwaway integration worktree (base branch + dry-merge of the feature branch) right before the finalizer merges to `main` — the "test before mutating main" invariant.
-    - For `rune`, `validationCommands` is `npm test` (the whole repo suite), which is not a fast check. So an N-task project runs the full suite N+1 times, and every per-task run is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS = 600_000` (`src/config.ts:371`) — a wedge idles the full 10 minutes per task before failing.
-
-  - **Fix shape**
-    - Scope the per-task closeout to the task's **affected** tests. Cleanest signal: the per-task test files the test-plan already pins; fallback is `vitest related` / `--changed`.
-    - Give the per-task closeout its **own, short** budget (e.g. 60–120s) so a startup wedge fails fast with captured output instead of after 10 idle minutes. This likely means splitting the per-task and finalizer gates' timeout/command config, which currently share `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` + `validationCommands`.
-    - Keep the **whole suite** at the final merge gate (`runGate`) — it already runs there, once, before `main`. Nothing reaches `main` without a full green run.
-
-  - **Tradeoff (accepted)**
-    - Scoping per-task loses early detection of a cross-cutting regression *between* tasks (task 3 breaks a test task 7's scoped suite doesn't cover). The final merge gate catches it before `main`, so nothing bad lands — you just learn about it at merge instead of at the offending task.
-
-  - **Do not mistake this for a hang fix**
-    - The final full-suite merge gate would hit the same vite wedge. #3 reduces how often the wedge is triggered and how long each occurrence idles; curing the wedge still needs the diagnostic (entry #1 above) + isolated cache (entry #2 above) + root-cause work.
-
-  - **Acceptance**
-    - Per-task closeout runs a task-scoped command bounded by a short budget; the full suite still runs at the merge gate before `main`.
-    - A per-task closeout that wedges at startup fails in seconds with captured output, not after 10 idle minutes.
 - [ ] **Orchestrated coder can't reach pkms: rune-kb MCP not registered in the coder's child-sandbox context, so MCP-only tasks fail on a missing deliverable.**
   - **Symptom.** The orchestrated run for product `writing`/`brand` (michaelcjoseph.com, project 01) failed on task `voice-guidelines-copy` (run `b03af189`). Round cap reached with unresolved task feedback. Empty diff. The deliverable (copied voice guidelines under `docs/rune/`) was absent from both the diff and the branch tree-state.
   - **Root cause.** The task's only sanctioned source is pkms `writing/voice.md`, and the project spec hard-gates pkms access to MCP only. The rune-kb MCP tools were not registered in the orchestrated coder's context, so that path was unreachable. The raw pkms/rune-kb daemon on `127.0.0.1:3848` was sandbox-blocked (correctly). Both doors to pkms were shut, leaving no valid way to produce the deliverable.
@@ -39,6 +16,8 @@
 (empty)
 
 ## Done
+
+- [x] Per-task closeout gate ran the whole repo suite with the merge gate's 10-minute budget. **(Fixed 2026-07-10 — products now select `vitest-related` or `product-commands` closeout policy; Rune and Rune-MCP run argv-safe `npx vitest related --run --passWithNoTests` over the NUL-delimited tracked-plus-untracked diff against `HEAD`, excluding deletions, with a dedicated 120-second `WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS`. Other products preserve their configured commands under the short budget. The shared validation runtime retains isolated cache injection, bounded output, timeout diagnostics, process-group reaping, and active-process tracking. Coder self-validation and the final merge gate remain full-product `validationCommands` under the unchanged 10-minute gate budget. Covered by config rejection/default tests, changed-path and injection regressions, closeout repair/parking tests, and a real two-source/two-test related-versus-full-suite fixture.)**
 
 - [x] Work-run worktrees symlink `node_modules`, so Vitest cache writes landed in the shared tree — sandbox-denied and coupled across runs. **(Fixed 2026-07-10 — Rune now derives an opaque SHA-256 cache directory under the OS temp root from each absolute worktree path and forces `RUNE_VITEST_CACHE_DIR` into scoped agent, legacy work-run, closeout, and merge-gate validation environments after inherited/product values. `vitest.config.cjs` uses that value as Vite's top-level `cacheDir`, while bare local runs retain `node_modules/.vite`; CommonJS avoids Vite's separate ESM config bundle under `node_modules/.vite-temp`. Normal/idempotent destruction, clean preserved-worktree reclaim, reconciliation rollback, integration-gate teardown, and orphan cleanup remove only the matching cache best-effort; parked worktrees keep theirs until reclaim/destruction. Covered by derivation/opacity/distinctness, env precedence/spawn propagation, cleanup lifecycle, config-load, focused Vitest, and concurrent-worktree acceptance.)**
 

@@ -59,6 +59,14 @@ const mockRunValidationCommands = vi.hoisted(() =>
     _timeoutMs: number,
   ): Promise<MockValidationCommandListResult> => ({ ok: true })),
 );
+const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const mockRunValidationCommandArgv = vi.hoisted(() => vi.fn(async () => ({
+  exitCode: 0,
+  timedOut: false,
+  outputHead: '',
+  outputTail: '',
+  diagnosticArtifacts: [],
+})));
 
 vi.mock('./mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
@@ -86,6 +94,8 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
 
 vi.mock('./work-run-gate-runtime.js', () => ({
   runGate: mockRunGate,
+  collectTaskChangedPaths: mockCollectTaskChangedPaths,
+  runValidationCommandArgv: mockRunValidationCommandArgv,
   runValidationCommands: mockRunValidationCommands,
 }));
 
@@ -385,6 +395,16 @@ describe('orchestratedWorkApplier', () => {
       mockRunGate.mockResolvedValue({ ok: true });
       mockRunValidationCommands.mockReset();
       mockRunValidationCommands.mockResolvedValue({ ok: true });
+      mockCollectTaskChangedPaths.mockReset();
+      mockCollectTaskChangedPaths.mockResolvedValue([]);
+      mockRunValidationCommandArgv.mockReset();
+      mockRunValidationCommandArgv.mockResolvedValue({
+        exitCode: 0,
+        timedOut: false,
+        outputHead: '',
+        outputTail: '',
+        diagnosticArtifacts: [],
+      });
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
       mockCreateTranscriptSink.mockReset();
@@ -1702,14 +1722,16 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            closeoutValidationStrategy: 'vitest-related',
           },
         }),
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
-      mockRunValidationCommands.mockImplementationOnce(async () => {
+      mockCollectTaskChangedPaths.mockResolvedValue(['src/feature.ts', 'src/odd name.test.ts']);
+      mockRunValidationCommandArgv.mockImplementation(async () => {
         operations.push('validation');
-        return { ok: true as const };
+        return { exitCode: 0, timedOut: false, outputHead: '', outputTail: '', diagnosticArtifacts: [] };
       });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
@@ -1767,6 +1789,22 @@ describe('orchestratedWorkApplier', () => {
         expect(operations).toEqual(expect.arrayContaining(['validation', 'git:add', 'git:commit']));
         expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:add'));
         expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:commit'));
+        expect(mockRunValidationCommands).not.toHaveBeenCalled();
+        expect(mockCollectTaskChangedPaths).toHaveBeenCalledWith(wtDir, runGit);
+        expect(mockRunValidationCommandArgv).toHaveBeenCalledWith(
+          [
+            'npx',
+            'vitest',
+            'related',
+            '--run',
+            '--passWithNoTests',
+            'src/feature.ts',
+            'src/odd name.test.ts',
+          ],
+          wtDir,
+          120_000,
+          join(artifactsDir, runId, 'validation-diagnostics'),
+        );
         expect(progress).toEqual(expect.arrayContaining([
           expect.objectContaining({
             mutationId: runId,
@@ -1860,6 +1898,13 @@ describe('orchestratedWorkApplier', () => {
         expect(validationCwd).toBe(wtDir);
         expect(validationCwd).not.toBe(repoPath);
         expect(validationCwd).not.toBe(integrationWorktree);
+        expect(mockRunValidationCommands).toHaveBeenCalledWith(
+          ['npm test'],
+          wtDir,
+          120_000,
+          undefined,
+          join(artifactsDir, runId, 'validation-diagnostics'),
+        );
       } finally {
         if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
         else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;

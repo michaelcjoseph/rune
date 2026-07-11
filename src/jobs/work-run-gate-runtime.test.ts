@@ -18,12 +18,15 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PROJECT_ROOT } from '../config.js';
 import { defaultRunGit, vitestCacheDirFor } from './sandbox-runtime.js';
 import {
   runGate,
+  collectTaskChangedPaths,
+  runValidationCommandArgv,
   runValidationCommands,
   MAX_VALIDATION_OUTPUT_HEAD_CHARS,
   MAX_VALIDATION_OUTPUT_TAIL_CHARS,
@@ -203,6 +206,81 @@ describe('runGate — test before mutating main (P1.5)', () => {
 });
 
 describe('runValidationCommands', () => {
+  it('collects modified and untracked task paths while excluding deletions', async () => {
+    writeFileSync(join(repoPath, 'deleted.txt'), 'remove me\n');
+    git(repoPath, 'add', 'deleted.txt');
+    git(repoPath, 'commit', '-q', '-m', 'add deletable file');
+    writeFileSync(join(repoPath, TRACKED_FILE), 'modified\n');
+    writeFileSync(join(repoPath, 'new test.ts'), 'new\n');
+    rmSync(join(repoPath, 'deleted.txt'));
+
+    await expect(collectTaskChangedPaths(repoPath)).resolves.toEqual([
+      TRACKED_FILE,
+      'new test.ts',
+    ]);
+  });
+
+  it('normalizes and deduplicates paths across tracked and untracked Git output', async () => {
+    const runGit = vi.fn(async (args: string[]) => args[0] === 'diff'
+      ? { stdout: './src/changed.ts\0src/changed.ts\0', stderr: '' }
+      : { stdout: 'src/new test.ts\0src/changed.ts\0', stderr: '' });
+    await expect(collectTaskChangedPaths(tmpRoot, runGit)).resolves.toEqual([
+      'src/changed.ts',
+      'src/new test.ts',
+    ]);
+  });
+
+  it('passes unusual path arguments literally through the argv-safe runner', async () => {
+    const marker = 'odd name;$(touch SHOULD_NOT_EXIST)';
+    const result = await runValidationCommandArgv(
+      [process.execPath, '-e', 'console.error(JSON.stringify(process.argv.slice(1)));process.exit(3)', marker],
+      tmpRoot,
+      5_000,
+    );
+    expect(result).toMatchObject({ exitCode: 3, timedOut: false });
+    expect(result.outputTail).toContain(JSON.stringify(marker));
+    expect(existsSync(join(tmpRoot, 'SHOULD_NOT_EXIST'))).toBe(false);
+  });
+
+  it('runs only the related test for a task diff while a full-suite command still runs both pairs', async () => {
+    const fixture = join(tmpRoot, 'related-fixture');
+    const src = join(fixture, 'src');
+    mkdirSync(src, { recursive: true });
+    symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(fixture, 'node_modules'), 'dir');
+    writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+    writeFileSync(join(src, 'alpha.ts'), 'export const alpha = 1;\n');
+    writeFileSync(join(src, 'beta.ts'), 'export const beta = 2;\n');
+    writeFileSync(join(src, 'alpha.test.ts'), [
+      "import { test, expect } from 'vitest';",
+      "import { writeFileSync } from 'node:fs';",
+      "import { alpha } from './alpha.js';",
+      "test('alpha', () => { writeFileSync('alpha-ran', 'yes'); expect(alpha).toBe(1); });",
+      '',
+    ].join('\n'));
+    writeFileSync(join(src, 'beta.test.ts'), [
+      "import { test, expect } from 'vitest';",
+      "import { writeFileSync } from 'node:fs';",
+      "import { beta } from './beta.js';",
+      "test('beta', () => { writeFileSync('beta-ran', 'yes'); expect(beta).toBe(2); });",
+      '',
+    ].join('\n'));
+
+    const related = await runValidationCommandArgv(
+      ['npx', 'vitest', 'related', '--run', '--passWithNoTests', 'src/alpha.ts'],
+      fixture,
+      30_000,
+    );
+    expect(related.exitCode).toBe(0);
+    expect(existsSync(join(fixture, 'alpha-ran'))).toBe(true);
+    expect(existsSync(join(fixture, 'beta-ran'))).toBe(false);
+    rmSync(join(fixture, 'alpha-ran'));
+
+    const full = await runValidationCommandArgv(['npx', 'vitest', '--run'], fixture, 30_000);
+    expect(full.exitCode).toBe(0);
+    expect(existsSync(join(fixture, 'alpha-ran'))).toBe(true);
+    expect(existsSync(join(fixture, 'beta-ran'))).toBe(true);
+  }, 60_000);
+
   it('forces a validation-worktree-specific Vitest cache into the child environment', async () => {
     const command = 'node -e console.log(process.env.RUNE_VITEST_CACHE_DIR)';
     const result = await runValidationCommands([command], tmpRoot, 5_000);

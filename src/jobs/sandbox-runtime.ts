@@ -65,6 +65,7 @@ export function removeVitestCache(worktreePath: string): boolean {
  *  to a caller. */
 export type ProductClass = 'internal' | 'external';
 export type MonitoringCapability = 'enabled' | 'stubbed';
+export type CloseoutValidationStrategy = 'vitest-related' | 'product-commands';
 
 export interface ProductContainerCapabilities {
   projects: boolean;
@@ -106,6 +107,8 @@ export interface ProductConfig {
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
    *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
   validationCommands?: string[];
+  /** Per-task closeout policy. Absent config defaults to product commands. */
+  closeoutValidationStrategy?: CloseoutValidationStrategy;
   /** Per-product orchestrated-work toggle (project 14, Phase 5). When set, it
    *  OVERRIDES the global `ORCHESTRATED_WORK_ENABLED` default for this product's
    *  work-run dispatch: `true` routes Start to the orchestrated applier, `false`
@@ -241,6 +244,13 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
         `readProductsConfig: product '${slug}' is missing required field 'repoPath' in ${path}`,
       );
     }
+    const closeoutValidationStrategy = entry['closeoutValidationStrategy'] ?? 'product-commands';
+    if (closeoutValidationStrategy !== 'vitest-related' && closeoutValidationStrategy !== 'product-commands') {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid closeoutValidationStrategy ` +
+          `'${String(closeoutValidationStrategy)}' in ${path} — expected 'vitest-related' or 'product-commands'`,
+      );
+    }
     out[slug] = {
       ...(productClass ? { class: productClass } : {}),
       ...(entry['containerCapabilities'] !== undefined
@@ -261,6 +271,7 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       validationCommands: Array.isArray(entry['validationCommands'])
         ? (entry['validationCommands'] as unknown[]).map(String)
         : [],
+      closeoutValidationStrategy,
       // Per-product orchestrated-work toggle (project 14). Only a real boolean
       // overrides the global default; anything else leaves it absent so the
       // dispatch seam falls back to the global ORCHESTRATED_WORK_ENABLED.

@@ -40,6 +40,7 @@ import {
   destroyWorktree as defaultDestroyWorktree,
   defaultRunGit,
   getProductConfig,
+  type CloseoutValidationStrategy,
   type GitRunner,
 } from './sandbox-runtime.js';
 import {
@@ -107,7 +108,9 @@ import {
   type GateFailReason,
 } from './work-run-finalizer.js';
 import {
+  collectTaskChangedPaths,
   runGate as defaultRunGate,
+  runValidationCommandArgv as defaultRunValidationCommandArgv,
   runValidationCommands as defaultRunValidationCommands,
 } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
@@ -532,6 +535,7 @@ function buildOrchestrationDeps(args: {
   branch: string;
   baseBranch: string;
   validationCommands: string[];
+  closeoutValidationStrategy: CloseoutValidationStrategy;
   workRunsDir: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
@@ -615,18 +619,32 @@ function buildOrchestrationDeps(args: {
     writeContextMd: async (content: string) => writeFileSync(contextPath, content, 'utf8'),
     writeTasksMd: async (content: string) => writeFileSync(tasksPath, content, 'utf8'),
 
-    // Task-scoped closeout checks: run the product's validation commands. (For
-    // v1 these are the same fast checks the finalizer gate uses.) No commands ⇒
-    // pass — the project-level finalizer gate still owns the full merge gate.
+    // Task-scoped closeout checks use the product policy's short-budget
+    // strategy. The project-level finalizer independently owns the full gate.
     runCloseoutChecks: async (task) => {
       const runDir = join(args.workRunsDir, descriptor.id);
-      const validation = await defaultRunValidationCommands(
-        args.validationCommands,
-        sandbox.worktree,
-        config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
-        undefined,
-        join(runDir, 'validation-diagnostics'),
-      );
+      const diagnosticDir = join(runDir, 'validation-diagnostics');
+      const validation = args.closeoutValidationStrategy === 'vitest-related'
+        ? await (async () => {
+            const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
+            const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...changedPaths];
+            const result = await defaultRunValidationCommandArgv(
+              argv,
+              sandbox.worktree,
+              config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+              diagnosticDir,
+            );
+            return result.timedOut || result.exitCode !== 0
+              ? { ok: false as const, command: argv.map((arg) => JSON.stringify(arg)).join(' '), result }
+              : { ok: true as const };
+          })()
+        : await defaultRunValidationCommands(
+            args.validationCommands,
+            sandbox.worktree,
+            config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+            undefined,
+            diagnosticDir,
+          );
       if (validation.ok) return { ok: true };
       const scrub = (text: string): string => redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
       const command = scrub(validation.command);
@@ -1310,12 +1328,24 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let baseBranch = 'main';
       let repoPath = runSandbox.worktree;
       let validationCommands: string[] = [];
+      let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
         const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
         baseBranch = productConfig.baseBranch;
         repoPath = productConfig.repoPath;
         validationCommands = productConfig.validationCommands ?? [];
-      } catch {
+        closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
+      } catch (err) {
+        if ((err as Error).message.includes('invalid closeoutValidationStrategy')) {
+          const terminal = term(descriptor.id, 'failed', {
+            reason: scrubPathsInText(`product config invalid: ${(err as Error).message}`),
+            projectSlug,
+            product,
+          });
+          persistTerminalStateOnce(terminal);
+          yield terminal;
+          return;
+        }
         /* default to main if products.json is unreadable */
       }
       if (recovery) {
@@ -1352,6 +1382,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch: recovery?.baseBranch ?? baseBranch,
         validationCommands,
+        closeoutValidationStrategy,
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,

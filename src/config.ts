@@ -357,6 +357,7 @@ const config = {
    *    run, low enough to still stop a true runaway overnight. Distinct from the
    *    reconciler's presume-dead staleness (PRESUMED_DEAD_STALE_MS, decoupled so
    *    raising this ceiling doesn't also slow dead-run cleanup).
+   *  - CLOSEOUT_COMMAND_TIMEOUT: per-task closeout validation budget.
    *  - GATE_COMMAND_TIMEOUT: per validation-command budget in the merge gate
    *    (P1.5); a timeout is a red gate result, not a wedge. */
   WORK_RUN_TERMINAL_DRAIN_MS: parseNumericEnv('WORK_RUN_TERMINAL_DRAIN_MS', 30_000, { min: 1, integer: true }),
@@ -368,6 +369,7 @@ const config = {
    *  nudge (never an auto-release; the worktree holds until a human releases it).
    *  Default 24h. */
   PARKED_RUN_NUDGE_AFTER_MS: parseNumericEnv('PARKED_RUN_NUDGE_AFTER_MS', 86_400_000, { min: 1, integer: true }),
+  WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS: parseNumericEnv('WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS', 120_000, { min: 1, integer: true }),
   WORK_RUN_GATE_COMMAND_TIMEOUT_MS: parseNumericEnv('WORK_RUN_GATE_COMMAND_TIMEOUT_MS', 600_000, { min: 1, integer: true }),
 
   /** True when started with `NODE_ENV=production` — read by surfaces that

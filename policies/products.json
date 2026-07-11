@@ -65,7 +65,8 @@
     "validationCommands": [
       "npm run build",
       "npm test"
-    ]
+    ],
+    "closeoutValidationStrategy": "vitest-related"
   },
   "rune-mcp": {
     "class": "internal",
@@ -91,7 +92,8 @@
     "validationCommands": [
       "npm run build",
       "npm test"
-    ]
+    ],
+    "closeoutValidationStrategy": "vitest-related"
   },
   "relay": {
     "class": "external",

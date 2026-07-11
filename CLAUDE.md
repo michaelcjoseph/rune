@@ -158,7 +158,7 @@ Loaded from `.env.local` via `--env-file-if-exists`. Defaults in `src/config.ts`
 | `RESOLVER_CONFIDENCE_THRESHOLD`, `RESOLVER_MIN_WORDS` | Resolver dispatch threshold / min word count |
 | `RUNE_WORKSPACE_DIR` | Absolute workspace root for autonomous ops (no `~` expansion) |
 | `ORCHESTRATED_WORK_ENABLED` | Global toggle for orchestrated-work dispatch (default off; per-product `orchestratedMode` overrides) |
-| `WORK_RUN_*` | Concurrency caps, retention GC, reaping/drain grace, quiet-cancel + max-runtime ceilings, gate timeout |
+| `WORK_RUN_*` | Concurrency caps, retention GC, reaping/drain grace, quiet-cancel + max-runtime ceilings, closeout + merge-gate timeouts |
 | `PARKED_RUN_NUDGE_AFTER_MS` | One-time staleness nudge for a parked run (never auto-releases) |
 | `WORKTREE_ROOT`, `PRODUCTS_CONFIG_FILE`, `LAUNCHD_LABEL` | Worktree root / per-product config path / launchd label (all getters) |
 

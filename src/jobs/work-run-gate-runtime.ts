@@ -34,7 +34,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, normalize } from 'node:path';
 import { defaultRunGit, removeVitestCache, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
 // Import `GateResult` from the gate module (its canonical home), NOT the
 // finalizer — the finalizer imports `runGate` from here once P1.5 lands, so
@@ -213,19 +213,20 @@ function persistTimeoutDiagnostics(opts: {
  * command that forks (e.g. `npm` → `node`) can't outlive its budget. Registered
  * with the active-process registry so a graceful Rune shutdown reaps it too.
  */
-function defaultRunValidationCommand(
-  command: string,
+export function runValidationCommandArgv(
+  argv: readonly string[],
   cwd: string,
   timeoutMs: number,
   diagnosticDir?: string,
 ): Promise<ValidationCommandResult> {
   return new Promise<ValidationCommandResult>((resolve) => {
-    const [bin, ...args] = command.trim().split(/\s+/);
+    const [bin, ...args] = argv;
     if (!bin) {
       // An empty command can't pass — treat as a non-zero (red) result.
       resolve({ exitCode: 1, timedOut: false, outputHead: '', outputTail: '', diagnosticArtifacts: [] });
       return;
     }
+    const command = argv.map((arg) => JSON.stringify(arg)).join(' ');
     let rawReportDir: string | undefined;
     try {
       if (diagnosticDir) rawReportDir = mkdtempSync(join(tmpdir(), 'rune-validation-report-'));
@@ -332,9 +333,41 @@ function defaultRunValidationCommand(
   });
 }
 
+function defaultRunValidationCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  diagnosticDir?: string,
+): Promise<ValidationCommandResult> {
+  return runValidationCommandArgv(command.trim().split(/\s+/).filter(Boolean), cwd, timeoutMs, diagnosticDir);
+}
+
 export type ValidationCommandListResult =
   | { ok: true }
   | { ok: false; command: string; result: ValidationCommandResult };
+
+function parseGitPathList(raw: string): string[] {
+  return raw
+    .split('\0')
+    .filter(Boolean)
+    .map((path) => normalize(path).replaceAll('\\', '/').replace(/^\.\//, ''))
+    .filter((path) => path !== '.' && !path.startsWith('../'));
+}
+
+/** Current task files: tracked changes against HEAD plus untracked files. */
+export async function collectTaskChangedPaths(
+  cwd: string,
+  runGit: GitRunner = defaultRunGit,
+): Promise<string[]> {
+  const [tracked, untracked] = await Promise.all([
+    runGit(['diff', '--name-only', '-z', '--diff-filter=ACMRTUXB', 'HEAD', '--'], { cwd }),
+    runGit(['ls-files', '--others', '--exclude-standard', '-z', '--'], { cwd }),
+  ]);
+  return [...new Set([
+    ...parseGitPathList(tracked.stdout),
+    ...parseGitPathList(untracked.stdout),
+  ])];
+}
 
 /**
  * Run a product validation command list in `cwd`, stopping at the first failed

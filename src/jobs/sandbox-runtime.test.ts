@@ -310,6 +310,42 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
   });
 });
 
+describe('readProductsConfig — closeoutValidationStrategy', () => {
+  it.each(['vitest-related', 'product-commands'] as const)('parses %s', (strategy) => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        closeoutValidationStrategy: strategy,
+      },
+    });
+    expect(readProductsConfig(configPath)['rune']!.closeoutValidationStrategy).toBe(strategy);
+  });
+
+  it('defaults an absent strategy to product-commands', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: { repoPath: '/fake/workspace/aura' },
+    });
+    expect(readProductsConfig(configPath)['aura']!.closeoutValidationStrategy).toBe('product-commands');
+  });
+
+  it('rejects an invalid configured strategy', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        closeoutValidationStrategy: 'full-suite',
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/invalid closeoutValidationStrategy/);
+  });
+
+  it('opts the real Rune products into related tests', () => {
+    const configPath = fileURLToPath(new URL('../../policies/products.json', import.meta.url));
+    const products = readProductsConfig(configPath);
+    expect(products['rune']!.closeoutValidationStrategy).toBe('vitest-related');
+    expect(products['rune-mcp']!.closeoutValidationStrategy).toBe('vitest-related');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // readProductsConfig — product policy schema (project 19, W2 Phase 4)
 //

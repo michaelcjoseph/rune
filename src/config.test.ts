@@ -254,7 +254,7 @@ describe('config', () => {
 
   // -------------------------------------------------------------------------
   // Project 15 (P0.2) — work-run finalizer timing constants. WRITE-FIRST: the
-  // five constants don't exist in config.ts yet, so they read `undefined` and
+  // timing constants don't exist in config.ts yet, so they read `undefined` and
   // every assertion below is red until the P0.2 task adds them via
   // parseNumericEnv with the spec defaults + a positive-integer (min 1) guard.
   // No wall-clock sleeps — these are plain numeric values; the timers that use
@@ -273,6 +273,7 @@ describe('config', () => {
       WORK_RUN_REAP_GRACE_MS: 5_000,
       WORK_RUN_QUIET_CANCEL_AFTER_MS: 1_200_000,
       WORK_RUN_MAX_RUNTIME_MS: 28_800_000,
+      WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS: 120_000,
       WORK_RUN_GATE_COMMAND_TIMEOUT_MS: 600_000,
     };
 
@@ -288,7 +289,7 @@ describe('config', () => {
       // unset-defaults assertion isn't masked by an inherited override.
       for (const k of Object.keys(DEFAULTS)) delete process.env[k];
       const config = await loadConfig();
-      // Single source of the five spec defaults (also used by the fallback tests).
+      // Single source of the spec defaults (also used by the fallback tests).
       for (const [key, value] of Object.entries(DEFAULTS)) {
         expect(config[key]).toBe(value);
       }
@@ -298,9 +299,11 @@ describe('config', () => {
       const config = await loadConfig({
         WORK_RUN_TERMINAL_DRAIN_MS: '45000',
         WORK_RUN_MAX_RUNTIME_MS: '3600000',
+        WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS: '90000',
       });
       expect(config['WORK_RUN_TERMINAL_DRAIN_MS']).toBe(45_000);
       expect(config['WORK_RUN_MAX_RUNTIME_MS']).toBe(3_600_000);
+      expect(config['WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS']).toBe(90_000);
     });
 
     it('reject a non-numeric value and fall back to the default', async () => {
