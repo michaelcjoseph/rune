@@ -225,6 +225,34 @@ describe('readProductsConfig', () => {
   });
 });
 
+describe('readProductsConfig — artifactMcp', () => {
+  it('accepts rune-kb-readonly and leaves an absent policy undefined', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: { repoPath: '/fake/writing', artifactMcp: 'rune-kb-readonly' },
+      aura: { repoPath: '/fake/aura' },
+    });
+    const products = readProductsConfig(configPath);
+    expect(products['writing']!.artifactMcp).toBe('rune-kb-readonly');
+    expect(products['aura']!.artifactMcp).toBeUndefined();
+  });
+
+  it('rejects unknown artifact MCP policies', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: { repoPath: '/fake/writing', artifactMcp: 'rune-kb-admin' },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/invalid artifactMcp.*rune-kb-readonly/i);
+  });
+
+  it('enables the read-only policy for both committed writing products only', () => {
+    const realConfigPath = fileURLToPath(new URL('../../policies/products.json', import.meta.url));
+    const products = readProductsConfig(realConfigPath);
+    expect(products['writing']!.artifactMcp).toBe('rune-kb-readonly');
+    expect(products['brand']!.artifactMcp).toBe('rune-kb-readonly');
+    expect(products['rune']!.artifactMcp).toBeUndefined();
+    expect(products['rune-mcp']!.artifactMcp).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // readProductsConfig — validationCommands (project 15, P1.5)
 //

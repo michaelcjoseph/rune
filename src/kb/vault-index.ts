@@ -35,6 +35,12 @@ interface BuildState {
   stats: VaultIndexStats;
 }
 
+export interface BuildVaultIndexOpts {
+  /** Reject symlink targets outside the configured vault root. Trusted Rune
+   * surfaces retain the historical default; artifact MCP enables this. */
+  containWithinRoot?: boolean;
+}
+
 const log = createLogger('vault-index');
 const DEFAULT_MAX_RESULTS = 20;
 
@@ -117,7 +123,12 @@ function addMarkdownFile(
   };
 }
 
-function buildReplacementIndex(): BuildState {
+function isWithinRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+}
+
+function buildReplacementIndex(opts: BuildVaultIndexOpts = {}): BuildState {
   const startedAt = performance.now();
   const vaultRoot = getVaultRoot();
   const rootStats = statSync(vaultRoot);
@@ -159,6 +170,10 @@ function buildReplacementIndex(): BuildState {
         targetRealPath = realpathSync(fullPath);
       } catch (err) {
         skipLog(linkStats.isDirectory() ? 'directory' : 'file', vaultRoot, fullPath, err);
+        continue;
+      }
+
+      if (opts.containWithinRoot && !isWithinRoot(rootRealPath, targetRealPath)) {
         continue;
       }
 
@@ -206,10 +221,10 @@ function installIndex(next: BuildState): void {
   log.info('Built vault index', { ...next.stats });
 }
 
-export function buildVaultIndex(): void {
+export function buildVaultIndex(opts: BuildVaultIndexOpts = {}): void {
   status = 'building';
   try {
-    installIndex(buildReplacementIndex());
+    installIndex(buildReplacementIndex(opts));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     status = activeIndex ? 'ready' : 'failed';

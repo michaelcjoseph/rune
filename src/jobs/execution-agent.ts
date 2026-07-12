@@ -39,6 +39,10 @@ import {
 import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { buildSandboxEnv } from './credential-injector.js';
+import {
+  buildArtifactMcpConfig,
+  type ArtifactMcpConfig,
+} from './artifact-mcp.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import {
   parseStreamJsonLine,
@@ -88,9 +92,14 @@ export interface ExecutionAgentIO {
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
     emit?: (event: ExecutionAgentStreamEvent) => void;
+    artifactMcp?: ArtifactMcpConfig;
   }) => Promise<SpawnAgentResult>;
   runGit: GitRunner;
   buildEnv: (sandbox: SandboxSpec, opts: { productsConfigPath: string }) => NodeJS.ProcessEnv;
+  buildArtifactMcp: (
+    sandbox: SandboxSpec,
+    opts: { productsConfigPath: string },
+  ) => Promise<ArtifactMcpConfig | null> | ArtifactMcpConfig | null;
   onActivity?: (event: ExecutionAgentStreamEvent) => void;
 }
 
@@ -106,6 +115,9 @@ export interface ExecutionAgentOpts {
   sandbox: SandboxSpec;
   /** The policy-resolved model binding for the invoking role. */
   model: RoleModelBinding;
+  /** Role at this executor boundary. Artifact MCP is authorized only for QA
+   * and coder; tech-lead repair uses the executor without that capability. */
+  role: 'qa' | 'coder' | 'tech-lead';
   /** `policies/products.json` path for scoped-credential env construction. */
   productsConfigPath: string;
   /** Per-session budget; defaults to the shared Claude CLI timeout. */
@@ -122,6 +134,7 @@ const defaultIo: ExecutionAgentIO = {
   spawnAgent: defaultSpawnAgent,
   runGit: defaultRunGit,
   buildEnv: buildSandboxEnv,
+  buildArtifactMcp: buildArtifactMcpConfig,
 };
 
 /**
@@ -134,12 +147,28 @@ export async function runExecutionAgent(
   opts: ExecutionAgentOpts,
   io: Partial<ExecutionAgentIO> = {},
 ): Promise<ExecutionAgentResult> {
-  const { spawnAgent, runGit, buildEnv, onActivity } = { ...defaultIo, ...io };
+  const { spawnAgent, runGit, buildEnv, buildArtifactMcp, onActivity } = {
+    ...defaultIo,
+    ...io,
+  };
   const cwd = opts.sandbox.worktree;
   const timeoutMs = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const emit = composeActivityEmit(opts.emit, onActivity);
 
+  let artifactMcp: ArtifactMcpConfig | null = null;
   try {
+    // Resolve the required MCP before other product configuration so every
+    // configured-policy/setup failure uses the structured registration error.
+    try {
+      artifactMcp = opts.role === 'qa' || opts.role === 'coder'
+        ? await buildArtifactMcp(opts.sandbox, { productsConfigPath: opts.productsConfigPath })
+        : null;
+    } catch (err) {
+      return {
+        ok: false,
+        error: `rune-kb not registered: ${sanitize((err as Error).message)}`,
+      };
+    }
     const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
     const { output, error } = await spawnAgent({
       prompt: opts.prompt,
@@ -148,6 +177,7 @@ export async function runExecutionAgent(
       cwd,
       env,
       timeoutMs,
+      ...(artifactMcp !== null ? { artifactMcp } : {}),
       ...(emit !== undefined ? { emit } : {}),
     });
     if (error !== null) {
@@ -163,6 +193,14 @@ export async function runExecutionAgent(
     return { ok: true, diff: redactSecrets(scrubPathsInText(stdout)), output };
   } catch (err) {
     return { ok: false, error: sanitize((err as Error).message) };
+  } finally {
+    if (artifactMcp !== null) {
+      try {
+        await artifactMcp.stop();
+      } catch (err) {
+        log.warn('failed to stop artifact MCP broker', { error: (err as Error).message });
+      }
+    }
   }
 }
 
@@ -196,6 +234,7 @@ async function defaultSpawnAgent(args: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   emit?: (event: ExecutionAgentStreamEvent) => void;
+  artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
   const { format } = args.model;
   if (format === 'codex') {
@@ -214,6 +253,13 @@ async function defaultSpawnAgent(args: {
       // Scoped credentials only — never the default process.env spread (see
       // RunCodexOpts.env: sandboxed callers MUST pass a built env).
       env: args.env,
+      ...(args.artifactMcp
+        ? {
+            configOverrides: args.artifactMcp.codexConfigOverrides,
+            ignoreUserConfig: true,
+            sandboxProfilePath: args.artifactMcp.sandboxProfilePath,
+          }
+        : {}),
       onEvent: (event) => {
         sawCodexEvent = true;
         const line = codexEventToDisplay(event);
@@ -268,6 +314,7 @@ function spawnClaudeAgent(args: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   emit?: (event: ExecutionAgentStreamEvent) => void;
+  artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
   return new Promise((resolve) => {
     let resolved = false;
@@ -279,11 +326,9 @@ function spawnClaudeAgent(args: {
 
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(
-        CLAUDE_BIN,
-        [
+      const claudeArgs = [
           // Sandboxed children must not inherit the user's global MCP servers.
-          ...getProjectMcpArgs(),
+          ...(args.artifactMcp?.claudeArgs ?? getProjectMcpArgs()),
           '--dangerously-skip-permissions',
           '--model',
           args.model.alias,
@@ -295,7 +340,14 @@ function spawnClaudeAgent(args: {
           '--verbose',
           '-p',
           args.prompt,
-        ],
+        ];
+      const command = args.artifactMcp ? '/usr/bin/sandbox-exec' : CLAUDE_BIN;
+      const commandArgs = args.artifactMcp
+        ? ['-f', args.artifactMcp.sandboxProfilePath, CLAUDE_BIN, ...claudeArgs]
+        : claudeArgs;
+      child = spawn(
+        command,
+        commandArgs,
         { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], env: args.env },
       );
     } catch (err) {

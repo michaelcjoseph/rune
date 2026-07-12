@@ -321,6 +321,27 @@ describe('ai/codex', () => {
       expect(args).toContain('--skip-git-repo-check');
     });
 
+    it('passes config overrides as argv-safe -c pairs before the prompt', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      const override = 'mcp_servers={"rune-kb"={command="/usr/bin/node"}}';
+      await runCodex('my prompt', { configOverrides: [override] });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args.slice(args.indexOf('-c'), args.indexOf('-c') + 2)).toEqual(['-c', override]);
+      expect(args.at(-1)).toBe('my prompt');
+    });
+
+    it('can ignore user config for controlled automation', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { ignoreUserConfig: true });
+      expect(spawnMock.mock.calls[0]![1]).toContain('--ignore-user-config');
+    });
+
     it('creates and resumes persistent chat threads without changing ephemeral defaults', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockImplementation(() => createChild({ stdout: 'ok' }));
@@ -384,6 +405,21 @@ describe('ai/codex', () => {
       const spawnOpts = spawnMock.mock.calls[0]![2] as { cwd?: string };
       const hasCwdOpt = spawnOpts?.cwd === '/custom/dir';
       expect(hasCdFlag || hasCwdOpt).toBe(true);
+    });
+
+    it('wraps Codex in the supplied Seatbelt profile without shell parsing', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { sandboxProfilePath: '/private/tmp/artifact.sb' });
+
+      const [command, args] = spawnMock.mock.calls[0]! as [string, string[]];
+      expect(command).toBe('/usr/bin/sandbox-exec');
+      expect(args.slice(0, 3)).toEqual([
+        '-f', '/private/tmp/artifact.sb', '/opt/homebrew/bin/codex',
+      ]);
+      expect(args.at(-1)).toBe('my prompt');
     });
 
     it('prompt is the final positional arg to codex exec', async () => {

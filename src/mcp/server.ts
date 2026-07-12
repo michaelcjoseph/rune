@@ -322,6 +322,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         startDate: z.string().describe('Inclusive start date in YYYY-MM-DD format'),
         endDate: z.string().describe('Inclusive end date in YYYY-MM-DD format'),
       },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       async (input) => {
         const [{ journalRange }, { buildProductionJournalRangeDeps }] =
           await lazyJournalRangeTool();
@@ -340,6 +341,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         maxDepth: z.number().optional().describe('Maximum wikilink traversal depth, 1-5 (default 1)'),
         maxResults: z.number().optional().describe('Maximum resolved target files to return, 1-50 (default 10)'),
       },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       async (input) => {
         const [{ followWikilinks }, { buildProductionFollowWikilinksDeps }] =
           await lazyFollowWikilinksTool();
@@ -376,6 +378,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
           .describe('Optional top-level folder prefixes to narrow search; unknown or unsafe values are ignored. Default: whole vault.'),
         maxResults: z.number().optional().describe('Max results to return'),
       },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       // Lazy import: the deps module pulls config.ts (env-var-required at
       // import), so it must not load before the tool is actually called.
       async (input) => {

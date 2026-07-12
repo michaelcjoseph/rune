@@ -212,6 +212,15 @@ export interface RunCodexOpts {
   opLabel?: string;
   /** Optional product scope attached to the operation feed. */
   product?: string;
+  /** Raw `-c key=value` overrides passed as separate argv values. Sandboxed
+   * artifact callers use this to replace the complete `mcp_servers` table. */
+  configOverrides?: string[];
+  /** Skip `$CODEX_HOME/config.toml` for controlled automation. Project
+   * configuration and explicit `-c` overrides still apply. */
+  ignoreUserConfig?: boolean;
+  /** Optional macOS Seatbelt profile used by artifact-role callers to deny
+   * direct vault access while their MCP relay remains reachable. */
+  sandboxProfilePath?: string;
 }
 
 export interface CodexResult {
@@ -260,6 +269,8 @@ export async function runCodex(
   // not accept `-s`; only initial calls may set it.
   if (opts.sandboxMode && !opts.resumeSessionId) args.push('-s', opts.sandboxMode);
   if (opts.onEvent) args.push('--json');
+  if (opts.ignoreUserConfig) args.push('--ignore-user-config');
+  for (const override of opts.configOverrides ?? []) args.push('-c', override);
   if (opts.resumeSessionId) args.push(opts.resumeSessionId);
   // Prompt is the final positional arg — matches the CLI's documented usage.
   args.push(prompt);
@@ -272,7 +283,12 @@ export async function runCodex(
       resolve(result);
     };
 
-    const child = spawn(getCodexBin(), args, {
+    const codexBin = getCodexBin();
+    const command = opts.sandboxProfilePath ? '/usr/bin/sandbox-exec' : codexBin;
+    const commandArgs = opts.sandboxProfilePath
+      ? ['-f', opts.sandboxProfilePath, codexBin, ...args]
+      : args;
+    const child = spawn(command, commandArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Default inherits env so OPENAI_API_KEY, CODEX_HOME, etc. reach the

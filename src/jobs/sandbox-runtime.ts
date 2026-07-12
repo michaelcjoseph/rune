@@ -66,6 +66,7 @@ export function removeVitestCache(worktreePath: string): boolean {
 export type ProductClass = 'internal' | 'external';
 export type MonitoringCapability = 'enabled' | 'stubbed';
 export type CloseoutValidationStrategy = 'vitest-related' | 'product-commands';
+export type ArtifactMcpPolicy = 'rune-kb-readonly';
 
 export interface ProductContainerCapabilities {
   projects: boolean;
@@ -116,6 +117,9 @@ export interface ProductConfig {
    *  default. Optional on the type so existing `ProductConfig` literals (and
    *  products without the key) still compile / read cleanly. */
   orchestratedMode?: boolean;
+  /** Optional read-only MCP registration granted only to artifact-role
+   *  executor sessions (QA and coder). Unknown values fail config parsing. */
+  artifactMcp?: ArtifactMcpPolicy;
 }
 
 /** Pluggable git runner — production wraps `execFile('git', …)`, tests inject
@@ -251,6 +255,15 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
           `'${String(closeoutValidationStrategy)}' in ${path} — expected 'vitest-related' or 'product-commands'`,
       );
     }
+    if (
+      entry['artifactMcp'] !== undefined &&
+      entry['artifactMcp'] !== 'rune-kb-readonly'
+    ) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid artifactMcp ` +
+          `'${String(entry['artifactMcp'])}' in ${path} — expected 'rune-kb-readonly'`,
+      );
+    }
     out[slug] = {
       ...(productClass ? { class: productClass } : {}),
       ...(entry['containerCapabilities'] !== undefined
@@ -277,6 +290,9 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       // dispatch seam falls back to the global ORCHESTRATED_WORK_ENABLED.
       ...(typeof entry['orchestratedMode'] === 'boolean'
         ? { orchestratedMode: entry['orchestratedMode'] }
+        : {}),
+      ...(entry['artifactMcp'] === 'rune-kb-readonly'
+        ? { artifactMcp: entry['artifactMcp'] }
         : {}),
     };
   }

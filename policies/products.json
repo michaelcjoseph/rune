@@ -130,6 +130,7 @@
     "scopePath": "docs/rune",
     "baseBranch": "main",
     "orchestratedMode": true,
+    "artifactMcp": "rune-kb-readonly",
     "credentialsFile": "~/.config/rune/credentials/writing/.env",
     "egressAllowlist": [
       "github.com",
@@ -155,6 +156,7 @@
     "repoPath": "~/workspace/michaelcjoseph.com",
     "baseBranch": "main",
     "orchestratedMode": true,
+    "artifactMcp": "rune-kb-readonly",
     "credentialsFile": "~/.config/rune/credentials/brand/.env",
     "egressAllowlist": [
       "github.com",

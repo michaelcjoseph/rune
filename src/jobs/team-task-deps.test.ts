@@ -1719,7 +1719,12 @@ describe('techLeadRepairTests (production seam)', () => {
   });
 
   it('runs the tech-lead executor with the rejection context and repairs on a red check', async () => {
-    const executions: Array<{ prompt: string; systemPrompt: string | undefined; model: unknown }> = [];
+    const executions: Array<{
+      prompt: string;
+      systemPrompt: string | undefined;
+      model: unknown;
+      role: string;
+    }> = [];
     const git = makeRepairGitFake({
       delta: [{ status: 'M', path: 'src/x.test.ts' }],
       diffHead: 'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+patched assertion\n',
@@ -1732,6 +1737,7 @@ describe('techLeadRepairTests (production seam)', () => {
             prompt: opts.prompt,
             systemPrompt: opts.systemPrompt,
             model: opts.model,
+            role: opts.role,
           });
           return { ok: true, diff: 'scrubbed-executor-diff', output: 'patched' };
         },
@@ -1758,6 +1764,7 @@ describe('techLeadRepairTests (production seam)', () => {
       },
     });
     expect(executions).toHaveLength(1);
+    expect(executions[0]!.role).toBe('tech-lead');
     expect(executions[0]?.prompt).toContain('tests miss the negative case');
     expect(executions[0]?.prompt).toContain('assert no cue for the viewed product');
     expect(executions[0]?.prompt).toContain('the spec body');

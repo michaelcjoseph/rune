@@ -1005,6 +1005,7 @@ export function buildProductionTeamTaskDeps(
       prompt: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
       sandbox,
       model: binding,
+      role,
       productsConfigPath,
       ...(emit !== undefined ? { emit } : {}),
     });

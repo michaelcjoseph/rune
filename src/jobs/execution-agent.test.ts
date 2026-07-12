@@ -128,6 +128,7 @@ function makeOpts(overrides: Partial<ExecutionAgentOpts> = {}): ExecutionAgentOp
     prompt: 'implement the selected task',
     sandbox: makeSandbox(),
     model: coderModel,
+    role: 'tech-lead',
     productsConfigPath: '/nonexistent/products.json',
     timeoutMs: 5_000,
     ...overrides,
@@ -142,6 +143,7 @@ function makeIo(
   return {
     spawnAgent,
     buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    buildArtifactMcp: () => null,
   };
 }
 
@@ -415,6 +417,107 @@ describe('runExecutionAgent — protected-service runtime prompt transport', () 
     expect(args[userPromptIndex + 1]).toBe('## Task\n\nImplement the selected task.');
     expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3847');
     expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3848');
+  });
+});
+
+describe('runExecutionAgent — artifact MCP boundary', () => {
+  const artifactMcp = {
+    claudeArgs: ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{"rune-kb":{}}}'],
+    codexConfigOverrides: ['mcp_servers={"rune-kb"={command="/usr/bin/node"}}'],
+    sandboxProfilePath: '/tmp/artifact.sb',
+    stop: vi.fn(async () => {}),
+  };
+
+  it('passes the complete MCP override to Codex without adding vault paths to the prompt', async () => {
+    let capturedPrompt = '';
+    mockRunCodex.mockImplementation(async (prompt: string) => {
+      capturedPrompt = prompt;
+      return { text: 'done', error: null, exitCode: 0 };
+    });
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => artifactMcp,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockRunCodex.mock.calls[0]![1]).toMatchObject({
+      configOverrides: artifactMcp.codexConfigOverrides,
+      ignoreUserConfig: true,
+      sandboxProfilePath: artifactMcp.sandboxProfilePath,
+    });
+    expect(capturedPrompt).toBe('implement the selected task');
+    expect(capturedPrompt).not.toContain('pkms');
+  });
+
+  it('replaces Claude project MCP args with the strict artifact config', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    const result = await runExecutionAgent(makeOpts({ model: claudeModel, role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => artifactMcp,
+    });
+
+    expect(result.ok).toBe(true);
+    const [command, args] = mockSpawn.mock.calls[0]! as [string, string[]];
+    expect(command).toBe('/usr/bin/sandbox-exec');
+    expect(args.slice(0, 3)).toEqual(['-f', artifactMcp.sandboxProfilePath, '/usr/local/bin/claude']);
+    expect(args.slice(3, 6)).toEqual(artifactMcp.claudeArgs);
+    expect(args).not.toContain('/tmp/test-project/.claude/settings.json');
+  });
+
+  it('fails before model spawn when required MCP setup fails', async () => {
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => { throw new Error('read-only MCP entrypoint is missing'); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'rune-kb not registered: read-only MCP entrypoint is missing',
+    });
+    expect(mockRunCodex).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('returns the MCP registration contract for an invalid artifact policy before env setup', async () => {
+    const products = join(repoDir, 'invalid-products.json');
+    writeFileSync(products, JSON.stringify({
+      rune: { repoPath: repoDir, artifactMcp: 'rune-kb-admin' },
+    }));
+    const buildEnv = vi.fn(() => ({ PATH: process.env['PATH'] ?? '' }));
+    const result = await runExecutionAgent(makeOpts({
+      role: 'coder',
+      productsConfigPath: products,
+    }), { buildEnv });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/^rune-kb not registered: .*invalid artifactMcp/);
+    expect(buildEnv).not.toHaveBeenCalled();
+    expect(mockRunCodex).not.toHaveBeenCalled();
+  });
+
+  it('preserves the no-added-Codex-MCP behavior for unconfigured products', async () => {
+    mockRunCodex.mockResolvedValue({ text: 'done', error: null, exitCode: 0 });
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockRunCodex.mock.calls[0]![1]).not.toHaveProperty('configOverrides');
+  });
+
+  it('does not grant artifact MCP to tech-lead repair sessions', async () => {
+    mockRunCodex.mockResolvedValue({ text: 'done', error: null, exitCode: 0 });
+    const buildArtifactMcp = vi.fn(() => artifactMcp);
+    const result = await runExecutionAgent(makeOpts({ role: 'tech-lead' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(buildArtifactMcp).not.toHaveBeenCalled();
+    expect(mockRunCodex.mock.calls[0]![1]).not.toHaveProperty('configOverrides');
   });
 });
 
