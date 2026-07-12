@@ -16,6 +16,7 @@ import {
 } from '../../vault/sessions.js';
 import { runAgent } from '../../ai/claude.js';
 import { askChatWithContext, resolveChatModel } from '../../ai/chat.js';
+import { withChatTurnLock } from '../../ai/chat-turn-lock.js';
 import { createLogger } from '../../utils/logger.js';
 import { handleFresh } from '../commands/fresh.js';
 import { handleFreshFull } from '../commands/fresh-full.js';
@@ -491,6 +492,21 @@ const PRODUCT_CHAT_TOOLS = [
 ];
 
 async function handleConversation(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+  text: string,
+  scope?: SessionScope,
+): Promise<void> {
+  const key = scope?.kind === 'product'
+    ? `${scope.product}:${transport}:${userId}`
+    : `${transport}:${userId}`;
+  await withChatTurnLock(key, () => handleConversationTurn(
+    sender, userId, transport, text, scope,
+  ));
+}
+
+async function handleConversationTurn(
   sender: MessageSender,
   userId: number,
   transport: Transport,

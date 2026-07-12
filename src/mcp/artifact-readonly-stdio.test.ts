@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +81,7 @@ describe('artifact read-only stdio MCP', () => {
       stderr: 'pipe',
     });
     const client = new Client({ name: 'artifact-readonly-test', version: '1.0.0' });
+    let heldSocket: ReturnType<typeof connect> | undefined;
     try {
       await client.connect(transport);
       const listed = await client.listTools();
@@ -114,14 +116,25 @@ describe('artifact read-only stdio MCP', () => {
         arguments: { query: 'OUTSIDE_SYMLINK_MARKER', maxResults: 5 },
       });
       expect(JSON.stringify(escaped)).not.toContain('OUTSIDE_SYMLINK_MARKER');
+      const socketPath = registration.args.at(-1)!;
+      heldSocket = connect(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        heldSocket!.once('connect', resolve);
+        heldSocket!.once('error', reject);
+      });
     } finally {
       await client.close();
+      const heldClosed = heldSocket
+        ? new Promise<void>((resolve) => heldSocket!.once('close', () => resolve()))
+        : Promise.resolve();
       await cfg?.stop();
+      await heldClosed;
     }
 
     expect(tree(vault)).toEqual(beforeTree);
     expect(readFileSync(source, 'utf8')).toBe(beforeSource);
     expect(tree(vault)).not.toContain('knowledge/index.md');
+    expect(existsSync(cfg!.sandboxProfilePath)).toBe(false);
 
   }, 20_000);
 });

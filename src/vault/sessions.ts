@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { cleanupCodexThread } from '../ai/codex-sessions.js';
 import { existsSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import config from '../config.js';
@@ -457,6 +458,11 @@ export function setSessionExecutor(
   if (session.executor?.format === 'claude' && session.executor.sessionId && !sameClaudeSession) {
     cleanupSession(session.executor.sessionId);
   }
+  const sameCodexSession = executor?.format === 'codex' &&
+    executor.sessionId === session.executor?.sessionId;
+  if (session.executor?.format === 'codex' && session.executor.sessionId && !sameCodexSession) {
+    cleanupCodexThread(session.executor.sessionId);
+  }
   session.executor = executor;
   persistSessions();
 }
@@ -470,6 +476,9 @@ export function deleteSession(
   const session = sessions.get(key);
   if (session?.executor?.format === 'claude' && session.executor.sessionId) {
     cleanupSession(session.executor.sessionId);
+  }
+  if (session?.executor?.format === 'codex' && session.executor.sessionId) {
+    cleanupCodexThread(session.executor.sessionId);
   }
   sessions.delete(key);
   persistSessions();

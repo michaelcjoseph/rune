@@ -22,10 +22,11 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
-import { defaultRunGit, vitestCacheDirFor } from './sandbox-runtime.js';
+import { defaultRunGit, removeVitestCache, vitestCacheDirFor } from './sandbox-runtime.js';
 import {
   runGate,
   collectTaskChangedPaths,
+  taskChangesRequireFullValidation,
   runValidationCommandArgv,
   runValidationCommands,
   MAX_VALIDATION_OUTPUT_HEAD_CHARS,
@@ -134,6 +135,8 @@ describe('runGate — test before mutating main (P1.5)', () => {
   it('a RED gate (validation fails) leaves the base-branch ref AND working tree byte-for-byte unchanged', async () => {
     const before = baseState();
     const io = gateIO({ exitCode: 1, timedOut: false, outputTail: '' });
+    const cache = vitestCacheDirFor(integrationWorktree);
+    mkdirSync(cache, { recursive: true });
 
     // RED now: runGate throws notImplemented. GREEN when the impl runs the
     // failing validation in the integration worktree and returns tests-red.
@@ -149,6 +152,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
     // even on the red path — no leaked worktree. (A distinct invariant, not
     // covered by the base-state snapshot above.)
     expect(existsSync(integrationWorktree)).toBe(false);
+    expect(existsSync(cache)).toBe(false);
   });
 
   it('even a GREEN gate does NOT merge: the gate only decides — the merge is the finalizer\'s post-gate step', async () => {
@@ -230,6 +234,14 @@ describe('runValidationCommands', () => {
     ]);
   });
 
+  it('falls back to full validation for deletions and global runner config changes', async () => {
+    const deletionGit = vi.fn(async () => ({ stdout: 'src/removed.ts\0', stderr: '' }));
+    await expect(taskChangesRequireFullValidation(tmpRoot, [], deletionGit)).resolves.toBe(true);
+    const cleanGit = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    await expect(taskChangesRequireFullValidation(tmpRoot, ['next.config.ts'], cleanGit)).resolves.toBe(true);
+    await expect(taskChangesRequireFullValidation(tmpRoot, ['src/feature.ts'], cleanGit)).resolves.toBe(false);
+  });
+
   it('passes unusual path arguments literally through the argv-safe runner', async () => {
     const marker = 'odd name;$(touch SHOULD_NOT_EXIST)';
     const result = await runValidationCommandArgv(
@@ -281,6 +293,43 @@ describe('runValidationCommands', () => {
     expect(existsSync(join(fixture, 'beta-ran'))).toBe(true);
   }, 60_000);
 
+  it('isolates cache state across concurrent Vitest validations', async () => {
+    const makeFixture = (name: string): string => {
+      const fixture = join(tmpRoot, name);
+      mkdirSync(fixture, { recursive: true });
+      symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(fixture, 'node_modules'), 'dir');
+      writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+      writeFileSync(join(fixture, 'sample.test.ts'), [
+        "import { test, expect } from 'vitest';",
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        `test(${JSON.stringify(name)}, () => {`,
+        "  const cache = process.env.RUNE_VITEST_CACHE_DIR!;",
+        "  mkdirSync(cache, { recursive: true });",
+        `  writeFileSync(join(cache, ${JSON.stringify(`${name}.marker`)}), 'ok');`,
+        "  expect(1).toBe(1);",
+        "});",
+        '',
+      ].join('\n'));
+      return fixture;
+    };
+    const first = makeFixture('concurrent-first');
+    const second = makeFixture('concurrent-second');
+
+    const [firstResult, secondResult] = await Promise.all([
+      runValidationCommandArgv(['npx', 'vitest', '--run'], first, 30_000),
+      runValidationCommandArgv(['npx', 'vitest', '--run'], second, 30_000),
+    ]);
+
+    expect(firstResult.exitCode).toBe(0);
+    expect(secondResult.exitCode).toBe(0);
+    expect(vitestCacheDirFor(first)).not.toBe(vitestCacheDirFor(second));
+    expect(existsSync(vitestCacheDirFor(first))).toBe(true);
+    expect(existsSync(vitestCacheDirFor(second))).toBe(true);
+    removeVitestCache(first);
+    removeVitestCache(second);
+  }, 60_000);
+
   it('forces a validation-worktree-specific Vitest cache into the child environment', async () => {
     const command = 'node -e console.log(process.env.RUNE_VITEST_CACHE_DIR)';
     const result = await runValidationCommands([command], tmpRoot, 5_000);
@@ -293,6 +342,82 @@ describe('runValidationCommands', () => {
     if (inspect.ok) throw new Error('expected inspection command to fail');
     expect(inspect.result.outputTail).toContain(vitestCacheDirFor(tmpRoot));
   });
+
+  it('does not expose Rune secrets to product-controlled validation code', async () => {
+    vi.stubEnv('RUNE_HTTP_SECRET', 'arbitrary-secret-value-7491');
+    try {
+      const result = await runValidationCommandArgv([
+        process.execPath,
+        '-e',
+        'console.error(String(process.env.RUNE_HTTP_SECRET));process.exit(1)',
+      ], tmpRoot, 5_000);
+      expect(result.outputTail).toContain('undefined');
+      expect(result.outputTail).not.toContain('arbitrary-secret-value-7491');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('allows localhost but denies external validation networking', async () => {
+    const local = await runValidationCommandArgv([
+      process.execPath,
+      '-e',
+      "const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>s.close(()=>process.exit(0)));s.on('error',()=>process.exit(8))",
+    ], tmpRoot, 5_000);
+    expect(local.exitCode).toBe(0);
+
+    const external = await runValidationCommandArgv([
+      process.execPath,
+      '-e',
+      "const s=require('node:net').connect(80,'1.1.1.1');s.on('connect',()=>process.exit(9));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)",
+    ], tmpRoot, 5_000);
+    expect(external.exitCode).toBe(0);
+  });
+
+  it('strips diagnostic NODE_OPTIONS before a direct runner creates workers', async () => {
+    const fixture = join(tmpRoot, 'worker-fixture');
+    const diagnosticsDir = join(tmpRoot, 'worker-diagnostics');
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, 'package.json'), JSON.stringify({
+      scripts: { check: 'node worker.cjs' },
+    }));
+    writeFileSync(join(fixture, 'worker.cjs'), [
+      "if ((process.env.NODE_OPTIONS || '').includes('report-on-signal')) process.exit(9);",
+      "console.log('WORKER-CLEAN');",
+    ].join('\n'));
+    const result = await runValidationCommandArgv(
+      ['npm', 'run', 'check'], fixture, 10_000, diagnosticsDir,
+    );
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.outputTail).toContain('WORKER-CLEAN');
+  });
+
+  it('waits for SIGKILL escalation when a grandchild ignores SIGTERM', async () => {
+    const pidFile = join(tmpRoot, 'grandchild.pid');
+    const parent = join(tmpRoot, 'parent.cjs');
+    writeFileSync(parent, [
+      "const {spawn}=require('node:child_process');",
+      "const fs=require('node:fs');",
+      `const child=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:'ignore'});`,
+      `fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));`,
+      "process.on('SIGTERM',()=>process.exit(0));",
+      'setInterval(()=>{},1000);',
+    ].join('\n'));
+    const result = await runValidationCommandArgv(
+      // Leave startup headroom under the fully parallel suite so the parent
+      // can plant the grandchild pid before Rune begins timeout reaping.
+      [process.execPath, parent], tmpRoot, 500,
+    );
+    expect(result.timedOut).toBe(true);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    let state = '';
+    try {
+      state = execFileSync('ps', ['-p', String(pid), '-o', 'state='], { encoding: 'utf8' }).trim();
+    } catch {
+      // ps exits non-zero once the reaped process has disappeared entirely.
+    }
+    expect(state === '' || state.startsWith('Z')).toBe(true);
+  }, 15_000);
 
   it('passes when every command exits 0', async () => {
     await expect(runValidationCommands([

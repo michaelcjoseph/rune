@@ -144,4 +144,14 @@ describe('buildArtifactMcpConfig', () => {
       chmodSync(f.vault, 0o700);
     }
   });
+
+  it('fails clearly on platforms without the required Seatbelt boundary', async () => {
+    const f = fixture(true);
+    await expect(buildArtifactMcpConfig(f.sandbox, {
+      productsConfigPath: f.products,
+      projectRoot: f.root,
+      vaultDir: f.vault,
+      platform: 'linux',
+    })).rejects.toThrow(/requires macOS Seatbelt/);
+  });
 });

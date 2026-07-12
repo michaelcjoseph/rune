@@ -71,6 +71,8 @@ vi.mock('../config.js', () => ({
   default: {
     CLAUDE_TIMEOUT_MS: 5_000,
     WORK_RUN_REAP_GRACE_MS: 100,
+    VAULT_DIR: '/tmp/test-vault',
+    WORKSPACE_DIR: '/tmp/test-workspace',
   },
 }));
 
@@ -478,6 +480,17 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it('scrubs the exact vault root from MCP setup evidence', async () => {
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => { throw new Error('VAULT_DIR is not a directory: /tmp/test-vault'); },
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: 'rune-kb not registered: VAULT_DIR is not a directory: <vault>',
+    });
+  });
+
   it('returns the MCP registration contract for an invalid artifact policy before env setup', async () => {
     const products = join(repoDir, 'invalid-products.json');
     writeFileSync(products, JSON.stringify({
@@ -584,6 +597,21 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('agent exited with code 1');
+  });
+
+  it('redacts arbitrary product credential values from structured evidence', async () => {
+    const planted = 'opaque-product-credential-7491';
+    const io = {
+      ...makeIo(async () => ({ output: '', error: `provider rejected ${planted}` })),
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '', CUSTOM_SERVICE_VALUE: planted }),
+    };
+
+    const result = await runExecutionAgent(makeOpts(), io);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain(planted);
+    expect(result.error).toContain('<secret-redacted-');
   });
 
   it('surfaces a git-capture failure as structured failure (worktree is not a repo)', async () => {

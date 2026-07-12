@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
+import { registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { getProductConfig } from './sandbox-runtime.js';
 
@@ -31,6 +32,7 @@ export interface BuildArtifactMcpConfigOpts {
   vaultDir?: string;
   nodePath?: string;
   startupTimeoutMs?: number;
+  platform?: NodeJS.Platform;
 }
 
 type StdioServerConfig = {
@@ -102,6 +104,7 @@ function waitForBrokerReady(child: ChildProcess, timeoutMs: number): Promise<voi
       child.stderr?.off('data', onStderr);
       child.off('error', onError);
       child.off('exit', onExit);
+      if (!err) child.stderr?.resume();
       if (err) reject(err);
       else resolve();
     };
@@ -135,6 +138,9 @@ export async function buildArtifactMcpConfig(
 ): Promise<ArtifactMcpConfig | null> {
   const product = getProductConfig(sandbox.product, opts.productsConfigPath);
   if (product.artifactMcp === undefined) return null;
+  if ((opts.platform ?? process.platform) !== 'darwin') {
+    throw new Error('rune-kb artifact MCP requires macOS Seatbelt');
+  }
 
   const projectRoot = opts.projectRoot ?? PROJECT_ROOT;
   const vaultDir = opts.vaultDir ?? config.VAULT_DIR;
@@ -155,6 +161,7 @@ export async function buildArtifactMcpConfig(
   const socketPath = join(runtimeDir, 'broker.sock');
   const profilePath = join(runtimeDir, 'artifact.sb');
   const vaultPaths = [...new Set([vaultDir, realpathSync(vaultDir)])];
+  const profilePaths = [...new Set([profilePath, join(realpathSync(runtimeDir), 'artifact.sb')])];
   writeFileSync(profilePath, [
     '(version 1)',
     '(allow default)',
@@ -162,8 +169,10 @@ export async function buildArtifactMcpConfig(
       `(deny file-read* (subpath "${seatbeltString(path)}"))`,
       `(deny file-write* (subpath "${seatbeltString(path)}"))`,
     ]),
-    `(deny file-read* (literal "${seatbeltString(profilePath)}"))`,
-    `(deny file-write* (literal "${seatbeltString(profilePath)}"))`,
+    ...profilePaths.flatMap((path) => [
+      `(deny file-read* (literal "${seatbeltString(path)}"))`,
+      `(deny file-write* (literal "${seatbeltString(path)}"))`,
+    ]),
   ].join('\n'), { mode: 0o600 });
   chmodSync(runtimeDir, 0o700);
 
@@ -174,24 +183,61 @@ export async function buildArtifactMcpConfig(
       TELEGRAM_BOT_TOKEN: 'artifact-mcp-readonly',
       TELEGRAM_USER_ID: '0',
     },
-    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
   });
-  const stop = async (): Promise<void> => {
-    if (broker.exitCode === null && broker.signalCode === null) {
-      broker.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_000);
-        broker.once('exit', () => { clearTimeout(timer); resolve(); });
-      });
+  registerActiveProcess(broker);
+  let brokerExited = false;
+  const markExited = (): void => {
+    if (brokerExited) return;
+    brokerExited = true;
+    unregisterActiveProcess(broker);
+  };
+  broker.once('exit', markExited);
+  broker.once('error', markExited);
+  const waitForExit = (timeoutMs: number): Promise<boolean> => new Promise((resolve) => {
+    if (brokerExited || broker.exitCode !== null || broker.signalCode !== null) {
+      resolve(true);
+      return;
     }
-    rmSync(runtimeDir, { recursive: true, force: true });
+    const onExit = (): void => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => {
+      broker.off('exit', onExit);
+      resolve(false);
+    }, timeoutMs);
+    broker.once('exit', onExit);
+  });
+  const killGroup = (signal: NodeJS.Signals): void => {
+    if (broker.pid === undefined) return;
+    try { process.kill(-broker.pid, signal); } catch { /* already gone */ }
+  };
+  let stopPromise: Promise<void> | undefined;
+  const stop = async (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      if (!brokerExited && broker.exitCode === null && broker.signalCode === null) {
+        killGroup('SIGTERM');
+        if (!(await waitForExit(1_000))) {
+          killGroup('SIGKILL');
+          if (!(await waitForExit(1_000))) {
+            throw new Error('read-only MCP broker did not exit after SIGKILL');
+          }
+        }
+      }
+      markExited();
+      rmSync(runtimeDir, { recursive: true, force: true });
+    })();
+    return stopPromise;
   };
 
   try {
     broker.stdin?.end(`${JSON.stringify(vaultDir)}\n`);
     await waitForBrokerReady(broker, opts.startupTimeoutMs ?? 10_000);
   } catch (err) {
-    await stop();
+    await stop().catch(() => {
+      // Preserve the setup failure. A broker that somehow survives SIGKILL
+      // stays registered with Rune's shutdown supervisor.
+    });
     throw err;
   }
 

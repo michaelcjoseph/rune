@@ -7,6 +7,7 @@ import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { askClaudeWithContext, buildClaudeChildEnv } from './claude.js';
 import { runCodex } from './codex.js';
 import { scrubPathsInText } from './tool-labels.js';
+import { cleanupCodexThread } from './codex-sessions.js';
 
 const TRANSCRIPT_CHAR_BUDGET = 40_000;
 
@@ -116,7 +117,10 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     cwd: request.cwd ?? config.VAULT_DIR,
     persistentSession: true,
     ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: request.writeEnabled ? 'workspace-write' : 'read-only' }),
-    ...(request.product ? { product: request.product, env: buildClaudeChildEnv('product-chat') } : {}),
+    // Codex is shell-capable even in read-only mode. Always use the secret-
+    // scrubbed chat environment; global/Home chat must not inherit Rune's env.
+    env: buildClaudeChildEnv('product-chat'),
+    ...(request.product ? { product: request.product } : {}),
     opLabel: 'chat',
     onEvent: event => {
       if (event['type'] === 'thread.started' && typeof event['thread_id'] === 'string') {
@@ -126,6 +130,7 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
       if (text) response += text;
     },
   });
+  if (result.error && !sameExecutor && threadId) cleanupCodexThread(threadId);
   return {
     text: response.trim() || (result.error ? null : result.text),
     error: safeError(result.error),

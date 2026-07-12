@@ -109,6 +109,7 @@ import {
 } from './work-run-finalizer.js';
 import {
   collectTaskChangedPaths,
+  taskChangesRequireFullValidation,
   runGate as defaultRunGate,
   runValidationCommandArgv as defaultRunValidationCommandArgv,
   runValidationCommands as defaultRunValidationCommands,
@@ -627,7 +628,20 @@ function buildOrchestrationDeps(args: {
       const validation = args.closeoutValidationStrategy === 'vitest-related'
         ? await (async () => {
             const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
-            const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...changedPaths];
+            if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
+              return defaultRunValidationCommands(
+                args.validationCommands,
+                sandbox.worktree,
+                config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+                undefined,
+                diagnosticDir,
+              );
+            }
+            // Vitest's `related` subcommand does not honor `--` as a path
+            // terminator. Prefix leading-dash filenames so they remain paths,
+            // never CLI options, while preserving ordinary relative paths.
+            const pathArgs = changedPaths.map((path) => path.startsWith('-') ? `./${path}` : path);
+            const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
             const result = await defaultRunValidationCommandArgv(
               argv,
               sandbox.worktree,

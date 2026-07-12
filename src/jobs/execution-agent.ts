@@ -38,7 +38,7 @@ import {
 } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { buildSandboxEnv } from './credential-injector.js';
+import { buildSandboxEnv, DEFAULT_BASE_ENV_KEYS } from './credential-injector.js';
 import {
   buildArtifactMcpConfig,
   type ArtifactMcpConfig,
@@ -52,8 +52,19 @@ import {
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 const log = createLogger('execution-agent');
+const NON_CREDENTIAL_ENV_KEYS = new Set<string>([
+  ...DEFAULT_BASE_ENV_KEYS,
+  'RUNE_VITEST_CACHE_DIR',
+]);
+
+function productCredentialValues(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(env)
+    .filter(([key, value]) => !NON_CREDENTIAL_ENV_KEYS.has(key) && value && value.length >= 4)
+    .map(([, value]) => value!);
+}
 
 /** A policy-resolved (model, provider, format) triple for one role. Defined
  *  here (the executor boundary) and re-exported by team-task-deps.ts so the
@@ -156,6 +167,7 @@ export async function runExecutionAgent(
   const emit = composeActivityEmit(opts.emit, onActivity);
 
   let artifactMcp: ArtifactMcpConfig | null = null;
+  let credentialValues: string[] = [];
   try {
     // Resolve the required MCP before other product configuration so every
     // configured-policy/setup failure uses the structured registration error.
@@ -170,6 +182,7 @@ export async function runExecutionAgent(
       };
     }
     const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
+    credentialValues = productCredentialValues(env);
     const { output, error } = await spawnAgent({
       prompt: opts.prompt,
       ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
@@ -181,7 +194,7 @@ export async function runExecutionAgent(
       ...(emit !== undefined ? { emit } : {}),
     });
     if (error !== null) {
-      return { ok: false, error: sanitize(error) };
+      return { ok: false, error: sanitize(error, credentialValues) };
     }
     // Stage-then-diff so new files are part of the captured work product.
     await runGit(['add', '-A'], { cwd });
@@ -190,9 +203,13 @@ export async function runExecutionAgent(
     // worktree must not propagate upstream through TaskEvidence, and host-
     // absolute paths must not leave the process toward external providers —
     // mirror the work-run pipeline's diffstat scrubbing.
-    return { ok: true, diff: redactSecrets(scrubPathsInText(stdout)), output };
+    return {
+      ok: true,
+      diff: redactSecrets(scrubPathsInText(stdout), credentialValues),
+      output: sanitize(output, credentialValues),
+    };
   } catch (err) {
-    return { ok: false, error: sanitize((err as Error).message) };
+    return { ok: false, error: sanitize((err as Error).message, credentialValues) };
   } finally {
     if (artifactMcp !== null) {
       try {
@@ -207,8 +224,8 @@ export async function runExecutionAgent(
 /** Executor stderr / error text can carry host-absolute paths and (in the
  *  worst case) credential-shaped strings; scrub both before the message flows
  *  upstream into TaskEvidence → mutation events → user surfaces. */
-function sanitize(text: string): string {
-  return redactSecrets(scrubPathsInText(text));
+function sanitize(text: string, exactValues: readonly string[] = []): string {
+  return redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)), exactValues);
 }
 
 function composeActivityEmit(
@@ -236,6 +253,7 @@ async function defaultSpawnAgent(args: {
   emit?: (event: ExecutionAgentStreamEvent) => void;
   artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
+  const credentialValues = productCredentialValues(args.env);
   const { format } = args.model;
   if (format === 'codex') {
     // The codex CLI takes a single prompt — no system channel. The SOUL text
@@ -262,7 +280,7 @@ async function defaultSpawnAgent(args: {
         : {}),
       onEvent: (event) => {
         sawCodexEvent = true;
-        const line = codexEventToDisplay(event);
+        const line = codexEventToDisplay(event, credentialValues);
         if (line === null) {
           args.emit?.({ kind: 'activity' });
           return;
@@ -271,15 +289,15 @@ async function defaultSpawnAgent(args: {
         args.emit?.({ kind: 'output', data: { line } });
       },
     });
-    const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? ''));
-    return { output, error: result.error };
+    const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues));
+    return { output, error: result.error === null ? null : sanitize(result.error, credentialValues) };
   }
   return spawnClaudeAgent(args);
 }
 
-function codexEventToDisplay(event: Record<string, unknown>): string | null {
+function codexEventToDisplay(event: Record<string, unknown>, exactValues: readonly string[]): string | null {
   if (event['type'] === 'raw' && typeof event['line'] === 'string') {
-    return cleanCodexText(event['line']);
+    return cleanCodexText(event['line'], exactValues);
   }
 
   if (event['type'] !== 'item.completed' || !isRecord(event['item'])) {
@@ -291,12 +309,12 @@ function codexEventToDisplay(event: Record<string, unknown>): string | null {
     return null;
   }
 
-  return cleanCodexText(item['text']);
+  return cleanCodexText(item['text'], exactValues);
 }
 
-function cleanCodexText(text: string): string | null {
+function cleanCodexText(text: string, exactValues: readonly string[]): string | null {
   const trimmed = text.trim();
-  return trimmed === '' ? null : redactSecrets(scrubPathsInText(trimmed));
+  return trimmed === '' ? null : redactSecrets(scrubPathsInText(trimmed), exactValues);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -317,6 +335,7 @@ function spawnClaudeAgent(args: {
   artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
   return new Promise((resolve) => {
+    const credentialValues = productCredentialValues(args.env);
     let resolved = false;
     const finish = (result: SpawnAgentResult): void => {
       if (resolved) return;
@@ -387,7 +406,7 @@ function spawnClaudeAgent(args: {
       if (!line.trim()) return;
       const envelope = parseStreamJsonLine(line);
       if (!envelope) {
-        const redacted = redactSecrets(scrubPathsInText(line));
+        const redacted = redactSecrets(scrubPathsInText(line), credentialValues);
         if (redacted) stdout += `${redacted}\n`;
         return;
       }
@@ -396,7 +415,7 @@ function spawnClaudeAgent(args: {
         emitEvent({ kind: 'activity' });
         return;
       }
-      const redacted = redactSecrets(display);
+      const redacted = redactSecrets(display, credentialValues);
       for (const displayLine of redacted.split('\n')) {
         if (!displayLine) continue;
         stdout += `${displayLine}\n`;
@@ -430,7 +449,7 @@ function spawnClaudeAgent(args: {
       if (killTimer) clearTimeout(killTimer);
       unregisterActiveProcess(child);
       if (spawnError !== null) {
-        finish({ output: stdout, error: spawnError });
+        finish({ output: stdout, error: sanitize(spawnError, credentialValues) });
         return;
       }
       if (timedOut) {
@@ -443,7 +462,7 @@ function spawnClaudeAgent(args: {
       }
       finish({
         output: stdout,
-        error: stderr.trim() || `execution agent exited with code ${code}`,
+        error: sanitize(stderr.trim() || `execution agent exited with code ${code}`, credentialValues),
       });
     });
   });

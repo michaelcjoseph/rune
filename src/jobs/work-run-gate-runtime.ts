@@ -45,7 +45,7 @@ import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { redactSecrets } from './work-run-transcript.js';
-import config from '../config.js';
+import config, { PROJECT_ROOT } from '../config.js';
 
 const log = createLogger('work-run-gate-runtime');
 
@@ -101,6 +101,33 @@ const VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS = 1_000;
  * `timedOut` — the same wedge work-runner.ts guards with REAP_FORCE_DONE_MS.
  */
 const VALIDATION_STDIO_DRAIN_MS = 10_000;
+const VALIDATION_BASE_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TERM', 'SHELL', 'TMPDIR',
+] as const;
+const VALIDATION_SANDBOX_PROFILE = [
+  '(version 1)',
+  '(allow default)',
+  '(deny network-outbound)',
+  '(deny network-inbound)',
+  '(allow network-inbound (local ip "localhost:*"))',
+  '(allow network-outbound (remote ip "localhost:*"))',
+].join('');
+
+function buildValidationEnv(cwd: string, reportOptions = '', initialDepth = '1'): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of VALIDATION_BASE_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  if (reportOptions) {
+    env.NODE_OPTIONS = reportOptions;
+    env.RUNE_VALIDATION_REPORT_NODE_OPTIONS = reportOptions;
+    env.RUNE_VALIDATION_ORIGINAL_NODE_OPTIONS = '';
+    env.RUNE_VALIDATION_REPORT_DEPTH = initialDepth;
+  }
+  env.RUNE_VITEST_CACHE_DIR = vitestCacheDirFor(cwd);
+  return env;
+}
 
 export interface ValidationCommandResult {
   /** Process exit code, or null if it was killed (e.g. on timeout). */
@@ -233,21 +260,25 @@ export function runValidationCommandArgv(
     } catch (err) {
       log.warn('validation diagnostic temp directory creation failed', { error: (err as Error).message });
     }
+    const reportBootstrap = join(PROJECT_ROOT, 'scripts', 'validation-report-bootstrap.cjs');
     const reportOptions = rawReportDir
-      ? `--report-on-signal --report-signal=SIGUSR2 --report-directory=${JSON.stringify(rawReportDir)}`
+      ? `--report-on-signal --report-signal=SIGUSR2 --report-directory=${JSON.stringify(rawReportDir)} --require=${JSON.stringify(reportBootstrap)}`
       : '';
-    const child = spawn(bin, args, {
+    // npm/npx should pass diagnostics to its direct runner; a direct node/test
+    // command is itself the runner and strips the options before its workers.
+    const initialReportDepth = /^(?:npm|npx)(?:\.cmd)?$/.test(basename(bin)) ? '0' : '1';
+    const spawnBin = process.platform === 'darwin' ? '/usr/bin/sandbox-exec' : bin;
+    const spawnArgs = process.platform === 'darwin'
+      ? ['-p', VALIDATION_SANDBOX_PROFILE, bin, ...args]
+      : args;
+    const child = spawn(spawnBin, spawnArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
-      env: {
-        ...process.env,
-        ...(reportOptions
-          ? { NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} ${reportOptions}`.trim() }
-          : {}),
-        // Derived last so inherited values cannot couple validation worktrees.
-        RUNE_VITEST_CACHE_DIR: vitestCacheDirFor(cwd),
-      },
+      // Validation runs product-controlled code. Pass shell/toolchain basics,
+      // never Rune or integration secrets; Seatbelt also denies non-localhost
+      // network so a test cannot exfiltrate even a secret read from disk.
+      env: buildValidationEnv(cwd, reportOptions, initialReportDepth),
     });
     registerActiveProcess(child);
 
@@ -272,6 +303,7 @@ export function runValidationCommandArgv(
     let diagnosticTimer: NodeJS.Timeout | undefined;
     let drainTimer: NodeJS.Timeout | undefined;
     let diagnosticGracePending = false;
+    let timeoutReapComplete = true;
     let deferredFinish: { code: number | null } | undefined;
     const killGroup = (signal: NodeJS.Signals): void => {
       if (child.pid === undefined) return;
@@ -287,10 +319,13 @@ export function runValidationCommandArgv(
       timedOut = true;
       const reap = (): void => {
         diagnosticGracePending = false;
+        timeoutReapComplete = false;
         killGroup('SIGTERM');
-        killTimer = setTimeout(() => killGroup('SIGKILL'), config.WORK_RUN_REAP_GRACE_MS);
-        killTimer.unref();
-        if (deferredFinish) finish(deferredFinish.code);
+        killTimer = setTimeout(() => {
+          killGroup('SIGKILL');
+          timeoutReapComplete = true;
+          if (deferredFinish) finish(deferredFinish.code);
+        }, config.WORK_RUN_REAP_GRACE_MS);
       };
       if (rawReportDir) {
         diagnosticGracePending = true;
@@ -308,9 +343,13 @@ export function runValidationCommandArgv(
         deferredFinish = { code: exitCode };
         return;
       }
+      if (timedOut && !timeoutReapComplete) {
+        deferredFinish = { code: exitCode };
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
+      if (killTimer && timeoutReapComplete) clearTimeout(killTimer);
       if (diagnosticTimer) clearTimeout(diagnosticTimer);
       if (drainTimer) clearTimeout(drainTimer);
       unregisterActiveProcess(child);
@@ -367,6 +406,18 @@ export async function collectTaskChangedPaths(
     ...parseGitPathList(tracked.stdout),
     ...parseGitPathList(untracked.stdout),
   ])];
+}
+
+/** Deletions and global runner/config files cannot be mapped safely by
+ * `vitest related`; callers must fall back to product validation commands. */
+export async function taskChangesRequireFullValidation(
+  cwd: string,
+  changedPaths: readonly string[],
+  runGit: GitRunner = defaultRunGit,
+): Promise<boolean> {
+  const deleted = await runGit(['diff', '--name-only', '-z', '--diff-filter=D', 'HEAD', '--'], { cwd });
+  if (parseGitPathList(deleted.stdout).length > 0) return true;
+  return changedPaths.some((path) => /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig(?:\..+)?\.json|(?:vitest|vite|next)\.config\.[^/]+|scripts\/register-ts\.mjs)$/.test(path));
 }
 
 /**

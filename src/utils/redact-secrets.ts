@@ -30,8 +30,32 @@ const REDACTIONS: ReadonlyArray<
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, (m) => `<jwt-redacted-${redactionTag(m)}>`],
 ];
 
-export function redactSecrets(text: string): string {
+const SENSITIVE_ENV_KEY = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|KEY|CREDENTIALS?|COOKIE|AUTH)$/;
+const SENSITIVE_ENV_EXACT = new Set([
+  'TELEGRAM_BOT_TOKEN',
+  'RUNE_HTTP_SECRET',
+  'RUNE_MCP_SECRET',
+  'WHOOP_CLIENT_SECRET',
+  'READWISE_TOKEN',
+  'LENNY_MCP_TOKEN',
+]);
+
+function environmentSecretValues(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(env)
+    .filter(([key, value]) => value && value.length >= 4 &&
+      (SENSITIVE_ENV_EXACT.has(key) || SENSITIVE_ENV_KEY.test(key)))
+    .map(([, value]) => value!)
+    .sort((a, b) => b.length - a.length);
+}
+
+export function redactSecrets(text: string, exactValues: readonly string[] = []): string {
   let out = text;
+  const values = [...new Set([...exactValues, ...environmentSecretValues(process.env)])]
+    .filter((value) => value.length >= 4)
+    .sort((a, b) => b.length - a.length);
+  for (const value of values) {
+    out = out.split(value).join(`<secret-redacted-${redactionTag(value)}>`);
+  }
   for (const [re, repl] of REDACTIONS) out = out.replace(re, repl);
   return out;
 }

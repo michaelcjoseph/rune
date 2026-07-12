@@ -888,6 +888,8 @@ describe('createWorktree', () => {
     const mergeBase = 'mergebase987654321fedcba987654321fedcba';
     const branch = 'rune-work/01-growth';
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
+    const cache = vitestCacheDirFor(expectedPath);
+    mkdirSync(cache, { recursive: true });
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
@@ -917,6 +919,7 @@ describe('createWorktree', () => {
     const removeCall = runGit.mock.calls.find(c => c[0][0] === 'worktree' && c[0][1] === 'remove');
     expect(removeCall?.[0]).toEqual(['worktree', 'remove', '--force', expectedPath]);
     expect(removeCall?.[1]?.cwd).toBe(FIXTURE_PRODUCTS.aura.repoPath);
+    expect(existsSync(cache)).toBe(false);
     expect(runGit.mock.calls.some(c => c[0][0] === 'rev-parse' && c[0][1] === 'HEAD')).toBe(false);
   });
 
@@ -1058,6 +1061,8 @@ describe('createWorktree', () => {
     const worktreeRoot = tmpDir;
     const existingPath = join(worktreeRoot, 'aura', '01-growth');
     mkdirSync(existingPath, { recursive: true });
+    const cache = vitestCacheDirFor(existingPath);
+    mkdirSync(cache, { recursive: true });
 
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'worktree' && args.includes('--porcelain')) {
@@ -1085,6 +1090,7 @@ describe('createWorktree', () => {
     );
     expect(removeIndex).toBeGreaterThanOrEqual(0);
     expect(addIndex).toBeGreaterThan(removeIndex);
+    expect(existsSync(cache)).toBe(false);
   });
 
   it('refuses to reclaim a dirty preserved worktree and never destroys it', async () => {

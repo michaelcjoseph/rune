@@ -26,7 +26,10 @@ if (!vaultIndex.getVaultIndexStatus().ready) {
   throw new Error('artifact read-only MCP could not build the vault index');
 }
 
+const sockets = new Set<import('node:net').Socket>();
 const listener = createServer((socket) => {
+  sockets.add(socket);
+  socket.once('close', () => sockets.delete(socket));
   const server = createRuneMcpServer({
     name: 'rune-kb-artifact-readonly',
     tools: ['vault_search', 'journal_range', 'follow_wikilinks'],
@@ -36,7 +39,9 @@ const listener = createServer((socket) => {
 listener.listen(socketPath, () => process.stdout.write('READY\n'));
 
 const close = (): void => {
+  for (const socket of sockets) socket.destroy();
   listener.close(() => process.exit(0));
 };
 process.once('SIGTERM', close);
 process.once('SIGINT', close);
+process.once('disconnect', close);

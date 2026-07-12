@@ -60,6 +60,7 @@ const mockRunValidationCommands = vi.hoisted(() =>
   ): Promise<MockValidationCommandListResult> => ({ ok: true })),
 );
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
 const mockRunValidationCommandArgv = vi.hoisted(() => vi.fn(async () => ({
   exitCode: 0,
   timedOut: false,
@@ -95,6 +96,7 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
 vi.mock('./work-run-gate-runtime.js', () => ({
   runGate: mockRunGate,
   collectTaskChangedPaths: mockCollectTaskChangedPaths,
+  taskChangesRequireFullValidation: mockTaskChangesRequireFullValidation,
   runValidationCommandArgv: mockRunValidationCommandArgv,
   runValidationCommands: mockRunValidationCommands,
 }));
@@ -405,6 +407,8 @@ describe('orchestratedWorkApplier', () => {
         outputTail: '',
         diagnosticArtifacts: [],
       });
+      mockTaskChangesRequireFullValidation.mockReset();
+      mockTaskChangesRequireFullValidation.mockResolvedValue(false);
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
       mockCreateTranscriptSink.mockReset();
@@ -1728,7 +1732,9 @@ describe('orchestratedWorkApplier', () => {
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
-      mockCollectTaskChangedPaths.mockResolvedValue(['src/feature.ts', 'src/odd name.test.ts']);
+      mockCollectTaskChangedPaths.mockResolvedValue([
+        'src/feature.ts', 'src/odd name.test.ts', '--config=malicious.ts',
+      ]);
       mockRunValidationCommandArgv.mockImplementation(async () => {
         operations.push('validation');
         return { exitCode: 0, timedOut: false, outputHead: '', outputTail: '', diagnosticArtifacts: [] };
@@ -1800,6 +1806,7 @@ describe('orchestratedWorkApplier', () => {
             '--passWithNoTests',
             'src/feature.ts',
             'src/odd name.test.ts',
+            './--config=malicious.ts',
           ],
           wtDir,
           120_000,
@@ -1844,11 +1851,14 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            closeoutValidationStrategy: 'vitest-related',
           },
         }),
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockCollectTaskChangedPaths.mockResolvedValueOnce(['src/feature.ts']);
+      mockTaskChangesRequireFullValidation.mockResolvedValueOnce(true);
       mockRunValidationCommands.mockImplementationOnce(async (_commands, cwd) => {
         validationCwd = String(cwd);
         return { ok: true as const };
@@ -1898,6 +1908,11 @@ describe('orchestratedWorkApplier', () => {
         expect(validationCwd).toBe(wtDir);
         expect(validationCwd).not.toBe(repoPath);
         expect(validationCwd).not.toBe(integrationWorktree);
+        expect(mockTaskChangesRequireFullValidation).toHaveBeenCalledWith(
+          wtDir,
+          ['src/feature.ts'],
+          runGit,
+        );
         expect(mockRunValidationCommands).toHaveBeenCalledWith(
           ['npm test'],
           wtDir,

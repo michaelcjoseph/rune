@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const askClaude = vi.hoisted(() => vi.fn());
 const runCodex = vi.hoisted(() => vi.fn());
+const buildChildEnv = vi.hoisted(() => vi.fn(() => ({ PATH: '/bin', SAFE_ONLY: 'yes' })));
+const cleanupCodexThread = vi.hoisted(() => vi.fn());
 
 vi.mock('../config.js', () => ({
+  PROJECT_ROOT: '/test/project',
   default: {
     MODEL_POLICY_FILE: '/test/model-policy.json',
     VAULT_DIR: '/test/vault',
@@ -19,9 +22,10 @@ vi.mock('../intent/model-policy.js', () => ({
 }));
 vi.mock('./claude.js', () => ({
   askClaudeWithContext: askClaude,
-  buildClaudeChildEnv: () => ({ PATH: '/bin' }),
+  buildClaudeChildEnv: buildChildEnv,
 }));
 vi.mock('./codex.js', () => ({ runCodex }));
+vi.mock('./codex-sessions.js', () => ({ cleanupCodexThread }));
 vi.mock('../vault/voice.js', () => ({ buildVoicePromptSection: () => 'VOICE' }));
 
 const { askChatWithContext } = await import('./chat.js');
@@ -59,8 +63,28 @@ describe('provider-aware chat', () => {
       persistentSession: true,
       sandboxMode: 'read-only',
       opLabel: 'chat',
+      env: { PATH: '/bin', SAFE_ONLY: 'yes' },
     }));
+    expect(buildChildEnv).toHaveBeenCalledWith('product-chat');
     expect(result).toEqual({ text: 'codex reply', error: null, executor: { format: 'codex', sessionId: 'codex-thread' } });
+  });
+
+  it('scrubs the environment for global and product Codex chats alike', async () => {
+    await askChatWithContext({ ...base, model: 'gpt-5.6-terra' });
+    await askChatWithContext({ ...base, model: 'gpt-5.6-terra', product: 'writing' });
+    for (const call of runCodex.mock.calls) {
+      expect(call[1].env).toEqual({ PATH: '/bin', SAFE_ONLY: 'yes' });
+    }
+  });
+
+  it('cleans a newly-created Codex thread when the first turn fails', async () => {
+    runCodex.mockImplementationOnce(async (_prompt: string, opts: { onEvent?: (event: Record<string, unknown>) => void }) => {
+      opts.onEvent?.({ type: 'thread.started', thread_id: 'failed-thread-1234' });
+      return { text: null, error: 'boom', exitCode: 1 };
+    });
+    const result = await askChatWithContext({ ...base, model: 'gpt-5.6-terra' });
+    expect(result.error).toBe('boom');
+    expect(cleanupCodexThread).toHaveBeenCalledWith('failed-thread-1234');
   });
 
   it('resumes an existing Codex thread without replaying the transcript', async () => {
