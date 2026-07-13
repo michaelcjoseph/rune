@@ -145,6 +145,7 @@ const {
   updateSession,
   setSessionModel,
   buildSessionSystemPrompt,
+  resolveProductChatWorkspace,
 } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -1531,6 +1532,41 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.allowedTools).not.toContain('Edit');
     expect(options.allowedTools).not.toContain('Write');
     expect(options.allowedTools).not.toContain('Bash');
+  });
+
+  it('keeps an unresolved product scope read-only and out of a product cwd', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
+
+    vi.mocked(resolveProductChatWorkspace).mockReturnValueOnce(null);
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'unresolved-product-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'hello', productScope);
+
+    const options = askMock.mock.calls[0]![3] as {
+      allowedTools: string[];
+      cwd?: string;
+      writableRoots?: string[];
+    };
+    expect(options.cwd).toBeUndefined();
+    expect(options.writableRoots).toBeUndefined();
+    expect(options.allowedTools).not.toContain('Edit');
+    expect(options.allowedTools).not.toContain('Write');
+    expect(options.allowedTools).not.toContain('Bash');
+    expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: productScope,
+      writeEnabled: false,
+    }));
   });
 
   it('does not set a product cwd for global (non-product) chat', async () => {

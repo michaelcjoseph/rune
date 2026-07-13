@@ -737,6 +737,31 @@ describe('vault/sessions', () => {
       setSessionExecutor(123, 'telegram', { format: 'codex', sessionId: 'thread-1' });
       expect(getSession(123, 'telegram')?.executor).toEqual({ format: 'codex', sessionId: 'thread-1' });
     });
+
+    it('round-trips a scoped Codex executor posture through persistence and restore', () => {
+      const scope = { kind: 'product' as const, product: 'writing' };
+      createSession(123, 'webview', 'test', undefined, scope);
+      const executor = {
+        format: 'codex' as const,
+        sessionId: 'writing-scope-thread',
+        writeEnabled: true,
+        cwd: '/workspace/writing',
+        writableRoot: '/workspace/writing/docs/rune',
+      };
+
+      setSessionExecutor(123, 'webview', executor, scope);
+      expect(getSession(123, 'webview', scope)?.executor).toEqual(executor);
+
+      persistSessions();
+      const persisted = readFileSync(sessionsFile, 'utf8');
+      deleteSession(123, 'webview', scope);
+      expect(getSession(123, 'webview', scope)).toBeNull();
+
+      writeFileSync(sessionsFile, persisted);
+      restoreSessions();
+      expect(getSession(123, 'webview', scope)?.executor).toEqual(executor);
+    });
+
     it('writes sessions to disk on create', () => {
       createSession(123, 'telegram', 'test');
       expect(existsSync(sessionsFile)).toBe(true);

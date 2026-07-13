@@ -73,6 +73,12 @@ export interface BuildSessionSystemPromptInput {
 export interface ConversationExecutor {
   format: 'claude' | 'codex';
   sessionId?: string;
+  /** Codex-only posture bound to the persistent thread at creation time. */
+  writeEnabled?: boolean;
+  /** Codex-only product workspace bound to the persistent thread. */
+  cwd?: string;
+  /** Codex-only prompt-level editable root bound to the persistent thread. */
+  writableRoot?: string;
 }
 
 export interface Session {

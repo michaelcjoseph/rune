@@ -1,28 +1,5 @@
 ## Active
 
-- [ ] **Codex-backed product chats can edit product files but cannot write Git metadata, so they cannot stage, commit, create branches, or otherwise complete normal repository work.**
-  - **Symptom.** In the Rune product chat, `git status` works, but the `.git` directory, refs, objects, and index are not writable. A Codex agent can therefore inspect and edit the product worktree, yet any Git operation that changes repository metadata fails. This makes an apparently write-enabled product chat unable to complete a normal implementation handoff.
-  - **Scope.** This affects every product chat whose selected chat model resolves to the `codex` executor. Claude product chats do not use this launch path. Global/Home chat must remain read-only and is deliberately out of scope.
-  - **Root cause.** `askChatWithContext()` starts a new Codex product-chat thread with `sandboxMode: 'workspace-write'` whenever `request.writeEnabled` is true (`src/ai/chat.ts`). That grants normal worktree editing but does not grant this Codex runtime the Git-metadata write access required by `git add`, `git commit`, branch/ref updates, and similar operations. Rune already treats a resolvable product chat as a full-trust local development agent: it gives the agent `Edit`, `Write`, and `Bash`, runs it at the product repo root, and documents that the Claude product-chat boundary is prompt-level rather than OS-enforced. The Codex sandbox selection is inconsistent with that declared posture.
-  - **Fix.** For a **new Codex thread** in a write-enabled product chat, select `danger-full-access` instead of `workspace-write`:
-
-    ```ts
-    ...(threadId
-      ? { resumeSessionId: threadId }
-      : { sandboxMode: request.writeEnabled ? 'danger-full-access' : 'read-only' }),
-    ```
-
-    Make this change only in the Codex branch of `src/ai/chat.ts`. Keep `read-only` for global/Home chats and for a product scope that cannot resolve to a configured workspace. Do not add a global Codex config override or weaken the artifact-role sandbox, work-run sandbox, credential isolation, or MCP restrictions; this is limited to interactive product chat.
-  - **Session migration.** Codex resumes a persistent thread with the sandbox policy established when that thread was created; Rune intentionally does not pass `-s` on resume (`src/ai/codex.ts`). The new policy will therefore apply only after the user starts a fresh product-chat session (`/fresh`, `/clear`, or the cockpit equivalent) that discards the existing Codex executor/thread. Do not claim that a live resumed thread was upgraded.
-  - **Security and operational constraints.** `danger-full-access` gives the Codex child the same full local-write posture Rune has already accepted for product chat. The product identity prompt and `buildClaudeChildEnv('product-chat')` secret scrub remain required. This change permits local Git metadata writes only; it does not guarantee that `git push` succeeds, which still depends on repository Git identity, credentials, and network policy. A host-level sandbox or managed policy can still impose stricter limits than Rune's child process requests; surface that failure honestly rather than silently falling back to a non-Git-capable mode.
-  - **Acceptance.**
-    - A fresh Codex-backed chat for every configured product can run `git add`, make a local commit, and create/update a local branch or ref inside its configured repository.
-    - A fresh global/Home Codex chat remains read-only, including its Git metadata.
-    - An existing persistent Codex product-chat thread is not falsely represented as upgraded; after `/fresh` it receives the new policy.
-    - Claude product-chat behavior, artifact-role execution, work-run sandboxes, credential injection, and the secret-scrubbed chat environment remain unchanged.
-    - If a host-managed sandbox still denies `.git` writes, the user receives the sanitized Git error and Rune does not misreport a successful commit.
-  - **Tests.** Extend `src/ai/chat.test.ts` to assert `danger-full-access` for a new write-enabled Codex request and `read-only` for a new non-write-enabled request. Preserve and extend the resume assertion to prove that a resumed thread supplies `resumeSessionId` without a conflicting sandbox argument. Add/adjust the product-chat routing test in `src/bot/handlers/text.test.ts` so a configured product still sets `writeEnabled: true`, while global/Home routing remains unchanged. Add a focused `runCodex` argv test in `src/ai/codex.test.ts` if needed to pin `-s danger-full-access` serialization.
-
 - [ ] **Product chats cannot inspect their own Cockpit work-run records, so they cannot self-diagnose a run failure.**
   - **Symptom.** In the Assay product chat, asking about run `c523dd06` produced: “This chat has terminal and repo access, but no Cockpit connector or API. The run ID `c523dd06` identifies a Cockpit record, yet I have no tool that can open its transcript.” The agent could inspect Assay's checkout, but could not read the durable run summary, supervised state, task/role records, or transcript that explain why the run stopped.
   - **Root cause.** Product chats receive only filesystem, web, and four `rune-kb` tools (`repo_search`, `kb_query`, `kb_search`, and `kb_stats`) in `src/bot/handlers/text.ts`. The authenticated Cockpit read surface already exists in `src/server/webview.ts` (`GET /api/work-runs/:id`, `/live`, and `/transcript`), but no model-facing diagnostic tool wraps those readers. Claude product chats receive the project-local `rune-kb` MCP configuration, while Codex product chats do not receive an equivalent controlled MCP registration, so a partial fix would also create provider-dependent behavior.
@@ -56,6 +33,8 @@
 (empty)
 
 ## Done
+- [x] **Codex-backed product chats could edit product files but could not write Git metadata, preventing normal repository work.** **(Fixed 2026-07-13 — fresh write-enabled Codex product threads now use `danger-full-access`; Home/global and unresolved products remain read-only. Authority or workspace changes rotate the thread safely. Existing product threads require `/fresh` or `/clear` to receive the new policy. Secret scrubbing and all non-chat sandbox boundaries are unchanged; focused tests, full suite, and type-check pass.)**
+
 - [x] **Orchestrated coder can't reach pkms: rune-kb MCP not registered in the coder's child-sandbox context, so MCP-only tasks fail on a missing deliverable.**
   - **Symptom.** The orchestrated run for product `writing`/`brand` (michaelcjoseph.com, project 01) failed on task `voice-guidelines-copy` (run `b03af189`). Round cap reached with unresolved task feedback. Empty diff. The deliverable (copied voice guidelines under `docs/rune/`) was absent from both the diff and the branch tree-state.
   - **Root cause.** The task's only sanctioned source is pkms `writing/voice.md`, and the project spec hard-gates pkms access to MCP only. The rune-kb MCP tools were not registered in the orchestrated coder's context, so that path was unreachable. The raw pkms/rune-kb daemon on `127.0.0.1:3848` was sandbox-blocked (correctly). Both doors to pkms were shut, leaving no valid way to produce the deliverable.

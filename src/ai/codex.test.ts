@@ -384,6 +384,20 @@ describe('ai/codex', () => {
       expect(args[args.indexOf('-s') + 1]).toBe('read-only');
     });
 
+    it('serializes danger-full-access as the Codex sandbox argv value', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { sandboxMode: 'danger-full-access' });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args.slice(args.indexOf('-s'), args.indexOf('-s') + 2)).toEqual([
+        '-s',
+        'danger-full-access',
+      ]);
+    });
+
     it('passes all three optional flags together', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));

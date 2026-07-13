@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import config from '../config.js';
 import { loadModelPolicy, type ModelEntry } from '../intent/model-policy.js';
-import type { ConversationMessage } from '../vault/sessions.js';
+import type { ConversationExecutor, ConversationMessage } from '../vault/sessions.js';
 import { buildVoicePromptSection } from '../vault/voice.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { askClaudeWithContext, buildClaudeChildEnv } from './claude.js';
@@ -11,11 +11,6 @@ import { cleanupCodexThread } from './codex-sessions.js';
 
 const TRANSCRIPT_CHAR_BUDGET = 40_000;
 
-export type ChatExecutorState = {
-  format: 'claude' | 'codex';
-  sessionId?: string;
-};
-
 export interface ChatRequest {
   /** Pre-provider sessions used Rune's public id as the Claude CLI id. */
   legacyClaudeSessionId?: string;
@@ -23,7 +18,7 @@ export interface ChatRequest {
   model: string;
   systemPrompt: string;
   priorMessages: ConversationMessage[];
-  executor: ChatExecutorState | null;
+  executor: ConversationExecutor | null;
   cwd?: string;
   writableRoot?: string;
   writeEnabled: boolean;
@@ -34,7 +29,7 @@ export interface ChatRequest {
 export interface ChatResult {
   text: string | null;
   error: string | null;
-  executor: ChatExecutorState;
+  executor: ConversationExecutor;
 }
 
 function safeError(error: string | null): string | null {
@@ -87,9 +82,28 @@ function codexAgentText(event: Record<string, unknown>): string | null {
     : null;
 }
 
+function codexExecutorMatchesRequest(
+  executor: ConversationExecutor,
+  request: ChatRequest,
+): boolean {
+  if (executor.writeEnabled === undefined) {
+    // Threads persisted before posture tracking keep their original policy.
+    // The exception is an unresolved product: fail closed instead of resuming
+    // a legacy product thread from the vault with an unknown sandbox posture.
+    return !request.product || request.writeEnabled;
+  }
+  return executor.writeEnabled === request.writeEnabled &&
+    executor.cwd === request.cwd &&
+    executor.writableRoot === request.writableRoot;
+}
+
 export async function askChatWithContext(request: ChatRequest): Promise<ChatResult> {
   const binding = resolveChatModel(request.model);
-  const sameExecutor = request.executor?.format === binding.format ? request.executor : null;
+  const formatMatchedExecutor = request.executor?.format === binding.format ? request.executor : null;
+  const sameExecutor = formatMatchedExecutor?.format === 'codex' &&
+    !codexExecutorMatchesRequest(formatMatchedExecutor, request)
+    ? null
+    : formatMatchedExecutor;
   const initialPrompt = bootstrapMessage(request.message, sameExecutor ? [] : request.priorMessages);
 
   if (binding.format === 'claude') {
@@ -116,7 +130,7 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     model: request.model,
     cwd: request.cwd ?? config.VAULT_DIR,
     persistentSession: true,
-    ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: request.writeEnabled ? 'workspace-write' : 'read-only' }),
+    ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: request.writeEnabled ? 'danger-full-access' : 'read-only' }),
     // Codex is shell-capable even in read-only mode. Always use the secret-
     // scrubbed chat environment; global/Home chat must not inherit Rune's env.
     env: buildClaudeChildEnv('product-chat'),
@@ -134,6 +148,16 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
   return {
     text: response.trim() || (result.error ? null : result.text),
     error: safeError(result.error),
-    executor: { format: 'codex', ...(threadId ? { sessionId: threadId } : {}) },
+    executor: {
+      format: 'codex',
+      ...(threadId ? { sessionId: threadId } : {}),
+      ...(sameExecutor?.format === 'codex' && sameExecutor.writeEnabled === undefined
+        ? {}
+        : {
+            writeEnabled: request.writeEnabled,
+            ...(request.cwd ? { cwd: request.cwd } : {}),
+            ...(request.writableRoot ? { writableRoot: request.writableRoot } : {}),
+          }),
+    },
   };
 }
