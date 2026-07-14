@@ -99,12 +99,7 @@ describe('orchestrated-work boot recovery', () => {
 
     const deps = {
       readRunningOrchestratedMutations: vi.fn(async () => [mutation]),
-      readRunCursor: vi.fn(async (runId: string) => (runId === mutation.id ? runCursor : null)),
-      readTaskRunRecords: vi.fn(async (runId: string) => (runId === mutation.id ? records : [])),
-      readTasksMd: vi.fn(async (loadedCursor: OrchestrationRunCursor) => {
-        expect(loadedCursor).toBe(runCursor);
-        return tasksMd;
-      }),
+      preflightRecovery: vi.fn(async () => ({ kind: 'recoverable' as const, cursor: runCursor, reconstruction })),
       redispatchOrchestratedMutation: vi.fn(async () => {}),
       markOrphaned: vi.fn(async () => {}),
       writeTerminal: vi.fn(async () => {}),
@@ -112,7 +107,7 @@ describe('orchestrated-work boot recovery', () => {
 
     const result = await recoverOrchestratedWorkRuns(deps);
 
-    expect(mockReconstructRun).toHaveBeenCalledWith({ tasksMd, records });
+    expect(deps.preflightRecovery).toHaveBeenCalledWith(mutation);
     expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
       mutation,
       expect.objectContaining({
@@ -163,9 +158,7 @@ describe('orchestrated-work boot recovery', () => {
 
     const deps = {
       readRunningOrchestratedMutations: vi.fn(async () => [mutation]),
-      readRunCursor: vi.fn(async () => runCursor),
-      readTaskRunRecords: vi.fn(async () => []),
-      readTasksMd: vi.fn(async () => tasksMd),
+      preflightRecovery: vi.fn(async () => ({ kind: 'recoverable' as const, cursor: runCursor, reconstruction })),
       redispatchOrchestratedMutation: vi.fn(async () => {}),
       markOrphaned: vi.fn(async () => {}),
       writeTerminal: vi.fn(async () => {}),
@@ -173,7 +166,7 @@ describe('orchestrated-work boot recovery', () => {
 
     const result = await recoverOrchestratedWorkRuns(deps);
 
-    expect(mockReconstructRun).toHaveBeenCalledWith({ tasksMd, records: [] });
+    expect(deps.preflightRecovery).toHaveBeenCalledWith(mutation);
     expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
       mutation,
       expect.objectContaining({
@@ -213,9 +206,11 @@ describe('orchestrated-work boot recovery', () => {
         return false;
       }),
       releaseRecoveryLease: vi.fn(async () => {}),
-      readRunCursor: vi.fn(async () => runCursor),
-      readTaskRunRecords: vi.fn(async () => records),
-      readTasksMd: vi.fn(async () => tasksMd),
+      preflightRecovery: vi.fn(async () => ({
+        kind: 'recoverable' as const,
+        cursor: runCursor,
+        reconstruction: { completedTaskIds: [], nextTask: null, drift: false },
+      })),
       redispatchOrchestratedMutation: vi.fn(async () => {}),
       markOrphaned: vi.fn(async () => {}),
       writeTerminal: vi.fn(async () => {}),
@@ -254,26 +249,24 @@ describe('orchestrated-work active recovery request', () => {
       nextTask: selectedResumeTask(),
       drift: false,
     };
-    const cancel = vi.fn();
-    mockReconstructRun.mockReturnValue(reconstruction);
+    const order: string[] = [];
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = () => { order.push('settled'); resolve(); }; });
+    const cancel = vi.fn(() => { settle(); });
+    const handle = { descriptor: mutation, cancel, settled };
 
     const deps = {
-      readRunCursor: vi.fn(async (runId: string) => (runId === mutation.id ? runCursor : null)),
-      readTaskRunRecords: vi.fn(async (runId: string) => (runId === mutation.id ? records : [])),
-      readTasksMd: vi.fn(async (loadedCursor: OrchestrationRunCursor) => {
-        expect(loadedCursor).toBe(runCursor);
-        return tasksMd;
-      }),
-      redispatchOrchestratedMutation: vi.fn(() => ({ ok: true as const })),
-      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
-      detachActiveRun: vi.fn(),
+      preflightRecovery: vi.fn(async () => ({ kind: 'recoverable' as const, cursor: runCursor, reconstruction })),
+      redispatchOrchestratedMutation: vi.fn(() => { order.push('redispatch'); return { ok: true as const }; }),
+      activeRun: vi.fn(() => handle),
+      preserveForHandoff: vi.fn(() => { order.push('preserve'); return true; }),
+      releaseHandoff: vi.fn(() => { order.push('release'); }),
     };
 
     const result = await requestOrchestratedRunRecovery(mutation.id, deps);
 
-    expect(mockReconstructRun).toHaveBeenCalledWith({ tasksMd, records });
+    expect(deps.preflightRecovery).toHaveBeenCalledWith(mutation);
     expect(cancel).toHaveBeenCalledWith('system');
-    expect(deps.detachActiveRun).toHaveBeenCalledWith(mutation.id);
     expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
       mutation,
       expect.objectContaining({
@@ -285,7 +278,85 @@ describe('orchestrated-work active recovery request', () => {
         existingBranch: true,
       }),
     );
+    expect(order).toEqual(['preserve', 'settled', 'redispatch', 'release']);
     expect(result).toEqual({ kind: 'recovered', runId: mutation.id });
+  });
+
+  it('revalidates eligibility under preservation and redispatches from the post-settlement cursor', async () => {
+    const mutation = runningOrchestratedMutation();
+    const staleCursor = cursor();
+    const settledCursor = {
+      ...cursor(),
+      cursor: {
+        completedTaskIds: ['persist-records-and-cursor', 'resume-boot'],
+        currentTaskId: null,
+        nextTaskId: 'finish-recovery',
+      },
+    };
+    const staleReconstruction = {
+      completedTaskIds: ['persist-records-and-cursor'],
+      nextTask: selectedResumeTask(),
+      drift: false,
+    };
+    const settledReconstruction = {
+      completedTaskIds: ['persist-records-and-cursor', 'resume-boot'],
+      nextTask: { id: 'finish-recovery', text: 'Finish recovery', section: 'Phase 11B' },
+      drift: false,
+    };
+    const order: string[] = [];
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = () => { order.push('settled'); resolve(); }; });
+    const cancel = vi.fn(() => { order.push('cancel'); settle(); });
+    const handle = { descriptor: mutation, cancel, settled };
+    const preflightRecovery = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        order.push('initial-preflight');
+        return { kind: 'recoverable' as const, cursor: staleCursor, reconstruction: staleReconstruction };
+      })
+      .mockImplementationOnce(async () => {
+        order.push('protected-preflight');
+        return { kind: 'recoverable' as const, cursor: staleCursor, reconstruction: staleReconstruction };
+      })
+      .mockImplementationOnce(async () => {
+        order.push('settled-preflight');
+        return { kind: 'recoverable' as const, cursor: settledCursor, reconstruction: settledReconstruction };
+      });
+    const redispatchOrchestratedMutation = vi.fn(() => {
+      order.push('redispatch');
+      return { ok: true as const };
+    });
+    const deps = {
+      preflightRecovery,
+      redispatchOrchestratedMutation,
+      activeRun: vi.fn(() => handle),
+      preserveForHandoff: vi.fn(() => { order.push('preserve'); return true; }),
+      releaseHandoff: vi.fn(() => { order.push('release'); }),
+    };
+
+    await expect(requestOrchestratedRunRecovery(mutation.id, deps)).resolves.toEqual({
+      kind: 'recovered',
+      runId: mutation.id,
+    });
+
+    expect(preflightRecovery).toHaveBeenCalledTimes(3);
+    expect(order).toEqual([
+      'initial-preflight',
+      'preserve',
+      'protected-preflight',
+      'cancel',
+      'settled',
+      'settled-preflight',
+      'redispatch',
+      'release',
+    ]);
+    expect(redispatchOrchestratedMutation).toHaveBeenCalledWith(
+      mutation,
+      expect.objectContaining({
+        reconstruction: settledReconstruction,
+        resumeFromTaskId: 'finish-recovery',
+      }),
+    );
   });
 
   it('refuses to recover when the active run is not orchestrated-work', async () => {
@@ -295,19 +366,18 @@ describe('orchestrated-work active recovery request', () => {
     };
     const cancel = vi.fn();
     const deps = {
-      readRunCursor: vi.fn(),
-      readTaskRunRecords: vi.fn(),
-      readTasksMd: vi.fn(),
+      preflightRecovery: vi.fn(),
       redispatchOrchestratedMutation: vi.fn(),
-      activeRun: vi.fn(() => ({ descriptor, cancel })),
-      detachActiveRun: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor, cancel, settled: Promise.resolve() })),
+      preserveForHandoff: vi.fn(),
+      releaseHandoff: vi.fn(),
     };
 
     const result = await requestOrchestratedRunRecovery('mut-orch-resume', deps);
 
     expect(result.kind).toBe('not-orchestrated');
     expect(cancel).not.toHaveBeenCalled();
-    expect(deps.detachActiveRun).not.toHaveBeenCalled();
+    expect(deps.preserveForHandoff).not.toHaveBeenCalled();
     expect(deps.redispatchOrchestratedMutation).not.toHaveBeenCalled();
   });
 
@@ -315,12 +385,11 @@ describe('orchestrated-work active recovery request', () => {
     const mutation = runningOrchestratedMutation();
     const cancel = vi.fn();
     const deps = {
-      readRunCursor: vi.fn(async () => null),
-      readTaskRunRecords: vi.fn(),
-      readTasksMd: vi.fn(),
+      preflightRecovery: vi.fn(async () => ({ kind: 'not-resumable' as const, reason: 'missing resumable orchestrated cursor' })),
       redispatchOrchestratedMutation: vi.fn(),
-      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
-      detachActiveRun: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor: mutation, cancel, settled: Promise.resolve() })),
+      preserveForHandoff: vi.fn(),
+      releaseHandoff: vi.fn(),
     };
 
     const result = await requestOrchestratedRunRecovery(mutation.id, deps);
@@ -330,24 +399,18 @@ describe('orchestrated-work active recovery request', () => {
       reason: 'missing resumable orchestrated cursor',
     });
     expect(cancel).not.toHaveBeenCalled();
-    expect(deps.detachActiveRun).not.toHaveBeenCalled();
+    expect(deps.preserveForHandoff).not.toHaveBeenCalled();
   });
 
   it('refuses to recover when task records drift from tasks.md', async () => {
     const mutation = runningOrchestratedMutation();
     const cancel = vi.fn();
-    mockReconstructRun.mockReturnValue({
-      completedTaskIds: ['persist-records-and-cursor'],
-      nextTask: selectedResumeTask(),
-      drift: true,
-    });
     const deps = {
-      readRunCursor: vi.fn(async () => cursor()),
-      readTaskRunRecords: vi.fn(async () => [readyRecord()]),
-      readTasksMd: vi.fn(async () => '- [ ] Resume boot\n'),
+      preflightRecovery: vi.fn(async () => ({ kind: 'not-resumable' as const, reason: 'completed task records disagree with tasks.md' })),
       redispatchOrchestratedMutation: vi.fn(),
-      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
-      detachActiveRun: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor: mutation, cancel, settled: Promise.resolve() })),
+      preserveForHandoff: vi.fn(),
+      releaseHandoff: vi.fn(),
     };
 
     const result = await requestOrchestratedRunRecovery(mutation.id, deps);
@@ -357,6 +420,33 @@ describe('orchestrated-work active recovery request', () => {
       reason: 'completed task records disagree with tasks.md',
     });
     expect(cancel).not.toHaveBeenCalled();
-    expect(deps.detachActiveRun).not.toHaveBeenCalled();
+    expect(deps.preserveForHandoff).not.toHaveBeenCalled();
+  });
+
+  it('releases the preservation handoff and does not redispatch when old-invocation settlement fails', async () => {
+    const mutation = runningOrchestratedMutation();
+    let rejectSettlement!: (error: Error) => void;
+    const settled = new Promise<void>((_resolve, reject) => { rejectSettlement = reject; });
+    const cancel = vi.fn(() => { rejectSettlement(new Error('teardown failed')); });
+    const handle = { descriptor: mutation, cancel, settled };
+    const releaseHandoff = vi.fn();
+    const deps = {
+      preflightRecovery: vi.fn(async () => ({
+        kind: 'recoverable' as const,
+        cursor: cursor(),
+        reconstruction: { completedTaskIds: [], nextTask: selectedResumeTask(), drift: false },
+      })),
+      redispatchOrchestratedMutation: vi.fn(),
+      activeRun: vi.fn(() => handle),
+      preserveForHandoff: vi.fn(() => true),
+      releaseHandoff,
+    };
+
+    const result = await requestOrchestratedRunRecovery(mutation.id, deps);
+
+    expect(cancel).toHaveBeenCalledWith('system');
+    expect(deps.redispatchOrchestratedMutation).not.toHaveBeenCalled();
+    expect(releaseHandoff).toHaveBeenCalledWith(mutation.id);
+    expect(result).toEqual({ kind: 'error', reason: 'teardown failed' });
   });
 });

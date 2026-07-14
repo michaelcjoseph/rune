@@ -29,6 +29,7 @@ export interface DeepProjectRunControl {
   dispatchMode?: string;
   fallbackReason?: string;
   error?: string;
+  recoverable?: boolean;
 }
 
 export interface RunSummaryRow {
@@ -124,6 +125,7 @@ export interface ProductDeepViewActiveMutation {
   kind: string;
   status?: string;
   payload?: Record<string, unknown>;
+  recoverable?: boolean;
 }
 
 export interface ProductDeepViewDispatchMode {
@@ -263,6 +265,7 @@ function runControlForProject(
     const control: DeepProjectRunControl = {
       state: 'cancel',
       mutationId: activeMutation.id,
+      ...(activeMutation.recoverable === true ? { recoverable: true } : {}),
     };
     const dispatchMode = typeof payload['dispatchMode'] === 'string'
       ? payload['dispatchMode']

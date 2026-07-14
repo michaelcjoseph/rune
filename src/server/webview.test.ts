@@ -40,8 +40,12 @@ vi.mock('../jobs/work-run-release.js', () => ({
 }));
 
 const mockRequestOrchestratedRunRecovery = vi.fn();
+const mockPreflightOrchestratedRecovery = vi.fn<(...args: any[]) => Promise<any>>(
+  async () => ({ kind: 'not-resumable', reason: 'unavailable' }),
+);
 vi.mock('../jobs/orchestrated-work-runner.js', () => ({
   requestOrchestratedRunRecovery: mockRequestOrchestratedRunRecovery,
+  preflightOrchestratedRecovery: mockPreflightOrchestratedRecovery,
 }));
 
 // In-flight op mocks for POST /api/ops/:id/cancel
@@ -199,7 +203,7 @@ const mockGetProjectSummaries = vi.fn(() => [] as any[]);
 vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSummaries }));
 
 // Import after mocks are wired up
-const { mountWebviewRoutes } = await import('./webview.js');
+const { mountWebviewRoutes, clearRecoveryEligibilityCacheForTest } = await import('./webview.js');
 const { WebviewSender } = await import('../transport/webview-sender.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const sessionsForWebview = await import('../vault/sessions.js') as unknown as {
@@ -605,6 +609,7 @@ describe('server/webview', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRecoveryEligibilityCacheForTest();
     mockActiveRunsMap.clear();
     mockRequestOrchestratedRunRecovery.mockResolvedValue({ kind: 'not-active', reason: 'run is not active' });
     mockConfig.RUNE_HTTP_SECRET = 'test-secret';
@@ -809,6 +814,55 @@ describe('server/webview', () => {
       expect(res.body.sessions).toEqual({ webview: null, telegram: null });
       expect(res.body.activeReview).toBeNull();
       expect(res.body.ingestionQueueDepth).toBe(0);
+    });
+
+    it('projects Recover eligibility from the shared server preflight instead of mutation kind', async () => {
+      const descriptor = {
+        id: 'mut-orch-eligible', kind: 'orchestrated-work', source: 'webview',
+        target: { type: 'orchestrated-work', ref: '22-recovery-safety' },
+        preview: { summary: 'recover' },
+        payload: { product: 'rune', projectSlug: '22-recovery-safety' },
+        createdAt: '2026-07-14T12:00:00.000Z', status: 'running',
+      };
+      mockActiveRunsMap.set(descriptor.id, { descriptor, cancel: vi.fn() });
+      mockPreflightOrchestratedRecovery.mockResolvedValueOnce({
+        kind: 'recoverable', cursor: {}, reconstruction: {},
+      });
+
+      const eligible = await makeRequest(port, '/api/state', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(eligible.body.mutations.active[0]).toMatchObject({ id: descriptor.id, recoverable: true });
+
+      clearRecoveryEligibilityCacheForTest();
+      mockPreflightOrchestratedRecovery.mockResolvedValueOnce({ kind: 'not-resumable', reason: 'worktree missing' });
+      const unavailable = await makeRequest(port, '/api/state', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(unavailable.body.mutations.active[0]).toMatchObject({ id: descriptor.id, recoverable: false });
+    });
+
+    it('coalesces repeated Recover eligibility projections for the same active run', async () => {
+      const descriptor = {
+        id: 'mut-orch-coalesced', kind: 'orchestrated-work', source: 'webview',
+        target: { type: 'orchestrated-work', ref: '22-recovery-safety' },
+        preview: { summary: 'recover' },
+        payload: { product: 'rune', projectSlug: '22-recovery-safety' },
+        createdAt: '2026-07-14T12:00:00.000Z', status: 'running',
+      };
+      mockActiveRunsMap.set(descriptor.id, { descriptor, cancel: vi.fn(), settled: Promise.resolve() });
+      mockPreflightOrchestratedRecovery.mockResolvedValue({
+        kind: 'recoverable', cursor: {}, reconstruction: {},
+      });
+
+      const [first, second] = await Promise.all([
+        makeRequest(port, '/api/state', { headers: { authorization: 'Bearer test-secret' } }),
+        makeRequest(port, '/api/state', { headers: { authorization: 'Bearer test-secret' } }),
+      ]);
+
+      expect(first.body.mutations.active[0]).toMatchObject({ recoverable: true });
+      expect(second.body.mutations.active[0]).toMatchObject({ recoverable: true });
+      expect(mockPreflightOrchestratedRecovery).toHaveBeenCalledTimes(1);
     });
 
     it('reflects active sessions in snapshot', async () => {
@@ -2504,10 +2558,10 @@ describe('server/webview', () => {
       expect(mockRequestOrchestratedRunRecovery).toHaveBeenCalledWith('mut-orch-1');
     });
 
-    it('returns 409 when the active run is not resumable', async () => {
+    it('returns a path-scrubbed 409 when the active run worktree is missing', async () => {
       mockRequestOrchestratedRunRecovery.mockResolvedValue({
         kind: 'not-resumable',
-        reason: 'missing resumable orchestrated cursor',
+        reason: 'ENOENT: /Users/jarvis/workspace/rune/.worktrees/rune/missing; worktree no longer exists',
       });
 
       const res = await makeRequest(port, '/api/work-runs/mut-orch-1/recover', {
@@ -2516,7 +2570,8 @@ describe('server/webview', () => {
       });
 
       expect(res.status).toBe(409);
-      expect(res.body.error).toBe('missing resumable orchestrated cursor');
+      expect(res.body.error).not.toContain('/Users/jarvis');
+      expect(res.body.error).toContain('worktree no longer exists');
     });
 
     it('rejects an invalid run id with 400 before invoking recovery', async () => {

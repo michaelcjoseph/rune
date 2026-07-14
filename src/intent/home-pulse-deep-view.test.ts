@@ -780,6 +780,7 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
             id: 'mut-cancel-this',
             kind: 'orchestrated-work',
             status: 'running',
+            recoverable: true,
             payload: {
               product: 'aura',
               projectSlug: '01-mvp',
@@ -813,6 +814,7 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
         runControl: {
           state: 'cancel',
           mutationId: 'mut-cancel-this',
+          recoverable: true,
           dispatchMode: 'orchestrated',
         },
       },

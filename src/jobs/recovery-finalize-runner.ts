@@ -35,6 +35,8 @@ import {
   type GitRunner,
   type ProductConfig,
 } from './sandbox-runtime.js';
+import { invalidateOrchestratedRunCursor } from './orchestrated-run-store.js';
+import { invalidateCursorThenRemoveWorktree } from './terminal-worktree-cleanup.js';
 import {
   classifyOutcome,
   computeWorkProduct,
@@ -108,6 +110,7 @@ export interface RecoveryFinalizeIO {
   appendIndex: (filePath: string, row: import('./work-run-store.js').WorkRunIndexRow) => void;
   upsertSupervision: (run: SupervisedRun) => void;
   removeWorktree: (run: SupervisedRun, worktreePath: string, baseSha: string, egressAllowlist: string[]) => Promise<void>;
+  invalidateCursor: (runId: string, reason: string) => void;
   /** Read the last durable finalize phase a crashed run reached, or null. Drives
    *  the gated-merge crash-resume decision (Phase 3.5). */
   readLastPhase: (runId: string) => FinalizerPhase | null;
@@ -146,6 +149,7 @@ function defaultIO(): RecoveryFinalizeIO {
         { productsConfigPath: config.PRODUCTS_CONFIG_FILE, worktreeRoot: config.WORKTREE_ROOT, runGit: defaultRunGit },
       );
     },
+    invalidateCursor: (runId, reason) => invalidateOrchestratedRunCursor(config.WORK_RUNS_DIR, runId, reason),
     readLastPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
     recordPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     runGate,
@@ -316,7 +320,14 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     writeSupervisionTerminal: (status) => {
       io.upsertSupervision({ ...run, status });
     },
-    removeWorktree: () => io.removeWorktree(run, worktree, baseSha, product.egressAllowlist),
+    removeWorktree: async () => {
+      await invalidateCursorThenRemoveWorktree({
+        runId: run.id,
+        reason: 'successful recovery finalizer cleanup',
+        invalidateCursor: io.invalidateCursor,
+        removeWorktree: async () => io.removeWorktree(run, worktree, baseSha, product.egressAllowlist),
+      });
+    },
     // Durable phases drive the gated-merge resume; harmless in hold mode (which
     // never consults readLastPhase and runs straight through).
     recordPhase: (phase) => io.recordPhase(run.id, phase),

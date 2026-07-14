@@ -1,38 +1,5 @@
 ## Active
 
-- [ ] Cockpit recovery can target an active orchestrated run after its worktree has been removed, then leaks a raw ENOENT instead of reporting that recovery is impossible.
-  - Observed failure. Run 0e6a4c21 for project 22-fix-run-dispatch showed: ENOENT: no such file or directory, scandir '.../.worktrees/rune/22-fix-run-dispatch/docs/projects'.
-  - What should have happened.
-    - A run marked recoverable must retain its worktree until recovery either re-dispatches it or explicitly reaches a terminal cleanup decision.
-    - If the worktree has already been removed, Cockpit must reject recovery with a clear non-retryable response such as worktree no longer exists; this run cannot be recovered.
-    - A run with uncommitted work must be preserved or explicitly parked before teardown. It must not be presented as recoverable after cleanup has discarded its state.
-  - What actually happened.
-    - The run completed QA, tech-lead test review, and coder implementation for fix-attempt-terminal-states.
-    - The coder reported npm run build and npm test passing, but the run was cancelled before task orchestration committed or finalized the work.
-    - Its terminal record reports dirty-uncommitted, zero commits, and reaped-after-terminal-result.
-    - The worktree was removed. git worktree list no longer contains 22-fix-run-dispatch.
-    - A recovery request still used the durable cursor’s old worktreePath, then called readdirSync(<worktree>/docs/projects) and threw raw ENOENT.
-    - The uncommitted implementation and tests were lost with the removed worktree.
-  - Root cause.
-    r- eadTasksMdForRecoveredCursor() in src/jobs/orchestrated-work-runner.ts assumes cursor.worktreePath/docs/projects exists and calls readdirSync() without an existence check or error translation.
-    - Recovery eligibility is based on an active run plus a resumable cursor. It does not verify that the cursor’s worktree remains registered and present before exposing or executing recovery.
-    - Worktree teardown can therefore race with, or precede, the operator recovery path.
-  - Repro.
-    - Start an orchestrated run and let it reach a resumable state with a durable cursor.
-    - Cancel or otherwise terminalize it so its dirty, uncommitted worktree is reaped.
-    - Before the Cockpit model fully clears its recoverable control, invoke Recover.
-    - Observe the raw ENOENT for <worktree>/docs/projects.
-  - Fix.
-    - Make recovery preflight verify that cursor.worktreePath exists, is a registered worktree for the expected branch, and contains the project’s tasks.md.
-    - Treat a missing or invalid worktree as not-resumable, never as an internal server error. Return a path-scrubbed operator message.
-    - Tie Cockpit’s recover affordance to the same lifecycle invariant: only expose Recover while the worktree is preserved and recovery preflight passes.
-    - Prevent ordinary terminal cleanup from removing a worktree while a resumable cursor remains actionable. Dirty work should be WIP-committed and parked, or the cursor should be invalidated atomically before removal.
-  - Acceptance criteria.
-    - Recover on a missing worktree returns HTTP 409 with a clear, path-scrubbed reason, not HTTP 500 or raw ENOENT.
-    - Cockpit does not render Recover for a run whose preserved worktree no longer exists.
-    - A cancelled run with dirty work and a resumable cursor either preserves a recoverable worktree or records a WIP commit and parks it for human action.
-    - Recovery never destroys or silently loses uncommitted work.
-    - Tests cover the missing-directory case, an unregistered worktree, a valid resumable recovery, and the UI projection/control state.
 - [ ] Bug: orchestrated brand work runs fail during sandbox initialization and do not consistently inherit the Rune MCP
   - Issue
     The voice-guidelines-copy task in project 01-rune-writing-product cannot execute in the michaelcjoseph.com worktree.
@@ -126,6 +93,8 @@
 (empty)
 
 ## Done
+
+- [x] Cockpit recovery could target a removed orchestrated worktree, leak raw ENOENT, and discard cursor-protected dirty work. _(Fixed 2026-07-14 — boot, operator, shutdown, and Cockpit projection now share one fail-closed preflight covering mutation/cursor identity, deterministic path and branch, exact Git registration, readable project tasks, and drift-free durable reconstruction. Operator recovery takes an exclusive lifecycle claim, revalidates under preservation, cancels and awaits the old invocation, then reconstructs again from the settled cursor before redispatch; finalizer and outer teardown honor the same claim. Terminal disposition is resolved before the one authoritative terminal is persisted: clean trees invalidate cursors before removal, while every dirty or uncertain tree parks (with a WIP commit when resumability is verified). Live and recovery finalizers share the mandatory invalidate-then-remove transaction. `/recover` maps unavailable state to a path-scrubbed 409, and project cards plus Operations render Recover only from the short-lived, coalesced server `recoverable` projection. Covered by real temporary-repository worktree preflight cases, lifecycle-claim and settled-cursor ordering, finalizer handoff preservation, authoritative parked terminals, teardown fail-closed cases, cursor-before-removal ordering, HTTP projection/scrubbing/coalescing, and client control visibility. `npm run build` passed; full suite passed: 328 files, 5,345 tests, 8 todo.)_
 - [x] **Codex product chats could retain read-only or unknown thread authority instead of receiving full repository access.** **(Fixed 2026-07-14 — the webview conversation boundary now derives one provider-neutral `ChatAuthority` from product scope plus successful workspace resolution. Resolved product chats use `product-full-access`; Home/global and unresolved products use `read-only`. The same decision controls prompt capability, tools, product MCP, Codex `-s danger-full-access`, and persisted executor metadata while Claude retains its existing full-trust product posture. Full access is type-bound to product/cwd/scoped-root metadata, and Codex resumes require a non-empty thread id plus exact authority, effective cwd, and scoped-root matches. Explicit legacy `writeEnabled:true/false` records remain recognized, but metadata-less, threadless, weaker, or differently-bound threads rotate automatically with transcript replay and are cleaned through session replacement. Controlled Claude/Codex CLI fixtures drive the real webview launch path in temporary repositories and prove source plus `.git` writes/commit, matching Codex resume, and legacy read-only rotation. Focused tests, type-check, and the full 327-file suite (5,315 passed, 8 todo) pass.)**
 
 - [x] **Nested orchestration-role cancellation was reported as a generic blocked run without durable source or child-operation correlation.** **(Fixed 2026-07-13 — the first cancellation request is recorded before SIGTERM as provider-neutral `{operationId,source,requestedAt}` metadata with explicit Telegram/cockpit/internal provenance. Claude and Codex judgment and execution roles register as product-scoped agent operations and propagate a typed role cancellation through workflow and orchestration. User sources use the existing failed/user-cancel terminal; internal cancellation uses completed/system-cancel; the task stays unchecked and cleanup is unchanged. Terminals name the role, source, and shortened operation ID without blocker/model-failure wording. Scrubbed correlation persists in `WorkRunSummary`, is normalized at read time, and appears in diagnostics after the live child exits. Focused tests, type-check, the full 326-file suite (5,311 passed, 8 todo), docs-sync, security, architecture, code, test, and simplification reviews pass.)**

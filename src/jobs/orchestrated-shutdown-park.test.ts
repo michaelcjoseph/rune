@@ -44,7 +44,7 @@ function runningDescriptor(overrides: Partial<MutationDescriptor> = {}): Mutatio
 }
 
 function handleFor(descriptor: MutationDescriptor): RunHandle & { cancel: ReturnType<typeof vi.fn<(reason?: CancelReason) => void>> } {
-  return { descriptor, cancel: vi.fn<(reason?: CancelReason) => void>() };
+  return { descriptor, cancel: vi.fn<(reason?: CancelReason) => void>(), settled: Promise.resolve() };
 }
 
 function resumableCursor(runId: string): OrchestrationRunCursor {
@@ -75,14 +75,14 @@ function makeDeps(overrides: Partial<ShutdownParkDeps> = {}): ShutdownParkDeps &
 } {
   return {
     listActiveRuns: () => [],
-    readRunCursor: vi.fn(async () => null),
+    preflightRecovery: vi.fn(async () => ({ kind: 'not-resumable' as const, reason: 'missing cursor' })),
     runGit: dirtyGitStub(),
     worktreeExists: vi.fn(() => true),
     writeTerminal: vi.fn(),
     resolveBaseBranch: vi.fn(() => 'main'),
     resolveWorktreePath: vi.fn(() => WORKTREE),
     ...overrides,
-  } as ShutdownParkDeps & { writeTerminal: ReturnType<typeof vi.fn>; runGit: ReturnType<typeof vi.fn> };
+  } as unknown as ShutdownParkDeps & { writeTerminal: ReturnType<typeof vi.fn>; runGit: ReturnType<typeof vi.fn> };
 }
 
 describe('parkInFlightOrchestratedRuns', () => {
@@ -128,7 +128,11 @@ describe('parkInFlightOrchestratedRuns', () => {
     const handle = handleFor(descriptor);
     const deps = makeDeps({
       listActiveRuns: () => [handle],
-      readRunCursor: vi.fn(async () => resumableCursor(descriptor.id)),
+      preflightRecovery: vi.fn(async () => ({
+        kind: 'recoverable' as const,
+        cursor: resumableCursor(descriptor.id),
+        reconstruction: { completedTaskIds: [], nextTask: null, drift: false },
+      })),
     });
 
     const result = await parkInFlightOrchestratedRuns(deps);
@@ -207,9 +211,9 @@ describe('parkInFlightOrchestratedRuns', () => {
     const good = handleFor(runningDescriptor({ id: 'mut-good' } as Partial<MutationDescriptor>));
     const deps = makeDeps({
       listActiveRuns: () => [bad, good],
-      readRunCursor: vi.fn(async (runId: string) => {
-        if (runId === 'mut-bad') throw new Error('cursor read exploded');
-        return null;
+      preflightRecovery: vi.fn(async (mutation) => {
+        if (mutation.id === 'mut-bad') throw new Error('cursor read exploded');
+        return { kind: 'not-resumable' as const, reason: 'missing cursor' };
       }),
     });
 

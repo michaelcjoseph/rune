@@ -117,6 +117,8 @@ import {
   cancelMutation,
   createMutation,
   registerApplier,
+  preserveMutationForRecoveryHandoff,
+  releaseMutationRecoveryHandoff,
   setMutationBus,
   setMutationShutdownInProgress,
   type MutationDescriptor,
@@ -415,6 +417,8 @@ describe('orchestratedWorkApplier', () => {
       activeRuns.clear();
       __setOrchestratedRuntimeForTest({
         refreshRegistry: refreshRegistrySpy as () => void,
+        inspectWorktreeStatus: async () => '',
+        invalidateRunCursor: () => {},
       });
     });
 
@@ -465,6 +469,19 @@ describe('orchestratedWorkApplier', () => {
         expect(descriptor.status).toBe('running');
       } finally {
         setMutationShutdownInProgress(false);
+      }
+    });
+
+    it('a superseded recovery invocation cannot remove the handed-off worktree while it unwinds', async () => {
+      inject({ kind: 'blocked', reason: 'superseded', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const descriptor = makeDescriptor();
+      preserveMutationForRecoveryHandoff(descriptor.id);
+      try {
+        await drain(orchestratedWorkApplier.apply(descriptor, ctx));
+        expect(destroyed).toBe(false);
+        expect(mockAppendMutationLine).not.toHaveBeenCalled();
+      } finally {
+        releaseMutationRecoveryHandoff(descriptor.id);
       }
     });
 
@@ -685,6 +702,145 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('dirty terminal with a verified resumable cursor WIP-commits, parks, and preserves the worktree', async () => {
+      inject({ kind: 'blocked', reason: 'cancelled', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const parked = vi.fn();
+      const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'rev-parse') return { stdout: 'deadbeefcafebabe\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => ' M src/index.ts\n',
+        preflightRecovery: async () => ({
+          kind: 'recoverable',
+          cursor: {
+            runId: 'mut-1', product: 'rune', project: 'demo', branch: 'rune-work/demo',
+            baseBranch: 'main', worktreePath: wtDir ?? '', resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: 'task-one', nextTaskId: 'task-one' },
+          },
+          reconstruction: { completedTaskIds: [], nextTask: null, drift: false },
+        }),
+        runGit: git,
+        writeRecoveredTerminal: parked,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(git.mock.calls.map(([args]) => (args as string[])[0])).toEqual(
+        expect.arrayContaining(['add', 'commit', 'rev-parse']),
+      );
+      expect(events.at(-1)).toEqual(expect.objectContaining({
+        kind: 'completed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true, preserveBranch: true }),
+      }));
+      expect(parked).not.toHaveBeenCalled();
+      expect(destroyed).toBe(false);
+    });
+
+    it('dirty terminal parks and preserves when recovery eligibility is unavailable', async () => {
+      inject({ kind: 'blocked', reason: 'cancelled', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const parked = vi.fn();
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => ' M src/index.ts\n',
+        preflightRecovery: async () => ({
+          kind: 'not-resumable',
+          reason: 'Git worktree registration could not be verified',
+        }),
+        writeRecoveredTerminal: parked,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({
+        kind: 'completed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true, preserveBranch: true }),
+      }));
+      expect(parked).not.toHaveBeenCalled();
+      expect(destroyed).toBe(false);
+    });
+
+    it('terminal cleanup fails closed when status inspection fails', async () => {
+      inject({ kind: 'blocked', reason: 'cancelled', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const parked = vi.fn();
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => { throw new Error('status failed'); },
+        writeRecoveredTerminal: parked,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({
+        kind: 'completed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+      }));
+      expect(parked).not.toHaveBeenCalled();
+      expect(destroyed).toBe(false);
+    });
+
+    it('terminal cleanup fails closed when a resumable dirty worktree cannot be WIP-committed', async () => {
+      inject({ kind: 'blocked', reason: 'cancelled', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const parked = vi.fn();
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => ' M src/index.ts\n',
+        preflightRecovery: async () => ({
+          kind: 'recoverable',
+          cursor: {
+            runId: 'mut-1', product: 'rune', project: 'demo', branch: 'rune-work/demo',
+            baseBranch: 'main', worktreePath: '/tmp/worktree', resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: 'task-one', nextTaskId: 'task-one' },
+          },
+          reconstruction: { completedTaskIds: [], nextTask: null, drift: false },
+        }),
+        runGit: async (args) => {
+          if (args[0] === 'commit') throw new Error('index.lock exists');
+          return { stdout: '', stderr: '' };
+        },
+        writeRecoveredTerminal: parked,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({
+        kind: 'completed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+      }));
+      expect(parked).not.toHaveBeenCalled();
+      expect(destroyed).toBe(false);
+    });
+
+    it('clean terminal invalidates its cursor before removing the worktree', async () => {
+      inject({ kind: 'blocked', reason: 'done', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const order: string[] = [];
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => '',
+        invalidateRunCursor: () => { order.push('invalidate'); },
+        destroyWorktree: async () => { order.push('remove'); destroyed = true; },
+      });
+
+      await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(order).toEqual(['invalidate', 'remove']);
+    });
+
+    it('clean terminal parks and preserves when cursor invalidation fails', async () => {
+      inject({ kind: 'blocked', reason: 'done', task: { id: 'task-one', text: 'task one', section: 'Phase 1' } });
+      const parked = vi.fn();
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => '',
+        invalidateRunCursor: () => { throw new Error('cursor write failed'); },
+        writeRecoveredTerminal: parked,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({
+        kind: 'completed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+      }));
+      expect(parked).not.toHaveBeenCalled();
+      expect(destroyed).toBe(false);
+    });
+
     it.each([
       {
         label: 'finalized',
@@ -815,6 +971,7 @@ describe('orchestratedWorkApplier', () => {
         await effects.flushTranscript();
         effects.writeSummary(terminalEvent);
         effects.appendIndexRow(terminalEvent);
+        await effects.removeWorktree();
         effects.writeSupervisionTerminal('completed', terminalEvent);
         summaryWritten();
         await allowFinalizerReturn;
@@ -2472,6 +2629,45 @@ describe('orchestratedWorkApplier', () => {
       expect(created).toBe(true);
     });
 
+    it('finalizer-owned teardown cannot remove a worktree claimed for recovery handoff', async () => {
+      const runId = 'mut-orch-finalizer-handoff';
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)',
+      });
+      mockRunFinalizer.mockImplementationOnce(async (_input, effects) => {
+        const terminalEvent = await effects.classify();
+        await expect(effects.removeWorktree()).rejects.toThrow(/preservation/);
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: false,
+          merged: true,
+          branchDeleted: true,
+          phases: ['classified', 'worktree-resolved', 'finalized'],
+        };
+      });
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-handoff-123' };
+        },
+        destroyWorktree: async () => { destroyed = true; },
+        runGit,
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
+      });
+
+      preserveMutationForRecoveryHandoff(runId);
+      try {
+        await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        expect(destroyed).toBe(false);
+      } finally {
+        releaseMutationRecoveryHandoff(runId);
+      }
+    });
+
     it('wires onLanded to one merge-success progress event naming the project and base branch', async () => {
       const runId = 'mut-orch-merge-success-notify';
       const { runGit } = makeWorkProductGitStub({
@@ -2616,7 +2812,6 @@ describe('orchestratedWorkApplier', () => {
         commitShas: ['abc1111'],
         diffstat: ' docs/projects/index.md | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n',
       });
-
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {
           created = true;
@@ -2995,6 +3190,7 @@ describe('orchestratedWorkApplier', () => {
         commitShas: ['abc1111'],
         diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
       });
+      const cleanupOrder: string[] = [];
       mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
       mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
         expect(input).toMatchObject({ mode: 'gated-merge', runId, baseBranch: 'main' });
@@ -3033,8 +3229,10 @@ describe('orchestratedWorkApplier', () => {
           return { ...sandbox, baseSha: 'base-held-123' };
         },
         destroyWorktree: async () => {
+          cleanupOrder.push('remove');
           destroyed = true;
         },
+        invalidateRunCursor: () => { cleanupOrder.push('invalidate'); },
         runGit,
         workRunsDir: artifactsDir,
         workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
@@ -3072,6 +3270,7 @@ describe('orchestratedWorkApplier', () => {
           );
         });
         expect(baseMutations).toEqual([]);
+        expect(cleanupOrder).toEqual(['invalidate', 'remove']);
         expect(destroyed).toBe(true);
       } finally {
         rmSync(artifactsDir, { recursive: true, force: true });

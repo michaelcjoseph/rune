@@ -113,7 +113,7 @@ vi.mock('./jobs/orchestrated-work-runner.js', () => ({
   orchestratedWorkApplier: { kind: 'orchestrated-work' },
   recoverOrchestratedWorkRuns,
   parkInFlightOrchestratedRuns,
-  readTasksMdForRecoveredCursor: vi.fn(async () => ''),
+  preflightOrchestratedRecovery: vi.fn(async () => ({ kind: 'not-resumable', reason: 'test' })),
   redispatchRecoveredOrchestratedMutation: vi.fn(() => ({ ok: true })),
 }));
 
@@ -234,9 +234,7 @@ describe('index startup orchestrated-work recovery', () => {
     expect(recoverOrchestratedWorkRuns).toHaveBeenCalledWith(
       expect.objectContaining({
         readRunningOrchestratedMutations: expect.any(Function),
-        readRunCursor: expect.any(Function),
-        readTaskRunRecords: expect.any(Function),
-        readTasksMd: expect.any(Function),
+        preflightRecovery: expect.any(Function),
         redispatchOrchestratedMutation: expect.any(Function),
         markOrphaned: expect.any(Function),
         writeTerminal: expect.any(Function),

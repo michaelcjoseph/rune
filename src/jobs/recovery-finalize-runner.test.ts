@@ -88,6 +88,7 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
     appendIndex: (filePath, row) => { captured.indexRows.push({ filePath, row }); },
     upsertSupervision: (run) => { captured.upserts.push(run); },
     removeWorktree: async (run) => { captured.removed.push(run); },
+    invalidateCursor: () => {},
     // Default: no durable phase recorded → hold-mode re-drive (no merge).
     readLastPhase: () => null,
     recordPhase: () => {},
@@ -99,6 +100,30 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
 }
 
 describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
+  it('invalidates an orchestrated cursor before successful finalizer worktree removal', async () => {
+    const order: string[] = [];
+    const { io } = makeIO({
+      invalidateCursor: () => { order.push('invalidate'); },
+      removeWorktree: async () => { order.push('remove'); },
+    });
+
+    await __finalizeStaleRunForTest(makeRun({ kind: 'orchestrated-work' }), io);
+
+    expect(order).toEqual(['invalidate', 'remove']);
+  });
+
+  it('does not remove an orchestrated worktree when cursor invalidation fails', async () => {
+    const removeWorktree = vi.fn(async () => {});
+    const { io } = makeIO({
+      invalidateCursor: () => { throw new Error('cursor store unavailable'); },
+      removeWorktree,
+    });
+
+    await expect(__finalizeStaleRunForTest(makeRun({ kind: 'orchestrated-work' }), io))
+      .resolves.toBe('completed');
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
   it('a clean, complete branch → branch-complete, supervision completed, worktree removed', async () => {
     const run = makeRun();
     const { io, captured } = makeIO();

@@ -33,7 +33,7 @@ import type { WebviewSender } from '../transport/webview-sender.js';
 import type { MessageSender, SendOpts } from '../transport/sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
 import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
-import type { MutationKind } from '../transport/mutations.js';
+import type { MutationDescriptor, MutationKind } from '../transport/mutations.js';
 import { resolveWorkDispatch, readDispatchModeInput } from '../jobs/work-dispatch.js';
 import type { DispatchModeView } from '../intent/cockpit.js';
 import { cancelOp, isCancelled, registerOp, unregisterOp } from '../transport/in-flight.js';
@@ -43,7 +43,7 @@ import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
 import { readRecentIndex, readWorkRunSummary } from '../jobs/work-run-store.js';
 import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
-import { requestOrchestratedRunRecovery } from '../jobs/orchestrated-work-runner.js';
+import { preflightOrchestratedRecovery, requestOrchestratedRunRecovery } from '../jobs/orchestrated-work-runner.js';
 import { VALID_SLUG, worktreePathFor } from '../intent/sandbox.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
@@ -235,13 +235,57 @@ async function handleAuthBootstrap(req: IncomingMessage, res: ServerResponse): P
   res.end(JSON.stringify({ ok: true }));
 }
 
-function handleApiState(res: ServerResponse, isReady: () => boolean): void {
+const RECOVERY_ELIGIBILITY_CACHE_TTL_MS = 2_000;
+const recoveryEligibilityCache = new Map<string, {
+  expiresAt: number;
+  projection: Promise<boolean>;
+}>();
+
+function projectedRecoveryEligibility(
+  descriptor: MutationDescriptor<{ projectSlug: string; product?: string }>,
+): Promise<boolean> {
+  const now = Date.now();
+  const cached = recoveryEligibilityCache.get(descriptor.id);
+  if (cached && cached.expiresAt > now) return cached.projection;
+
+  const projection = preflightOrchestratedRecovery(descriptor)
+    .then((eligibility) => eligibility.kind === 'recoverable')
+    .catch(() => false);
+  recoveryEligibilityCache.set(descriptor.id, {
+    expiresAt: now + RECOVERY_ELIGIBILITY_CACHE_TTL_MS,
+    projection,
+  });
+  return projection;
+}
+
+export function clearRecoveryEligibilityCacheForTest(): void {
+  recoveryEligibilityCache.clear();
+}
+
+async function projectedActiveMutations(): Promise<MutationDescriptor[]> {
+  const activeIds = new Set(activeRuns.keys());
+  for (const id of recoveryEligibilityCache.keys()) {
+    if (!activeIds.has(id)) recoveryEligibilityCache.delete(id);
+  }
+
+  return Promise.all([...activeRuns.values()].map(async ({ descriptor }) => {
+    if (descriptor.kind !== 'orchestrated-work' || descriptor.status !== 'running') return { ...descriptor };
+    const recoverable = await projectedRecoveryEligibility(
+      descriptor as MutationDescriptor<{ projectSlug: string; product?: string }>,
+    );
+    return { ...descriptor, recoverable };
+  }));
+}
+
+async function handleApiState(res: ServerResponse, isReady: () => boolean): Promise<void> {
   if (!isReady()) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ready: false, reason: 'bot starting' }));
     return;
   }
   const snapshot = getStateSnapshot();
+  snapshot.mutations = snapshot.mutations ?? { active: [], recent: [] };
+  snapshot.mutations.active = await projectedActiveMutations();
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(snapshot));
 }
@@ -1101,7 +1145,7 @@ function handleApiHome(res: ServerResponse): void {
   res.end(JSON.stringify(view));
 }
 
-function handleApiProductDeepView(res: ServerResponse, product: string): void {
+async function handleApiProductDeepView(res: ServerResponse, product: string): Promise<void> {
   if (!VALID_SLUG.test(product)) {
     sendErrorEnvelope(res, 400, 'invalid-slug', `invalid product slug '${product}'`);
     return;
@@ -1142,6 +1186,7 @@ function handleApiProductDeepView(res: ServerResponse, product: string): void {
   } catch (err) {
     log.warn('handleApiProductDeepView: dispatch-mode resolution failed', { product, error: (err as Error).message });
   }
+  const projectedMutations = await projectedActiveMutations();
   const view = buildProductDeepView({
     product,
     readRegistry: () => registry,
@@ -1150,7 +1195,7 @@ function handleApiProductDeepView(res: ServerResponse, product: string): void {
     readBacklogs: () => readNewCockpitBacklogs(registry),
     readFixAttempts: () => readLatestFixAttempts(config.FIX_ATTEMPTS_FILE),
     readTaskRunRecords: (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
-    readActiveMutations: () => [...activeRuns.values()].map((handle) => handle.descriptor),
+    readActiveMutations: () => projectedMutations,
     dispatchModes,
     worktreePathFor: (productName, projectSlug) => worktreePathFor(productName, projectSlug, config.WORKTREE_ROOT),
     planningActive,
@@ -2084,14 +2129,14 @@ async function handleApiWorkRunRelease(req: IncomingMessage, res: ServerResponse
 
 /**
  * POST /api/work-runs/:id/recover. Operator lever for a live-but-idle
- * orchestrated run: cancel the active in-process slot, detach it, and re-enter
- * the durable orchestrated recovery path from its cursor without restarting the
- * daemon. Only active `orchestrated-work` runs with a resumable cursor are
- * accepted.
+ * orchestrated run: preserve the active invocation's worktree, cancel and await
+ * its full teardown, then re-enter the durable recovery path without restarting
+ * the daemon. Only runs accepted by the shared recovery preflight are eligible.
  */
 async function handleApiWorkRunRecover(res: ServerResponse, id: string): Promise<void> {
   if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
   const outcome = await requestOrchestratedRunRecovery(id);
+  recoveryEligibilityCache.delete(id);
   switch (outcome.kind) {
     case 'recovered':
       res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -2102,12 +2147,12 @@ async function handleApiWorkRunRecover(res: ServerResponse, id: string): Promise
     case 'not-orchestrated':
     case 'not-resumable':
       res.writeHead(409, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: outcome.reason }));
+      res.end(JSON.stringify({ error: scrubAbsolutePaths(outcome.reason) }));
       logWebviewAction('work-run-recover', 'failure', `reason=${outcome.kind}`);
       return;
     case 'error':
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: outcome.reason }));
+      res.end(JSON.stringify({ error: scrubAbsolutePaths(outcome.reason) }));
       logWebviewAction('work-run-recover', 'failure', 'reason=recover-error');
       return;
   }
@@ -3037,7 +3082,7 @@ export function mountWebviewRoutes(
       }
 
       if (req.method === 'GET' && pathname === '/api/state') {
-        handleApiState(res, deps.isReady);
+        await handleApiState(res, deps.isReady);
         return true;
       }
 
@@ -3063,7 +3108,7 @@ export function mountWebviewRoutes(
 
       const productDeepViewMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
       if (req.method === 'GET' && productDeepViewMatch) {
-        handleApiProductDeepView(res, decodeURIComponent(productDeepViewMatch[1]!));
+        await handleApiProductDeepView(res, decodeURIComponent(productDeepViewMatch[1]!));
         return true;
       }
 

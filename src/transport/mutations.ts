@@ -298,6 +298,8 @@ export interface MutationDescriptor<P = Record<string, unknown>> {
    */
   outcome?: WorkOutcome;
   workProduct?: WorkProductFacts;
+  /** Ephemeral server projection; never persisted to mutations.jsonl. */
+  recoverable?: boolean;
 }
 
 export interface MutationEvent {
@@ -356,6 +358,8 @@ export interface ApplyContext {
 export interface RunHandle {
   descriptor: MutationDescriptor;
   cancel: (reason?: CancelReason) => void;
+  /** Resolves after the applier has fully unwound, including its finally block. */
+  settled: Promise<void>;
 }
 
 export interface MutationApplier<P = Record<string, unknown>> {
@@ -390,6 +394,38 @@ export const activeRuns = new Map<string, RunHandle>();
 // by the shutdown parker (parkInFlightOrchestratedRuns) and next-boot recovery.
 // Setter (not a one-way latch) so tests can reset it.
 let mutationShutdownInProgress = false;
+
+// Operator recovery hands one deterministic worktree from an old invocation
+// to a replacement invocation. While the old invocation unwinds, both the
+// mutation pipeline and orchestrated applier suppress terminal persistence and
+// destructive cleanup for this id.
+type MutationLifecycleClaim = 'recovery' | 'teardown';
+const mutationLifecycleClaims = new Map<string, MutationLifecycleClaim>();
+
+export function preserveMutationForRecoveryHandoff(id: string): boolean {
+  if (mutationLifecycleClaims.has(id)) return false;
+  mutationLifecycleClaims.set(id, 'recovery');
+  return true;
+}
+
+export function releaseMutationRecoveryHandoff(id: string): void {
+  if (mutationLifecycleClaims.get(id) === 'recovery') mutationLifecycleClaims.delete(id);
+}
+
+export function isMutationRecoveryHandoff(id: string): boolean {
+  return mutationLifecycleClaims.get(id) === 'recovery';
+}
+
+/** Atomically exclude operator recovery while a terminal remover owns the worktree. */
+export function claimMutationTerminalTeardown(id: string): boolean {
+  if (mutationLifecycleClaims.has(id)) return false;
+  mutationLifecycleClaims.set(id, 'teardown');
+  return true;
+}
+
+export function releaseMutationTerminalTeardown(id: string): void {
+  if (mutationLifecycleClaims.get(id) === 'teardown') mutationLifecycleClaims.delete(id);
+}
 
 export function setMutationShutdownInProgress(value: boolean): void {
   mutationShutdownInProgress = value;
@@ -552,8 +588,11 @@ async function startApply(
   let cancelReason: CancelReason | null = null;
   const cancelListeners = new Set<(reason: CancelReason) => void>();
 
+  let resolveSettled!: () => void;
+  const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
   const handle: RunHandle = {
     descriptor,
+    settled,
     cancel: (reason: CancelReason = 'user') => {
       cancelled = true;
       cancelReason = reason;
@@ -613,6 +652,9 @@ async function startApply(
   // designed for stale rows).
   const shutdownSuppressed = (): boolean =>
     mutationShutdownInProgress && descriptor.kind === 'orchestrated-work';
+  const recoverySuppressed = (): boolean =>
+    descriptor.kind === 'orchestrated-work' && isMutationRecoveryHandoff(descriptor.id);
+  const lifecycleSuppressed = (): boolean => shutdownSuppressed() || recoverySuppressed();
 
   // Use the real bus if available, else a no-op so appliers always receive a valid object
   const ctx: ApplyContext = {
@@ -701,7 +743,7 @@ async function startApply(
       }
 
       if (isTerminalEvent) {
-        if (shutdownSuppressed()) {
+        if (lifecycleSuppressed()) {
           return;
         }
         descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
@@ -752,7 +794,7 @@ async function startApply(
       }
     }
     // Applier exhausted without terminal event — treat as completed
-    if (shutdownSuppressed()) {
+    if (lifecycleSuppressed()) {
       return;
     }
     descriptor.status = 'completed';
@@ -764,7 +806,7 @@ async function startApply(
     }
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
-    if (shutdownSuppressed()) {
+    if (lifecycleSuppressed()) {
       return;
     }
     descriptor.status = 'failed';
@@ -789,5 +831,6 @@ async function startApply(
     if (!shutdownSuppressed() && activeRuns.get(descriptor.id) === handle) {
       activeRuns.delete(descriptor.id);
     }
+    resolveSettled();
   }
 }

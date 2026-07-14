@@ -20,6 +20,7 @@ type OrchestratedRunStoreExports = {
   readOrchestratedTaskRunRecords?: (baseDir: string, runId: string) => TaskRunRecord[] | Promise<TaskRunRecord[]>;
   writeOrchestratedRunCursor?: (baseDir: string, runId: string, cursor: OrchestrationRunCursor) => void | Promise<void>;
   readOrchestratedRunCursor?: (baseDir: string, runId: string) => OrchestrationRunCursor | null | Promise<OrchestrationRunCursor | null>;
+  invalidateOrchestratedRunCursor?: (baseDir: string, runId: string, reason: string) => void | Promise<void>;
   claimOrchestratedNotificationPublication?: (
     baseDir: string,
     runId: string,
@@ -227,6 +228,21 @@ describe('orchestrated run store', () => {
   it('returns null for a missing cursor file so recovery can orphan instead of crashing', async () => {
     expect(typeof store.readOrchestratedRunCursor).toBe('function');
 
+    await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toBeNull();
+  });
+
+  it('atomically invalidates a resumable cursor before terminal worktree removal', async () => {
+    expect(typeof store.invalidateOrchestratedRunCursor).toBe('function');
+    await store.writeOrchestratedRunCursor!(tmpDir, 'mut-orch-1', cursor());
+
+    await store.invalidateOrchestratedRunCursor!(tmpDir, 'mut-orch-1', 'terminal worktree cleanup');
+
+    const runDir = join(tmpDir, 'mut-orch-1');
+    const persisted = JSON.parse(readFileSync(join(runDir, 'cursor.json'), 'utf8')) as Record<string, unknown>;
+    expect(persisted).toMatchObject({ runId: 'mut-orch-1', reason: 'terminal worktree cleanup' });
+    expect(persisted).toHaveProperty('invalidatedAt');
+    expect(persisted).not.toHaveProperty('resumeMarker');
+    expect(readdirSync(runDir).filter((name) => name.includes('cursor.json') && name.endsWith('.tmp'))).toEqual([]);
     await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toBeNull();
   });
 

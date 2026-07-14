@@ -42,6 +42,8 @@ const {
   cancelMutation,
   activeRuns,
   writeRecoveredTerminalMutation,
+  preserveMutationForRecoveryHandoff,
+  releaseMutationRecoveryHandoff,
   setMutationShutdownInProgress,
   setMutationBus,
 } = await import('./mutations.ts' as string);
@@ -1155,5 +1157,32 @@ describe('mutations', () => {
       // Non-orchestrated kinds also keep normal activeRuns cleanup.
       expect(activeRuns.size).toBe(0);
     });
+  });
+
+  it('does not persist completed when a recovery-superseded applier exhausts without a terminal event', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    async function* exhaustedGen(): AsyncIterable<any> {
+      yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'starting' } };
+      await gate;
+    }
+    registerApplier(makeApplier({
+      kind: 'orchestrated-work',
+      autoApprove: true,
+      validateResult: { ok: true },
+      applyGen: exhaustedGen(),
+    }));
+
+    const result = await createMutation('orchestrated-work', { projectSlug: 'demo' }, 'webview');
+    const descriptor = (result as any).descriptor;
+    expect(preserveMutationForRecoveryHandoff(descriptor.id)).toBe(true);
+    const handle = activeRuns.get(descriptor.id)!;
+    finish();
+    await handle.settled;
+
+    expect(descriptor.status).toBe('running');
+    expect((mockAppendMutationLine.mock.calls as unknown[][])
+      .map((call) => (call[0] as { status: string }).status)).not.toContain('completed');
+    releaseMutationRecoveryHandoff(descriptor.id);
   });
 });

@@ -32,7 +32,7 @@
  * regression in team-task-deps.test.ts pins the production binding.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
@@ -75,6 +75,11 @@ import {
   redispatchMutation,
   writeRecoveredTerminalMutation,
   isMutationShutdownInProgress,
+  isMutationRecoveryHandoff,
+  preserveMutationForRecoveryHandoff,
+  releaseMutationRecoveryHandoff,
+  claimMutationTerminalTeardown,
+  releaseMutationTerminalTeardown,
 } from '../transport/mutations.js';
 import { runTargetFromDescriptor, type WorkRunTarget } from '../intent/run-target.js';
 import { createLogger } from '../utils/logger.js';
@@ -129,6 +134,18 @@ import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
 import { findWorkProjectDir, resolveLiveWorkProject } from './work-project.js';
+import {
+  invalidateOrchestratedRunCursor,
+  readOrchestratedRunCursor,
+  writeOrchestratedRunCursor,
+} from './orchestrated-run-store.js';
+import { invalidateCursorThenRemoveWorktree } from './terminal-worktree-cleanup.js';
+
+export {
+  invalidateOrchestratedRunCursor,
+  readOrchestratedRunCursor,
+  writeOrchestratedRunCursor,
+} from './orchestrated-run-store.js';
 
 const log = createLogger('orchestrated-work-runner');
 
@@ -153,9 +170,7 @@ export interface OrchestratedWorkRecoveryDeps {
   readRunningOrchestratedMutations: () => Promise<MutationDescriptor<OrchestratedWorkPayload>[]>;
   acquireRecoveryLease?: (runId: string) => Promise<boolean>;
   releaseRecoveryLease?: (runId: string) => Promise<void>;
-  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
-  readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
-  readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  preflightRecovery: (mutation: MutationDescriptor<OrchestratedWorkPayload>) => Promise<OrchestratedRecoveryPreflightResult>;
   redispatchOrchestratedMutation: (
     mutation: MutationDescriptor<OrchestratedWorkPayload>,
     options: OrchestratedRecoveryRedispatch,
@@ -178,15 +193,28 @@ export type OrchestratedRunRecoveryRequestResult =
   | { kind: 'error'; reason: string };
 
 export interface OrchestratedRunRecoveryRequestDeps {
-  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
-  readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
-  readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  preflightRecovery: (mutation: MutationDescriptor<OrchestratedWorkPayload>) => Promise<OrchestratedRecoveryPreflightResult>;
   redispatchOrchestratedMutation: (
     mutation: MutationDescriptor<OrchestratedWorkPayload>,
     options: OrchestratedRecoveryRedispatch,
   ) => { ok: true } | { ok: false; reason: string };
-  activeRun: (runId: string) => { descriptor: MutationDescriptor; cancel: (reason?: 'user' | 'system') => void } | null;
-  detachActiveRun: (runId: string) => void;
+  activeRun: (runId: string) => RunHandle | null;
+  preserveForHandoff: (runId: string) => boolean;
+  releaseHandoff: (runId: string) => void;
+}
+
+export type OrchestratedRecoveryPreflightResult =
+  | { kind: 'recoverable'; cursor: OrchestrationRunCursor; reconstruction: RunReconstruction }
+  | { kind: 'not-resumable'; reason: string };
+
+export interface OrchestratedRecoveryPreflightDeps {
+  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
+  readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
+  readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  worktreeExists: (path: string) => boolean;
+  runGit: GitRunner;
+  resolveProduct: (product: string) => { repoPath: string; baseBranch: string };
+  resolveWorktreePath: (product: string, project: string) => string;
 }
 
 const recoveryRedispatchOptions = new WeakMap<
@@ -219,16 +247,116 @@ export async function readTasksMdForRecoveredCursor(cursor: OrchestrationRunCurs
   throw new Error(`tasks.md not found for recovered orchestrated project: ${cursor.project}`);
 }
 
-export function defaultOrchestratedRunRecoveryRequestDeps(): OrchestratedRunRecoveryRequestDeps {
+function defaultRecoveryPreflightDeps(): OrchestratedRecoveryPreflightDeps {
   return {
     readRunCursor: async (runId) => readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId),
     readTaskRunRecords: async (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
     readTasksMd: readTasksMdForRecoveredCursor,
+    worktreeExists: existsSync,
+    runGit: defaultRunGit,
+    resolveProduct: (product) => {
+      const resolved = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+      return { repoPath: resolved.repoPath, baseBranch: resolved.baseBranch };
+    },
+    resolveWorktreePath: (product, project) => worktreePathFor(product, project, config.WORKTREE_ROOT),
+  };
+}
+
+function registeredWorktreeBranch(porcelain: string, exactPath: string): string | null {
+  for (const record of porcelain.split(/\n\s*\n/)) {
+    const lines = record.split('\n');
+    if (lines[0] !== `worktree ${exactPath}`) continue;
+    const branch = lines.find((line) => line.startsWith('branch refs/heads/'));
+    return branch ? branch.slice('branch refs/heads/'.length) : null;
+  }
+  return null;
+}
+
+/**
+ * One fail-closed eligibility decision shared by boot recovery, operator
+ * recovery, shutdown preservation, and cockpit projection.
+ */
+export async function preflightOrchestratedRecovery(
+  mutation: MutationDescriptor<OrchestratedWorkPayload>,
+  deps: OrchestratedRecoveryPreflightDeps = defaultRecoveryPreflightDeps(),
+): Promise<OrchestratedRecoveryPreflightResult> {
+  if (mutation.kind !== 'orchestrated-work' || mutation.status !== 'running') {
+    return { kind: 'not-resumable', reason: 'run is not an active orchestrated-work mutation' };
+  }
+  const product = mutation.payload.product ?? 'rune';
+  const project = mutation.payload.projectSlug;
+  let cursor: OrchestrationRunCursor | null;
+  try {
+    cursor = await deps.readRunCursor(mutation.id);
+  } catch {
+    return { kind: 'not-resumable', reason: 'resumable cursor could not be read' };
+  }
+  if (!cursor || cursor.resumeMarker !== 'resumable') {
+    return { kind: 'not-resumable', reason: 'missing resumable orchestrated cursor' };
+  }
+  if (cursor.runId !== mutation.id || cursor.product !== product || cursor.project !== project) {
+    return { kind: 'not-resumable', reason: 'run and resumable cursor identity do not agree' };
+  }
+
+  let expectedPath: string;
+  let repoPath: string;
+  let expectedBaseBranch: string;
+  try {
+    expectedPath = deps.resolveWorktreePath(product, project);
+    const resolved = deps.resolveProduct(product);
+    repoPath = resolved.repoPath;
+    expectedBaseBranch = resolved.baseBranch;
+  } catch {
+    return { kind: 'not-resumable', reason: 'product recovery configuration is unavailable' };
+  }
+  const expectedBranch = workBranchName(project);
+  if (cursor.worktreePath !== expectedPath || cursor.branch !== expectedBranch || cursor.baseBranch !== expectedBaseBranch) {
+    return { kind: 'not-resumable', reason: 'resumable cursor does not match the expected worktree and branch' };
+  }
+  try {
+    if (!deps.worktreeExists(expectedPath) || !statSync(expectedPath).isDirectory()) {
+      return { kind: 'not-resumable', reason: 'worktree no longer exists; this run cannot be recovered' };
+    }
+  } catch {
+    return { kind: 'not-resumable', reason: 'worktree no longer exists; this run cannot be recovered' };
+  }
+
+  let registeredBranch: string | null;
+  try {
+    const { stdout } = await deps.runGit(['worktree', 'list', '--porcelain'], { cwd: repoPath });
+    registeredBranch = registeredWorktreeBranch(stdout, expectedPath);
+  } catch {
+    return { kind: 'not-resumable', reason: 'Git worktree registration could not be verified' };
+  }
+  if (registeredBranch === null) {
+    return { kind: 'not-resumable', reason: 'worktree is not registered on the expected branch' };
+  }
+  if (registeredBranch !== expectedBranch) {
+    return { kind: 'not-resumable', reason: 'worktree is registered on a different branch' };
+  }
+
+  try {
+    const [records, tasksMd] = await Promise.all([
+      deps.readTaskRunRecords(mutation.id),
+      deps.readTasksMd(cursor),
+    ]);
+    const reconstruction = reconstructRun({ tasksMd, records });
+    if (reconstruction.drift) {
+      return { kind: 'not-resumable', reason: 'completed task records disagree with tasks.md' };
+    }
+    return { kind: 'recoverable', cursor, reconstruction };
+  } catch {
+    return { kind: 'not-resumable', reason: 'project tasks and durable task records could not be reconstructed' };
+  }
+}
+
+export function defaultOrchestratedRunRecoveryRequestDeps(): OrchestratedRunRecoveryRequestDeps {
+  return {
+    preflightRecovery: preflightOrchestratedRecovery,
     redispatchOrchestratedMutation: redispatchRecoveredOrchestratedMutation,
     activeRun: (runId) => activeRuns.get(runId) ?? null,
-    detachActiveRun: (runId) => {
-      activeRuns.delete(runId);
-    },
+    preserveForHandoff: preserveMutationForRecoveryHandoff,
+    releaseHandoff: releaseMutationRecoveryHandoff,
   };
 }
 
@@ -248,26 +376,36 @@ export async function requestOrchestratedRunRecovery(
   }
 
   const mutation = handle.descriptor as MutationDescriptor<OrchestratedWorkPayload>;
-  const cursor = await deps.readRunCursor(runId);
-  if (!cursor || cursor.resumeMarker !== 'resumable') {
-    return { kind: 'not-resumable', reason: 'missing resumable orchestrated cursor' };
-  }
-
+  let handoffMarked = false;
   try {
-    const [records, tasksMd] = await Promise.all([
-      deps.readTaskRunRecords(runId),
-      deps.readTasksMd(cursor),
-    ]);
-    const reconstruction = reconstructRun({ tasksMd, records });
-    if (reconstruction.drift) {
-      return {
-        kind: 'not-resumable',
-        reason: 'completed task records disagree with tasks.md',
-      };
+    const initialPreflight = await deps.preflightRecovery(mutation);
+    if (initialPreflight.kind === 'not-resumable') return initialPreflight;
+    handoffMarked = deps.preserveForHandoff(runId);
+    if (!handoffMarked) {
+      return { kind: 'not-active', reason: 'run recovery is already in progress' };
+    }
+
+    const stillActive = deps.activeRun(runId);
+    if (stillActive !== handle || stillActive.descriptor.status !== 'running') {
+      return { kind: 'not-active', reason: 'run settled before recovery preservation was acquired' };
+    }
+
+    const protectedPreflight = await deps.preflightRecovery(mutation);
+    if (protectedPreflight.kind === 'not-resumable') return protectedPreflight;
+    if (deps.activeRun(runId) !== handle || handle.descriptor.status !== 'running') {
+      return { kind: 'not-active', reason: 'run settled while recovery eligibility was being verified' };
     }
 
     handle.cancel('system');
-    deps.detachActiveRun(runId);
+    await handle.settled;
+
+    // The old invocation may have completed a task and advanced its durable
+    // records between the initial eligibility check and cancellation. The
+    // handoff claim is still armed, so teardown cannot remove the worktree
+    // while this final reconstruction is captured.
+    const settledPreflight = await deps.preflightRecovery(mutation);
+    if (settledPreflight.kind === 'not-resumable') return settledPreflight;
+    const { cursor, reconstruction } = settledPreflight;
     const result = deps.redispatchOrchestratedMutation(mutation, {
       branch: cursor.branch,
       baseBranch: cursor.baseBranch,
@@ -282,6 +420,8 @@ export async function requestOrchestratedRunRecovery(
     return { kind: 'recovered', runId };
   } catch (err) {
     return { kind: 'error', reason: (err as Error).message };
+  } finally {
+    if (handoffMarked) deps.releaseHandoff(runId);
   }
 }
 
@@ -291,7 +431,7 @@ export async function requestOrchestratedRunRecovery(
 
 export interface ShutdownParkDeps {
   listActiveRuns: () => RunHandle[];
-  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
+  preflightRecovery: (mutation: MutationDescriptor<OrchestratedWorkPayload>) => Promise<OrchestratedRecoveryPreflightResult>;
   runGit: GitRunner;
   worktreeExists: (path: string) => boolean;
   writeTerminal: (descriptor: MutationDescriptor, event: MutationEvent) => void;
@@ -308,7 +448,7 @@ export interface ShutdownParkResult {
 export function defaultShutdownParkDeps(): ShutdownParkDeps {
   return {
     listActiveRuns: () => [...activeRuns.values()],
-    readRunCursor: async (runId) => readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId),
+    preflightRecovery: preflightOrchestratedRecovery,
     runGit: defaultRunGit,
     worktreeExists: existsSync,
     writeTerminal: writeRecoveredTerminalMutation,
@@ -330,11 +470,12 @@ export function defaultShutdownParkDeps(): ShutdownParkDeps {
  * (children dead → stable worktrees) and after setMutationShutdownInProgress()
  * armed the applier-side suppression, so nothing races these writes.
  *
- * - A run WITH a resumable cursor is left `running` on disk: boot recovery
- *   re-dispatches it automatically — parking it would degrade a routine deploy
- *   restart from hands-off resume to a human-gated release.
- * - A run WITHOUT a cursor (mid-first-task; recovery would orphan it and the
- *   diff would be discarded) is parked: best-effort WIP commit onto the run
+ * - A run that PASSES the shared recovery preflight is left `running` on disk:
+ *   boot recovery re-dispatches it automatically — parking it would degrade a
+ *   routine deploy restart from hands-off resume to a human-gated release.
+ * - A run that FAILS preflight (mid-first-task or invalid worktree state;
+ *   recovery would orphan it and discard the diff) is parked: best-effort WIP
+ *   commit onto the run
  *   branch, then a completed+parked:true terminal + blocked-on-human
  *   supervision row via writeRecoveredTerminalMutation, so the run survives
  *   the restart visible-and-releasable in the approvals surfaces.
@@ -350,8 +491,8 @@ export async function parkInFlightOrchestratedRuns(
     if (descriptor.kind !== 'orchestrated-work' || descriptor.status !== 'running') continue;
     try {
       handle.cancel('system');
-      const cursor = await deps.readRunCursor(descriptor.id);
-      if (cursor !== null && cursor.resumeMarker === 'resumable') {
+      const preflight = await deps.preflightRecovery(descriptor as MutationDescriptor<OrchestratedWorkPayload>);
+      if (preflight.kind === 'recoverable') {
         result.resumable.push(descriptor.id);
         continue;
       }
@@ -421,12 +562,14 @@ export async function parkInFlightOrchestratedRuns(
 async function commitWorktreeWip(
   runGit: GitRunner,
   cwd: string,
-  args: { message: string; logLabel: string; product: string; projectSlug: string },
+  args: { message: string; logLabel: string; product: string; projectSlug: string; knownDirty?: boolean },
 ): Promise<string | null> {
   const message = args.message.slice(0, 200);
   try {
-    const { stdout } = await runGit(['status', '--porcelain'], { cwd });
-    if (stdout.trim() === '') return null;
+    if (args.knownDirty !== true) {
+      const { stdout } = await runGit(['status', '--porcelain'], { cwd });
+      if (stdout.trim() === '') return null;
+    }
     await runGit(['add', '-A'], { cwd });
     await runGit(['commit', '-m', message], { cwd });
     const { stdout: sha } = await runGit(['rev-parse', 'HEAD'], { cwd });
@@ -441,6 +584,125 @@ async function commitWorktreeWip(
   }
 }
 
+type TerminalWorktreeDisposition =
+  | { kind: 'removed' }
+  | { kind: 'parked'; terminal: MutationEvent }
+  | { kind: 'preserved' };
+
+function parkedTerminal(
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>,
+  sandbox: SandboxSpec,
+  branch: string,
+  baseBranch: string,
+  reason: string,
+): TerminalWorktreeDisposition {
+  return {
+    kind: 'parked',
+    terminal: term(descriptor.id, 'completed', {
+      projectSlug: descriptor.payload.projectSlug,
+      product: descriptor.payload.product ?? 'rune',
+      parked: true,
+      reason: scrubAbsolutePaths(reason),
+      operatorWorktreePath: sandbox.worktree,
+      branch,
+      baseBranch,
+      preserveBranch: true,
+      preserveWorktree: true,
+    }),
+  };
+}
+
+/**
+ * Fail-closed terminal cleanup. A worktree is removed only after Git proves it
+ * clean and the cursor has been atomically invalidated. Dirty or uncertain
+ * state is preserved as a parked run.
+ */
+async function disposeTerminalWorktree(args: {
+  deps: OrchestratedRuntimeDeps;
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>;
+  sandbox: SandboxSpec;
+  branch: string;
+  baseBranch: string;
+}): Promise<TerminalWorktreeDisposition> {
+  const { deps, descriptor, sandbox, branch, baseBranch } = args;
+  if (!claimMutationTerminalTeardown(descriptor.id)) return { kind: 'preserved' };
+  try {
+    let dirty: boolean;
+    try {
+      dirty = (await deps.inspectWorktreeStatus(sandbox.worktree)).trim() !== '';
+    } catch {
+      return parkedTerminal(
+        descriptor,
+        sandbox,
+        branch,
+        baseBranch,
+        'parked during terminal cleanup: Git status could not be verified',
+      );
+    }
+
+    if (dirty) {
+      const runningMutation = { ...descriptor, status: 'running' as const };
+      let preflight: OrchestratedRecoveryPreflightResult;
+      try {
+        preflight = await deps.preflightRecovery(runningMutation);
+      } catch {
+        return parkedTerminal(
+          descriptor,
+          sandbox,
+          branch,
+          baseBranch,
+          'parked during terminal cleanup: resumable cursor could not be verified',
+        );
+      }
+      let reason = 'parked during terminal cleanup: uncommitted work was preserved';
+      if (preflight.kind === 'recoverable') {
+        const sha = await commitWorktreeWip(deps.runGit, sandbox.worktree, {
+          message: `rune(${descriptor.payload.product ?? 'rune'}): WIP — terminal park — ${descriptor.payload.projectSlug}`,
+          logLabel: 'terminal WIP commit',
+          product: descriptor.payload.product ?? 'rune',
+          projectSlug: descriptor.payload.projectSlug,
+          knownDirty: true,
+        });
+        if (sha === null) {
+          reason = 'parked during terminal cleanup: WIP commit could not be verified';
+        } else {
+          reason = `parked during terminal cleanup: WIP preserved as ${sha.slice(0, 7)}`;
+        }
+      } else {
+        reason = `parked during terminal cleanup: ${preflight.reason}; uncommitted work was preserved`;
+      }
+      return parkedTerminal(descriptor, sandbox, branch, baseBranch, reason);
+    }
+
+    try {
+      await invalidateCursorThenRemoveWorktree({
+        runId: descriptor.id,
+        reason: 'terminal worktree cleanup',
+        invalidateCursor: deps.invalidateRunCursor,
+        removeWorktree: async () => deps.destroyWorktree(sandbox, {
+          productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+          worktreeRoot: config.WORKTREE_ROOT,
+        }),
+      });
+      return { kind: 'removed' };
+    } catch (err) {
+      log.warn('orchestrated-work-runner: terminal worktree cleanup failed', {
+        sandbox: sandbox.worktree,
+        error: (err as Error).message,
+      });
+      return parkedTerminal(
+        descriptor,
+        sandbox,
+        branch,
+        baseBranch,
+        'parked during terminal cleanup: cursor invalidation or worktree removal failed',
+      );
+    }
+  } finally {
+    releaseMutationTerminalTeardown(descriptor.id);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runtime seam (injected so the apply→event mapping is fixture-testable)
 // ---------------------------------------------------------------------------
@@ -452,6 +714,8 @@ export interface OrchestratedRuntimeDeps {
    *  inject a canned result so the loop's deps are never exercised. */
   runOrchestration: (deps: OrchestrationDeps) => Promise<OrchestrationResult>;
   runGit: GitRunner;
+  /** Isolated teardown status seam; avoids coupling classification Git probes to cleanup. */
+  inspectWorktreeStatus: (worktreePath: string) => Promise<string>;
   /** Build the per-task workflow runner (Phase 8). Production is the LIVE
    *  role-spawn binding from team-task-deps.ts — the no-stub regression test
    *  identity-asserts this default. */
@@ -476,6 +740,12 @@ export interface OrchestratedRuntimeDeps {
   /** Refresh the rebuildable product/project registry after a branch lands on
    *  the product's base branch. Best-effort at the call site. */
   refreshRegistry: () => void;
+  /** Invalidate resumability before any terminal worktree removal. */
+  invalidateRunCursor: (runId: string, reason: string) => void;
+  /** Persist a fail-closed parked disposition discovered during teardown. */
+  writeRecoveredTerminal: (descriptor: MutationDescriptor, event: MutationEvent) => void;
+  /** Shared recovery invariant used to decide whether dirty work is resumable. */
+  preflightRecovery: (mutation: MutationDescriptor<OrchestratedWorkPayload>) => Promise<OrchestratedRecoveryPreflightResult>;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -484,6 +754,8 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     destroyWorktree: defaultDestroyWorktree,
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
+    inspectWorktreeStatus: async (worktreePath) =>
+      (await defaultRunGit(['status', '--porcelain'], { cwd: worktreePath })).stdout,
     createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
     workRunsDir: config.WORK_RUNS_DIR,
     workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
@@ -495,6 +767,9 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     runGate: defaultRunGate,
     integrationWorktree: (product, runId) => join(config.WORKTREE_ROOT, `gate-${product}-${runId}`),
     refreshRegistry: () => { rebuildRegistry(); },
+    invalidateRunCursor: (runId, reason) => invalidateOrchestratedRunCursor(config.WORK_RUNS_DIR, runId, reason),
+    writeRecoveredTerminal: (descriptor, event) => writeRecoveredTerminalMutation(descriptor, event),
+    preflightRecovery: preflightOrchestratedRecovery,
   };
 }
 
@@ -938,7 +1213,6 @@ export async function fileTerminalBugsToBacklog(opts: {
 // Durable run checkpoints + boot recovery
 // ---------------------------------------------------------------------------
 
-const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
 const ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE = 'notification-publications.jsonl';
 // Durable evidence for a failed closeout validation: the sandbox worktree is
 // GC'd on a blocked run, so the failing command's output tail written here is
@@ -971,26 +1245,6 @@ type OrchestratedNotificationPublicationInput = {
 
 type OrchestratedNotificationPublicationErrorInput =
   OrchestratedNotificationPublicationInput & { error: string };
-
-export function writeOrchestratedRunCursor(baseDir: string, runId: string, cursor: OrchestrationRunCursor): void {
-  const dir = join(baseDir, runId);
-  mkdirSync(dir, { recursive: true });
-  const target = join(dir, ORCHESTRATED_CURSOR_FILE);
-  const tmp = join(dir, `.${ORCHESTRATED_CURSOR_FILE}.${process.pid}.tmp`);
-  writeFileSync(tmp, JSON.stringify(cursor, null, 2), 'utf8');
-  renameSync(tmp, target);
-}
-
-export function readOrchestratedRunCursor(baseDir: string, runId: string): OrchestrationRunCursor | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(join(baseDir, runId, ORCHESTRATED_CURSOR_FILE), 'utf8'));
-  } catch {
-    return null;
-  }
-  if (!isOrchestrationRunCursor(parsed) || parsed.runId !== runId) return null;
-  return parsed;
-}
 
 export function claimOrchestratedNotificationPublication(
   baseDir: string,
@@ -1083,26 +1337,6 @@ function isNotificationPublication(
   );
 }
 
-function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCursor {
-  if (!value || typeof value !== 'object') return false;
-  const cursor = value as Partial<OrchestrationRunCursor>;
-  const position = cursor.cursor as Partial<OrchestrationRunCursor['cursor']> | undefined;
-  return (
-    cursor.resumeMarker === 'resumable' &&
-    typeof cursor.runId === 'string' &&
-    typeof cursor.product === 'string' &&
-    typeof cursor.project === 'string' &&
-    typeof cursor.branch === 'string' &&
-    typeof cursor.baseBranch === 'string' &&
-    typeof cursor.worktreePath === 'string' &&
-    !!position &&
-    Array.isArray(position.completedTaskIds) &&
-    position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
-    (position.currentTaskId === null || typeof position.currentTaskId === 'string') &&
-    (position.nextTaskId === null || typeof position.nextTaskId === 'string')
-  );
-}
-
 export async function recoverOrchestratedWorkRuns(
   deps: OrchestratedWorkRecoveryDeps,
 ): Promise<OrchestratedWorkRecoveryResult> {
@@ -1125,30 +1359,14 @@ export async function recoverOrchestratedWorkRuns(
     }
 
     try {
-      const cursor = await deps.readRunCursor(mutation.id);
-      if (!cursor || cursor.resumeMarker !== 'resumable') {
-        await deps.markOrphaned(mutation, 'missing resumable orchestrated cursor');
+      const preflight = await deps.preflightRecovery(mutation);
+      if (preflight.kind === 'not-resumable') {
+        await deps.markOrphaned(mutation, preflight.reason);
         result.orphaned.push(mutation.id);
         continue;
       }
-
       try {
-        const [records, tasksMd] = await Promise.all([
-          deps.readTaskRunRecords(mutation.id),
-          deps.readTasksMd(cursor),
-        ]);
-        const reconstruction = reconstructRun({ tasksMd, records });
-
-        if (reconstruction.drift) {
-          const terminal = term(mutation.id, 'failed', {
-            projectSlug: mutation.payload.projectSlug,
-            product: mutation.payload.product ?? cursor.product,
-            reason: 'orchestrated recovery drift: completed task records disagree with tasks.md',
-          });
-          await deps.writeTerminal(mutation, terminal);
-          result.orphaned.push(mutation.id);
-          continue;
-        }
+        const { cursor, reconstruction } = preflight;
 
         await deps.redispatchOrchestratedMutation(mutation, {
           branch: cursor.branch,
@@ -1253,8 +1471,36 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     let sandbox: SandboxSpec | null = null;
     let preserveWorktree = false;
     let finalizerOwnedTeardown = false;
+    let terminalDispositionHandled = false;
+    let dispositionBaseBranch = recovery?.baseBranch ?? 'main';
     let sink: TranscriptSink | null = null;
     const startedAtMs = Date.now();
+    const prepareTerminalDisposition = async (terminal: MutationEvent): Promise<MutationEvent> => {
+      if (!sandbox || terminalDispositionHandled) return terminal;
+      if (
+        isMutationRecoveryHandoff(descriptor.id) ||
+        isMutationShutdownInProgress() ||
+        preserveWorktree ||
+        finalizerOwnedTeardown
+      ) {
+        terminalDispositionHandled = true;
+        return terminal;
+      }
+      const disposition = await disposeTerminalWorktree({
+        deps,
+        descriptor,
+        sandbox,
+        branch,
+        baseBranch: dispositionBaseBranch,
+      });
+      terminalDispositionHandled = true;
+      if (disposition.kind === 'parked') {
+        preserveWorktree = true;
+        return disposition.terminal;
+      }
+      if (disposition.kind === 'preserved') preserveWorktree = true;
+      return terminal;
+    };
     try {
       try {
         if (recovery) {
@@ -1299,11 +1545,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           });
         }
       } catch (err) {
-        const terminal = term(descriptor.id, 'failed', {
+        const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
           reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
           projectSlug,
           product,
-        });
+        }));
         persistTerminalStateOnce(terminal);
         yield terminal;
         return;
@@ -1311,11 +1557,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
       const projectDir = findWorkProjectDir(projectSlug, sandbox.worktree);
       if (!projectDir) {
-        const terminal = term(descriptor.id, 'failed', {
+        const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
           reason: `project not found in worktree: ${projectSlug}`,
           projectSlug,
           product,
-        });
+        }));
         persistTerminalStateOnce(terminal);
         yield terminal;
         return;
@@ -1335,11 +1581,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
       } catch (err) {
         if ((err as Error).message.includes('invalid closeoutValidationStrategy')) {
-          const terminal = term(descriptor.id, 'failed', {
+          const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
             reason: scrubPathsInText(`product config invalid: ${(err as Error).message}`),
             projectSlug,
             product,
-          });
+          }));
           persistTerminalStateOnce(terminal);
           yield terminal;
           return;
@@ -1349,6 +1595,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       if (recovery) {
         baseBranch = recovery.baseBranch;
       }
+      dispositionBaseBranch = baseBranch;
 
       try {
         sink = deps.createSink(descriptor.id, deps.workRunsDir);
@@ -1370,6 +1617,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         wakeStream = undefined;
       };
       let finalizerTerminal: MutationEvent | null = null;
+      let finalizerDispositionTerminal: MutationEvent | null = null;
       let gateHeldReason: GateFailReason | null = null;
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
@@ -1514,14 +1762,25 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 }
               : {}),
             writeSupervisionTerminal: (_status, terminalEvent) => {
-              persistTerminalStateOnce(terminalEvent);
+              persistTerminalStateOnce(finalizerDispositionTerminal ?? terminalEvent);
             },
             removeWorktree: async () => {
-              await deps.destroyWorktree(runSandbox, {
-                productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-                worktreeRoot: config.WORKTREE_ROOT,
+              const disposition = await disposeTerminalWorktree({
+                deps,
+                descriptor,
+                sandbox: runSandbox,
+                branch,
+                baseBranch,
               });
-              finalizerOwnedTeardown = true;
+              if (disposition.kind === 'removed') {
+                finalizerOwnedTeardown = true;
+                return;
+              }
+              preserveWorktree = true;
+              if (disposition.kind === 'parked') {
+                finalizerDispositionTerminal = disposition.terminal;
+              }
+              throw new Error('worktree teardown deferred for preservation');
             },
             recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
             readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
@@ -1638,7 +1897,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             if (!finalizerResult.merged && gateHeldReason) data['gateHeldReason'] = gateHeldReason;
           }
           finalizerResult.terminalEvent.data = data;
-          finalizerTerminal = finalizerResult.terminalEvent;
+          finalizerTerminal = finalizerDispositionTerminal ?? finalizerResult.terminalEvent;
           return { kind: 'finalized', outcome: readOutcome(finalizerResult.terminalEvent) };
         },
       });
@@ -1698,11 +1957,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         yield event;
       }
       if (outcome.kind === 'error') {
-        const terminal = term(descriptor.id, 'failed', {
+        const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
           reason: scrubPathsInText(`orchestration loop threw: ${(outcome.error as Error).message}`),
           projectSlug,
           product,
-        });
+        }));
         await persistTerminalArtifacts({
           deps,
           sink,
@@ -1726,7 +1985,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       preserveWorktree =
         (result.kind === 'blocked' && result.parked?.preserveWorktree === true) ||
         (result.kind === 'held' && result.preserveWorktree === true);
-      const terminal = finalizerTerminal ?? mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
+      const terminal = await prepareTerminalDisposition(
+        finalizerTerminal ?? mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch),
+      );
       await persistTerminalArtifacts({
         deps,
         sink,
@@ -1745,7 +2006,12 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       yield terminal;
     } finally {
       sink?.destroy();
-      if (sandbox && isMutationShutdownInProgress()) {
+      if (sandbox && isMutationRecoveryHandoff(descriptor.id)) {
+        log.info('orchestrated-work-runner: recovery handoff; preserving worktree until redispatch', {
+          id: descriptor.id,
+          sandbox: sandbox.worktree,
+        });
+      } else if (sandbox && isMutationShutdownInProgress()) {
         // Shutdown suppression: the worktree may hold the in-flight task's
         // uncommitted diff — the shutdown parker WIP-commits and preserves it
         // (or boot recovery resumes it). Destroying it here would discard the
@@ -1753,17 +2019,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         log.info('orchestrated-work-runner: shutdown in progress; leaving worktree for parker/boot recovery', {
           sandbox: sandbox.worktree,
         });
-      } else if (sandbox && !preserveWorktree && !finalizerOwnedTeardown) {
-        try {
-          await deps.destroyWorktree(sandbox, {
-            productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-            worktreeRoot: config.WORKTREE_ROOT,
-          });
-        } catch (err) {
-          log.warn('orchestrated-work-runner: destroyWorktree failed', {
-            sandbox: sandbox.worktree,
-            error: (err as Error).message,
-          });
+      } else if (sandbox && !terminalDispositionHandled && !preserveWorktree && !finalizerOwnedTeardown) {
+        const disposition = await disposeTerminalWorktree({
+          deps,
+          descriptor,
+          sandbox,
+          branch,
+          baseBranch: dispositionBaseBranch,
+        });
+        if (disposition.kind === 'parked') {
+          // Unexpected throws have no normal terminal construction point. Keep
+          // the fail-closed worktree visible through the recovery writer.
+          deps.writeRecoveredTerminal(descriptor, disposition.terminal);
         }
       } else if (sandbox && preserveWorktree) {
         log.info('orchestrated-work-runner: preserving parked worktree', {
@@ -2072,8 +2339,8 @@ function persistTerminalMutationState(
   // child surfaces here as a failed terminal the run never earned — persisting
   // it would flip a boot-resumable `running` mutation to failed (or clobber a
   // just-written shutdown park).
-  if (isMutationShutdownInProgress()) {
-    log.info('orchestrated-work-runner: shutdown in progress; skipping terminal persistence', {
+  if (isMutationShutdownInProgress() || isMutationRecoveryHandoff(descriptor.id)) {
+    log.info('orchestrated-work-runner: lifecycle handoff in progress; skipping terminal persistence', {
       id: descriptor.id,
     });
     return;

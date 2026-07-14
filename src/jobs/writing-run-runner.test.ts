@@ -287,6 +287,7 @@ describe('runWritingMutation', () => {
     const other: RunHandle = {
       descriptor: descriptorFor(blogPayload()),
       cancel: () => {},
+      settled: Promise.resolve(),
     };
     other.descriptor.id = 'other-run-9999';
     deps.listActiveRuns = () => new Map([[other.descriptor.id, other]]);

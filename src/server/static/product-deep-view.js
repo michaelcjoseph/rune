@@ -477,7 +477,7 @@ function renderOperations(operations) {
   ).join('');
   const mutations = list(model.mutations).map(mutation =>
     `<article class="deep-op-row"><span>${escHtml(mutation.id)}</span><span>${escHtml(mutation.kind || mutation.status || 'mutation')}</span>` +
-      (mutation.kind === 'orchestrated-work' ? `<button type="button" data-recover-work-run-id="${attr(mutation.id)}">Recover</button>` : '') +
+      (mutation.recoverable === true ? `<button type="button" data-recover-work-run-id="${attr(mutation.id)}">Recover</button>` : '') +
       `<button type="button" data-cancel-mutation-id="${attr(mutation.id)}">Cancel</button></article>`
   ).join('');
   const planning = model.planning
@@ -1089,7 +1089,7 @@ function overlayRunControlsFromState(view, state, product) {
         runControl: {
           state: 'cancel',
           mutationId: mutation.id,
-          ...(mutation.kind === 'orchestrated-work' ? { recoverable: true } : {}),
+          ...(mutation.recoverable === true ? { recoverable: true } : {}),
           ...(typeof payload.dispatchMode === 'string' ? { dispatchMode: payload.dispatchMode } : {}),
           ...(typeof payload.fallbackReason === 'string' ? { fallbackReason: payload.fallbackReason } : {}),
         },

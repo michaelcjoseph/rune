@@ -19,7 +19,7 @@ import {
   orchestratedWorkApplier,
   parkInFlightOrchestratedRuns,
   recoverOrchestratedWorkRuns,
-  readTasksMdForRecoveredCursor,
+  preflightOrchestratedRecovery,
   redispatchRecoveredOrchestratedMutation as redispatchRecoveredOrchestratedWorkMutation,
 } from './jobs/orchestrated-work-runner.js';
 import { workRunReleaseApplier } from './jobs/work-run-release.js';
@@ -186,15 +186,7 @@ try {
       const { readRunningOrchestratedMutations } = await import('./jobs/mutations-log.js');
       return readRunningOrchestratedMutations() as MutationDescriptor<OrchestratedWorkPayload>[];
     },
-    readRunCursor: async (runId) => {
-      const { readOrchestratedRunCursor } = await import('./jobs/orchestrated-work-runner.js');
-      return readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId);
-    },
-    readTaskRunRecords: async (runId) => {
-      const { readOrchestratedTaskRunRecords } = await import('./jobs/orchestrated-work-runner.js');
-      return readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId);
-    },
-    readTasksMd: readTasksMdForRecoveredCursor,
+    preflightRecovery: preflightOrchestratedRecovery,
     redispatchOrchestratedMutation: async (mutation, options) => {
       const result = redispatchRecoveredOrchestratedWorkMutation(mutation, options);
       if (!result.ok) {

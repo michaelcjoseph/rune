@@ -2508,6 +2508,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
               id: 'mut-orch-live',
               kind: 'orchestrated-work',
               status: 'running',
+              recoverable: true,
               payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
             }],
           },
@@ -2529,6 +2530,40 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     });
 
     expect(postJson).toHaveBeenCalledWith('/api/work-runs/mut-orch-live/recover');
+  });
+
+  it('hides project-card and Operations Recover controls when the server marks the worktree unavailable', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const mutation = {
+      id: 'mut-orch-missing', kind: 'orchestrated-work', status: 'running', recoverable: false,
+      payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+    };
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [{
+            slug: '17-cockpit-redesign', lifecycle: 'active', taskProgress: { done: 4, total: 9 },
+            runControl: { state: 'cancel', mutationId: mutation.id, recoverable: false },
+          }],
+        });
+      }
+      if (url === '/api/state') return { mutations: { active: [mutation] } };
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson,
+      loadOperations: true,
+      operations: { ...productOperations, mutations: [mutation] },
+    });
+    await view.load();
+
+    expect(root.innerHTML).not.toContain('data-recover-work-run-id');
+    expect(root.innerHTML).not.toMatch(/data-project-run-action=["']recover["']/i);
+    expect(root.innerHTML).toContain('data-project-run-action="cancel"');
   });
 
   it('keeps project-card run controls usable and renders inline errors after Start or Cancel failures', async () => {
@@ -2763,6 +2798,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
           id: 'mut-orch-live',
           kind: 'orchestrated-work',
           status: 'running',
+          recoverable: true,
           payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
         },
       ],
