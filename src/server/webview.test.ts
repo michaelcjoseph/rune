@@ -2374,7 +2374,7 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
-      expect(mockCancelOp).toHaveBeenCalledWith('abc123');
+      expect(mockCancelOp).toHaveBeenCalledWith('abc123', 'cockpit');
     });
 
     it('returns 409 when cancelOp returns false (op not found)', async () => {
@@ -2394,7 +2394,7 @@ describe('server/webview', () => {
         method: 'POST',
         headers: { authorization: 'Bearer test-secret' },
       });
-      expect(mockCancelOp).toHaveBeenCalledWith(opId);
+      expect(mockCancelOp).toHaveBeenCalledWith(opId, 'cockpit');
     });
 
     it('returns 401 without auth header', async () => {

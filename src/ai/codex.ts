@@ -24,7 +24,13 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
 import { scrubPathsInText } from './tool-labels.js';
-import { isCancelled, registerOp, unregisterOp } from '../transport/in-flight.js';
+import {
+  getCancellation,
+  registerOp,
+  unregisterOp,
+} from '../transport/in-flight.js';
+import type { OperationCancellation } from '../cancellation.js';
+import type { OpKind } from '../transport/notification-bus.js';
 
 const log = createLogger('codex');
 
@@ -210,6 +216,10 @@ export interface RunCodexOpts {
   resumeSessionId?: string;
   /** User-facing operation tracking for interactive chat calls. */
   opLabel?: string;
+  /** Operation category for non-chat callers that share this executor. */
+  opKind?: OpKind;
+  /** Role/agent attribution for operation feeds. */
+  agentName?: string;
   /** Optional product scope attached to the operation feed. */
   product?: string;
   /** Raw `-c key=value` overrides passed as separate argv values. Sandboxed
@@ -232,6 +242,9 @@ export interface CodexResult {
   /** Process exit code when the child closed cleanly; undefined when the
    *  process never produced one (spawn error, timeout-killed). */
   exitCode?: number;
+  /** Structured first-request cancellation captured before the operation is
+   * unregistered. */
+  cancellation?: OperationCancellation;
 }
 
 /**
@@ -299,8 +312,9 @@ export async function runCodex(
 
     registerActiveProcess(child);
     const op = opts.opLabel ? registerOp({
-      kind: 'chat',
+      kind: opts.opKind ?? 'chat',
       label: opts.opLabel,
+      ...(opts.agentName ? { agentName: opts.agentName } : {}),
       ...(opts.product ? { scope: opts.product } : {}),
       userId: config.TELEGRAM_USER_ID,
       child,
@@ -376,9 +390,18 @@ export async function runCodex(
     child.on('error', (err: Error) => {
       clearTimeout(timer);
       unregisterActiveProcess(child);
-      if (op) unregisterOp(op.opId, 'error', err.message);
+      const cancellation = op ? getCancellation(op.opId) : undefined;
+      if (op) {
+        unregisterOp(
+          op.opId,
+          cancellation !== undefined ? 'cancelled' : 'error',
+          cancellation !== undefined ? 'Cancelled by user' : err.message,
+        );
+      }
       log.error('codex spawn error', { error: err.message });
-      finish({ text: null, error: err.message });
+      finish(cancellation !== undefined
+        ? { text: null, error: 'Cancelled by user', cancellation }
+        : { text: null, error: err.message });
     });
 
     child.on('close', (code, signal) => {
@@ -386,9 +409,10 @@ export async function runCodex(
       unregisterActiveProcess(child);
       flushStdoutEventRemainder();
 
-      if (op && isCancelled(op.opId)) {
+      const cancellation = op ? getCancellation(op.opId) : undefined;
+      if (op && cancellation !== undefined) {
         unregisterOp(op.opId, 'cancelled', 'Cancelled by user');
-        finish({ text: null, error: 'Cancelled by user' });
+        finish({ text: null, error: 'Cancelled by user', cancellation });
         return;
       }
 

@@ -37,6 +37,12 @@ import {
   unregisterActiveProcess,
 } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
+import {
+  getCancellation,
+  registerOp,
+  unregisterOp,
+} from '../transport/in-flight.js';
+import type { OperationCancellation } from '../cancellation.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { buildSandboxEnv, DEFAULT_BASE_ENV_KEYS } from './credential-injector.js';
 import {
@@ -87,6 +93,7 @@ export interface RoleModelBinding {
 export interface SpawnAgentResult {
   output: string;
   error: string | null;
+  cancellation?: OperationCancellation;
 }
 
 export type ExecutionAgentStreamEvent =
@@ -99,6 +106,8 @@ export interface ExecutionAgentIO {
     prompt: string;
     systemPrompt?: string;
     model: RoleModelBinding;
+    role: ExecutionAgentOpts['role'];
+    product: string;
     cwd: string;
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
@@ -139,7 +148,7 @@ export interface ExecutionAgentOpts {
 
 export type ExecutionAgentResult =
   | { ok: true; diff: string; output: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; cancellation?: OperationCancellation };
 
 const defaultIo: ExecutionAgentIO = {
   spawnAgent: defaultSpawnAgent,
@@ -183,10 +192,12 @@ export async function runExecutionAgent(
     }
     const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
     credentialValues = productCredentialValues(env);
-    const { output, error } = await spawnAgent({
+    const { output, error, cancellation } = await spawnAgent({
       prompt: opts.prompt,
       ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
       model: opts.model,
+      role: opts.role,
+      product: opts.sandbox.product,
       cwd,
       env,
       timeoutMs,
@@ -194,7 +205,11 @@ export async function runExecutionAgent(
       ...(emit !== undefined ? { emit } : {}),
     });
     if (error !== null) {
-      return { ok: false, error: sanitize(error, credentialValues) };
+      return {
+        ok: false,
+        error: sanitize(error, credentialValues),
+        ...(cancellation !== undefined ? { cancellation } : {}),
+      };
     }
     // Stage-then-diff so new files are part of the captured work product.
     await runGit(['add', '-A'], { cwd });
@@ -247,6 +262,8 @@ async function defaultSpawnAgent(args: {
   prompt: string;
   systemPrompt?: string;
   model: RoleModelBinding;
+  role: ExecutionAgentOpts['role'];
+  product: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -268,6 +285,10 @@ async function defaultSpawnAgent(args: {
       model: args.model.alias,
       sandboxMode: 'workspace-write',
       timeoutMs: args.timeoutMs,
+      opLabel: `team:${args.role}`,
+      opKind: 'agent',
+      agentName: args.role,
+      product: args.product,
       // Scoped credentials only — never the default process.env spread (see
       // RunCodexOpts.env: sandboxed callers MUST pass a built env).
       env: args.env,
@@ -290,7 +311,11 @@ async function defaultSpawnAgent(args: {
       },
     });
     const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues));
-    return { output, error: result.error === null ? null : sanitize(result.error, credentialValues) };
+    return {
+      output,
+      error: result.error === null ? null : sanitize(result.error, credentialValues),
+      ...(result.cancellation !== undefined ? { cancellation: result.cancellation } : {}),
+    };
   }
   return spawnClaudeAgent(args);
 }
@@ -328,6 +353,8 @@ function spawnClaudeAgent(args: {
   prompt: string;
   systemPrompt?: string;
   model: RoleModelBinding;
+  role: ExecutionAgentOpts['role'];
+  product: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -375,6 +402,14 @@ function spawnClaudeAgent(args: {
     }
 
     registerActiveProcess(child);
+    const op = registerOp({
+      kind: 'agent',
+      label: `team:${args.role}`,
+      agentName: args.role,
+      scope: args.product,
+      userId: config.TELEGRAM_USER_ID,
+      child,
+    });
     let stdout = '';
     let stdoutBuf = '';
     let stderr = '';
@@ -448,22 +483,34 @@ function spawnClaudeAgent(args: {
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       unregisterActiveProcess(child);
+      const cancellation = getCancellation(op.opId);
+      if (cancellation !== undefined) {
+        unregisterOp(op.opId, 'cancelled', 'Cancelled by user');
+        finish({ output: stdout, error: 'Cancelled by user', cancellation });
+        return;
+      }
       if (spawnError !== null) {
-        finish({ output: stdout, error: sanitize(spawnError, credentialValues) });
+        const error = sanitize(spawnError, credentialValues);
+        unregisterOp(op.opId, 'error', error);
+        finish({ output: stdout, error });
         return;
       }
       if (timedOut) {
+        unregisterOp(op.opId, 'error', `execution agent timed out after ${args.timeoutMs}ms`);
         finish({ output: stdout, error: `execution agent timed out after ${args.timeoutMs}ms` });
         return;
       }
       if (code === 0) {
+        unregisterOp(op.opId, 'success');
         finish({ output: stdout, error: null });
         return;
       }
-      finish({
-        output: stdout,
-        error: sanitize(stderr.trim() || `execution agent exited with code ${code}`, credentialValues),
-      });
+      const error = sanitize(
+        stderr.trim() || `execution agent exited with code ${code}`,
+        credentialValues,
+      );
+      unregisterOp(op.opId, 'error', error);
+      finish({ output: stdout, error });
     });
   });
 }

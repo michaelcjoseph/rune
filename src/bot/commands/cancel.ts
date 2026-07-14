@@ -10,8 +10,8 @@ export async function handleCancel(sender: MessageSender, userId: number, arg: s
     return;
   }
   const cancelled = prefix
-    ? cancelByPrefix(prefix)
-    : cancelMostRecentForUser(userId);
+    ? cancelByPrefix(prefix, 'telegram')
+    : cancelMostRecentForUser(userId, 'telegram');
 
   if (!cancelled) {
     await sender.send(userId, prefix

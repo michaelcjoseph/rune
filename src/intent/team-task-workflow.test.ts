@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest';
 import * as teamTaskWorkflow from './team-task-workflow.js';
 import {
   runTeamTaskWorkflow,
+  RoleCancellationError,
   type TeamTaskDeps,
   type ReviewerVerdict,
   type ObjectionFinding,
@@ -112,6 +113,12 @@ const INPUT = {
   cap: 2,
 };
 
+const CANCELLATION = {
+  operationId: '12345678-1234-1234-1234-123456789abc',
+  source: 'cockpit' as const,
+  requestedAt: '2026-07-13T12:34:56.000Z',
+};
+
 const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 type GateVerdictRecord = {
   outcome?: unknown;
@@ -160,6 +167,33 @@ type TaskEvidenceRequiresLoopExitReason = Assert<
 // ---------------------------------------------------------------------------
 // QA-first
 // ---------------------------------------------------------------------------
+
+describe('team-task-workflow — structured role cancellation', () => {
+  it.each(['qa', 'tech-lead', 'coder', 'reviewer'] as const)(
+    'returns cancelled evidence when %s is cancelled',
+    async (role) => {
+      const cancelled = async () => {
+        throw new RoleCancellationError(role, CANCELLATION);
+      };
+      const deps = makeDeps({
+        ...(role === 'qa' ? { qaWriteTests: cancelled } : {}),
+        ...(role === 'tech-lead' ? { techLeadReviewTests: cancelled } : {}),
+        ...(role === 'coder' ? { coder: cancelled } : {}),
+        ...(role === 'reviewer' ? { reviewer: cancelled } : {}),
+      });
+
+      const evidence = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+      expect(evidence).toMatchObject({
+        outcome: 'cancelled',
+        cancellation: { role, ...CANCELLATION },
+        loopExitReason: 'operational',
+      });
+      expect(evidence.failureReason).toBeUndefined();
+      expect(evidence.blockedReason).toBeUndefined();
+    },
+  );
+});
 
 describe('team-task-workflow — QA-first', () => {
   it('runs QA tests + tech-lead test review BEFORE the coder on a code-tests-required task', async () => {

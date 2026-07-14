@@ -25,6 +25,23 @@
 import type { SizedTask } from './planning-roles.js';
 import type { DispatchProvider } from './dispatch.js';
 import type { RoleName } from '../roles/loader.js';
+import type { OperationCancellation } from '../cancellation.js';
+
+export interface RoleCancellation extends OperationCancellation {
+  role: RoleName;
+}
+
+/** Typed control-flow error used only at role/executor boundaries. Ordinary
+ * role failures remain normal errors and retain the existing blocked path. */
+export class RoleCancellationError extends Error {
+  readonly cancellation: RoleCancellation;
+
+  constructor(role: RoleName, cancellation: OperationCancellation) {
+    super(`${role} cancelled`);
+    this.name = 'RoleCancellationError';
+    this.cancellation = { role, ...cancellation };
+  }
+}
 
 /** Objection classes — defects normal usage won't surface until they matter.
  *  An open finding in any class is a hard gate. */
@@ -306,7 +323,7 @@ export interface TeamTaskRunInput {
   cap: number;
 }
 
-export type WorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
+export type WorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed' | 'cancelled';
 
 /** The structured evidence the workflow returns — data only. It carries no
  *  writer/commit/merge handle: marking `tasks.md`, writing `context.md`, and
@@ -332,6 +349,8 @@ export interface TaskEvidence {
   /** Set on a `failed` outcome — the structured reason a role seam rejected
    *  (for the Phase 5 retry / model-swap decision). */
   failureReason?: string;
+  /** Present only when a live role child was explicitly cancelled. */
+  cancellation?: RoleCancellation;
   /** Human/PM acceptance evidence when non-objection disagreement is cleared. */
   acceptance?: PmAcceptance;
   /** Set when the tech-lead attempted a test-intent repair this task. */
@@ -371,6 +390,21 @@ export async function runTeamTaskWorkflow(
         : {}),
     };
   } catch (err) {
+    if (err instanceof RoleCancellationError) {
+      return {
+        taskId: task.id,
+        outcome: 'cancelled',
+        rolesInvoked: roles.list(),
+        objectionOpen: false,
+        handoffNotes,
+        cancellation: err.cancellation,
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        ...(repairEvidence.testIntentRepair !== undefined
+          ? { testIntentRepair: repairEvidence.testIntentRepair }
+          : {}),
+      };
+    }
     // A role seam rejected — surface it as structured `failed` evidence rather
     // than an unhandled rejection, so the Phase 5 loop can decide retry/model-swap.
     return {
@@ -488,6 +522,7 @@ async function runGated(
           },
         });
       } catch (err) {
+        if (err instanceof RoleCancellationError) throw err;
         // The repair is best-effort by contract — an internal throw degrades
         // to the QA bounce, never to a task-fatal `failed`.
         repair = { kind: 'not-repaired', reason: (err as Error).message };
@@ -1624,7 +1659,8 @@ async function recordGateRejection(
 ): Promise<void> {
   try {
     await deps.onGateRejection?.(feedback);
-  } catch {
+  } catch (err) {
+    if (err instanceof RoleCancellationError) throw err;
     // Gate-time learning is best-effort. The structured feedback still drives
     // the corrective retry/block path even if lesson drafting or memory I/O fails.
   }

@@ -94,7 +94,9 @@ import {
   appendIndexRow,
   recordWorkRunPhase,
   readLastWorkRunPhase,
+  parseWorkRunCancellation,
   type WorkRunSummary,
+  type WorkRunCancellation,
   type WorkRunIndexRow,
 } from './work-run-store.js';
 import {
@@ -2008,6 +2010,7 @@ function buildOrchestratedSummary(args: {
     workProduct !== null
       ? classifyOutcome({ exit, product: workProduct })
       : { outcome: orchestratedOutcome(result, terminal), reason: '' };
+  const cancellation = workRunCancellation(data['cancellation']);
   return {
     id,
     project,
@@ -2027,6 +2030,18 @@ function buildOrchestratedSummary(args: {
     ...(typeof data['merged'] === 'boolean' ? { merged: data['merged'] } : {}),
     ...(typeof data['branchDeleted'] === 'boolean' ? { branchDeleted: data['branchDeleted'] } : {}),
     ...(typeof data['gateHeldReason'] === 'string' ? { gateHeldReason: data['gateHeldReason'] } : {}),
+    ...(cancellation !== undefined ? { cancellation } : {}),
+  };
+}
+
+function workRunCancellation(value: unknown): WorkRunCancellation | undefined {
+  const cancellation = parseWorkRunCancellation(value);
+  if (cancellation === undefined) return undefined;
+  return {
+    role: scrubPathsInText(cancellation.role),
+    operationId: scrubPathsInText(cancellation.operationId),
+    source: cancellation.source,
+    requestedAt: scrubPathsInText(cancellation.requestedAt),
   };
 }
 
@@ -2164,18 +2179,26 @@ function mapResultToTerminal(
     });
   }
   if (result.kind === 'cancelled') {
+    const nested = result.cancellation;
+    const nestedReason = nested === undefined
+      ? undefined
+      : scrubPathsInText(
+          `${nested.role} cancelled from ${nested.source} (operation ${nested.operationId.slice(0, 8)})`,
+        );
     if (result.reason === 'user') {
       return term(mutationId, 'failed', {
         ...base,
         cancelReason: 'user',
-        reason: 'cancelled',
+        reason: nestedReason ?? 'cancelled',
+        ...(nested !== undefined ? { cancellation: nested } : {}),
         ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
       });
     }
     return term(mutationId, 'completed', {
       ...base,
       cancelReason: 'system',
-      reason: 'system-cancelled; stopped at orchestration boundary',
+      reason: nestedReason ?? 'system-cancelled; stopped at orchestration boundary',
+      ...(nested !== undefined ? { cancellation: nested } : {}),
       baseBranch,
       ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
     });

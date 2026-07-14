@@ -99,6 +99,29 @@ function createWorkRunDiagnostics(deps: ReturnType<typeof makeDeps>, product: st
 }
 
 describe('product-scoped work-run diagnostics', () => {
+  it('projects the durable scrubbed cancellation record after the child operation is gone', () => {
+    const cancellation = {
+      role: 'tech-lead',
+      operationId: 'abc12345-1234-1234-1234-123456789abc',
+      source: 'cockpit' as const,
+      requestedAt: '2026-07-13T12:34:56.000Z',
+    };
+    const cancelledSummary = {
+      ...assaySummary,
+      reason: 'tech-lead cancelled from cockpit (operation abc12345)',
+      cancellation,
+    };
+    const deps = makeDeps();
+    deps.readRecentSummaries.mockReturnValue([cancelledSummary]);
+    deps.readSummary.mockReturnValue({ status: 'found', summary: cancelledSummary });
+
+    const result = createWorkRunDiagnostics(deps, 'assay').inspectRun({ runId: 'assay-run-1' }) as {
+      cancellation?: typeof cancellation;
+    };
+
+    expect(result.cancellation).toEqual(cancellation);
+  });
+
   it('lists only the authorized product and honors the requested limit', async () => {
     const service = createWorkRunDiagnostics(makeDeps(), 'assay');
     const result = await service.listRuns({ limit: 1 }) as { runs: Array<Record<string, unknown>> };

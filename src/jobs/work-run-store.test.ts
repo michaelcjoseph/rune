@@ -185,6 +185,45 @@ describe('readWorkRunSummaryResult', () => {
     writeSummary(join(tmpDir, 'valid-run'), valid);
     expect(readWorkRunSummaryResult(tmpDir, 'valid-run')).toEqual({ status: 'found', summary: valid });
   });
+
+  it('round-trips a valid nested-role cancellation through the typed reader', () => {
+    const summary = makeSummary({
+      id: 'nested-cancel-run',
+      cancellation: {
+        role: 'reviewer',
+        operationId: 'abc12345-1234-1234-1234-123456789abc',
+        source: 'telegram',
+        requestedAt: '2026-07-13T12:34:56.000Z',
+      },
+    });
+    writeSummary(join(tmpDir, summary.id), summary);
+    const summaryPath = join(tmpDir, summary.id, 'summary.json');
+    const persisted = JSON.parse(readFileSync(summaryPath, 'utf8'));
+    persisted.cancellation.unexpected = 'not part of the diagnostic DTO';
+    writeFileSync(summaryPath, JSON.stringify(persisted));
+
+    expect(readWorkRunSummaryResult(tmpDir, summary.id)).toEqual({
+      status: 'found',
+      summary,
+    });
+  });
+
+  it('rejects a persisted cancellation with an unknown source', () => {
+    const id = 'invalid-cancellation-run';
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      cancellation: {
+        role: 'reviewer',
+        operationId: 'abc12345-1234-1234-1234-123456789abc',
+        source: 'web',
+        requestedAt: '2026-07-13T12:34:56.000Z',
+      },
+    }));
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
 });
 
 // ---------------------------------------------------------------------------

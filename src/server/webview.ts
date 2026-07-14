@@ -2279,7 +2279,7 @@ function handleApiMutationsCancel(res: ServerResponse, id: string): void {
 }
 
 function handleApiOpsCancel(res: ServerResponse, id: string): void {
-  const ok = cancelOp(id);
+  const ok = cancelOp(id, 'cockpit');
   if (!ok) {
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'op not found or already terminal' }));

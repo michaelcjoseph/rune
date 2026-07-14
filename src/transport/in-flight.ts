@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus, BusOpEvent, OpKind } from './notification-bus.js';
 import { formatOpLabel } from './op-labels.js';
+import type { CancellationSource, OperationCancellation } from '../cancellation.js';
 
 const log = createLogger('in-flight');
 
@@ -16,7 +17,7 @@ export interface InFlightOp {
   startedAt: number;
   startedAtIso: string;
   child: ChildProcess;
-  cancelled: boolean;
+  cancellation?: OperationCancellation;
   /** Latest one-line description of what the op is currently doing
    *  (e.g. "Read: knowledge/index.md"). Updated by setOpDetail() and emitted
    *  on every subsequent op-event publish. */
@@ -163,7 +164,6 @@ export function registerOp(input: {
     startedAt: now,
     startedAtIso: new Date(now).toISOString(),
     child: input.child,
-    cancelled: false,
   };
   ops.set(op.opId, op);
   publishStart(op);
@@ -177,28 +177,42 @@ export function unregisterOp(opId: string, status: 'success' | 'error' | 'cancel
   ops.delete(opId);
   // If the op was previously cancelled, force status to 'cancelled' regardless
   // of how the subprocess actually exited (SIGTERM may report as either timeout
-  // or non-zero code; the cancel flag is the source of truth).
-  const finalStatus = op.cancelled ? 'cancelled' : status;
+  // or non-zero code; the structured record is the source of truth).
+  const finalStatus = op.cancellation !== undefined ? 'cancelled' : status;
   publishEnd(op, finalStatus, error);
 }
 
 export function isCancelled(opId: string): boolean {
-  return ops.get(opId)?.cancelled ?? false;
+  return ops.get(opId)?.cancellation !== undefined;
+}
+
+/** Read the accepted cancellation request while the operation is still
+ * registered. Callers must capture it before `unregisterOp()` removes the live
+ * child record. */
+export function getCancellation(opId: string): OperationCancellation | undefined {
+  const cancellation = ops.get(opId)?.cancellation;
+  return cancellation === undefined ? undefined : { ...cancellation };
 }
 
 /** Cancel a specific op by id. Returns true if the op was found and SIGTERM was sent.
  *
- *  Invariant: `op.cancelled = true` MUST be set synchronously before
+ *  Invariant: `op.cancellation` MUST be set synchronously before
  *  `child.kill('SIGTERM')` and this whole function MUST stay synchronous.
- *  `execClaude`'s `child.on('close')` reads `isCancelled(opId)` to decide
- *  whether to resolve with "Cancelled by user" vs. a timeout error — if an
- *  `await` were introduced between the flag assignment and the kill, a close
- *  event arriving in that window would misreport a user cancel as a timeout. */
-export function cancelOp(opId: string): boolean {
+ *  Executors read `getCancellation(opId)` in their close handlers before
+ *  unregistering. If an `await` were introduced between recording the request
+ *  and the kill, a close event in that window could misreport the cancellation
+ *  as a timeout. */
+export function cancelOp(opId: string, source: CancellationSource): boolean {
   const op = ops.get(opId);
   if (!op) return false;
-  if (op.cancelled) return true;
-  op.cancelled = true;
+  if (op.cancellation !== undefined) return true;
+  // Record synchronously before signalling. Repeated cancellation requests do
+  // not overwrite the original source/timestamp, even if SIGTERM is slow.
+  op.cancellation = {
+    operationId: op.opId,
+    source,
+    requestedAt: new Date().toISOString(),
+  };
   try {
     op.child.kill('SIGTERM');
   } catch (err) {
@@ -209,15 +223,18 @@ export function cancelOp(opId: string): boolean {
 
 /** Cancel the most-recently-started op for a given userId. Returns the cancelled
  *  op (public-shaped) so callers can echo a confirmation, or null if none active. */
-export function cancelMostRecentForUser(userId: number): InFlightOpPublic | null {
+export function cancelMostRecentForUser(
+  userId: number,
+  source: CancellationSource,
+): InFlightOpPublic | null {
   let latest: InFlightOp | null = null;
   for (const op of ops.values()) {
     if (op.userId !== userId) continue;
-    if (op.cancelled) continue;
+    if (op.cancellation !== undefined) continue;
     if (latest === null || op.startedAt > latest.startedAt) latest = op;
   }
   if (!latest) return null;
-  cancelOp(latest.opId);
+  cancelOp(latest.opId, source);
   return toPublic(latest);
 }
 
@@ -225,11 +242,14 @@ export function cancelMostRecentForUser(userId: number): InFlightOpPublic | null
  *  Minimum length is enforced here, but callers should validate user input
  *  upstream so users get a clearer error than a silent null. */
 export const CANCEL_PREFIX_MIN_CHARS = 4;
-export function cancelByPrefix(prefix: string): InFlightOpPublic | null {
+export function cancelByPrefix(
+  prefix: string,
+  source: CancellationSource,
+): InFlightOpPublic | null {
   if (prefix.length < CANCEL_PREFIX_MIN_CHARS) return null;
   for (const op of ops.values()) {
     if (op.opId.startsWith(prefix)) {
-      cancelOp(op.opId);
+      cancelOp(op.opId, source);
       return toPublic(op);
     }
   }

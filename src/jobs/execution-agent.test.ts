@@ -30,6 +30,7 @@ import {
 } from './execution-agent.js';
 import type { RoleModelBinding } from './team-task-deps.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
+import { cancelOp, listOps } from '../transport/in-flight.js';
 
 const {
   mockSpawn,
@@ -73,6 +74,7 @@ vi.mock('../config.js', () => ({
     WORK_RUN_REAP_GRACE_MS: 100,
     VAULT_DIR: '/tmp/test-vault',
     WORKSPACE_DIR: '/tmp/test-workspace',
+    TELEGRAM_USER_ID: 42,
   },
 }));
 
@@ -419,6 +421,60 @@ describe('runExecutionAgent — protected-service runtime prompt transport', () 
     expect(args[userPromptIndex + 1]).toBe('## Task\n\nImplement the selected task.');
     expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3847');
     expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3848');
+  });
+});
+
+describe('runExecutionAgent — structured cancellation', () => {
+  const cancellation = {
+    operationId: '12345678-1234-1234-1234-123456789abc',
+    source: 'cockpit' as const,
+    requestedAt: '2026-07-13T12:34:56.000Z',
+  };
+
+  it('propagates a cancelled Codex coder operation and registers it with a role label', async () => {
+    mockRunCodex.mockResolvedValue({
+      text: null,
+      error: 'Cancelled by user',
+      cancellation,
+    });
+
+    const result = await runExecutionAgent(makeOpts({ role: 'coder', model: coderModel }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result).toEqual({ ok: false, error: 'Cancelled by user', cancellation });
+    expect(mockRunCodex.mock.calls[0]![1]).toMatchObject({ opLabel: 'team:coder' });
+  });
+
+  it('registers a Claude QA child and returns the accepted cancellation metadata', async () => {
+    const child = makeControlledChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit('close', 143, null));
+      return true;
+    });
+    mockSpawn.mockReturnValue(child);
+
+    const pending = runExecutionAgent(makeOpts({ role: 'qa', model: claudeModel }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+    await Promise.resolve();
+    const op = listOps().find((candidate) => candidate.opId);
+    expect(op).toBeDefined();
+    cancelOp(op!.opId, 'telegram');
+
+    const result = await pending;
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'Cancelled by user',
+      cancellation: {
+        operationId: op!.opId,
+        source: 'telegram',
+        requestedAt: expect.any(String),
+      },
+    });
+    expect(listOps().some((candidate) => candidate.opId === op!.opId)).toBe(false);
   });
 });
 

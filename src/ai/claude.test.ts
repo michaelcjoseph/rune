@@ -11,6 +11,7 @@ vi.mock('../config.js', () => ({
     TIMEZONE: 'America/Chicago',
     CLAUDE_STREAM_LOG: '/tmp/test-logs/claude-stream.jsonl',
     MODEL_POLICY_FILE: '/tmp/test-project/policies/model-policy.json',
+    TELEGRAM_USER_ID: 42,
   },
   PROJECT_ROOT: '/tmp/test-project',
 }));
@@ -78,7 +79,7 @@ const { spawn } = await import('node:child_process');
 const { readFileSync } = await import('node:fs');
 const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, summarizeConversationMessages, markSessionCreated, loadAgentDef, getProjectMcpArgs, clearProjectMcpArgsCacheForTest } =
   await import('./claude.js');
-const { setInFlightBus } = await import('../transport/in-flight.js');
+const { cancelOp, listOps, setInFlightBus } = await import('../transport/in-flight.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
 
@@ -107,6 +108,14 @@ function createChild(opts: { stdout?: string; stderr?: string; code?: number; si
     if (stderr) child.stderr.emit('data', Buffer.from(stderr));
     child.emit('close', code, signal);
   });
+  return child;
+}
+
+function createControlledChild() {
+  const child = new EventEmitter() as any;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
   return child;
 }
 
@@ -423,6 +432,53 @@ describe('ai/claude', () => {
         opKind: 'chat',
         scope: 'aura',
       }));
+    });
+
+    it('returns structured cancellation metadata before unregistering the chat op', async () => {
+      const child = createControlledChild();
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit('close', 143, null));
+        return true;
+      });
+      spawnMock.mockReturnValue(child);
+
+      const pending = askClaudeWithContext('hi', 'ctx-cancel-metadata', 'sys', {
+        opLabel: 'team:tech-lead',
+      });
+      await Promise.resolve();
+      const op = listOps()[0];
+      expect(op).toBeDefined();
+      cancelOp(op!.opId, 'cockpit');
+
+      await expect(pending).resolves.toMatchObject({
+        text: null,
+        error: 'Cancelled by user',
+        cancellation: {
+          operationId: op!.opId,
+          source: 'cockpit',
+          requestedAt: expect.any(String),
+        },
+      });
+      expect(listOps()).toEqual([]);
+    });
+
+    it('preserves cancellation metadata when child error fires before close', async () => {
+      const child = createControlledChild();
+      spawnMock.mockReturnValue(child);
+      const pending = askClaudeWithContext('hi', 'ctx-cancel-error-race', 'sys', {
+        opLabel: 'team:tech-lead',
+      });
+      await Promise.resolve();
+      const op = listOps()[0]!;
+      cancelOp(op.opId, 'telegram');
+      child.emit('error', new Error('kill race'));
+      child.emit('close', 1, null);
+
+      await expect(pending).resolves.toMatchObject({
+        error: 'Cancelled by user',
+        cancellation: { operationId: op.opId, source: 'telegram' },
+      });
+      expect(listOps()).toEqual([]);
     });
 
     it('defaults to the vault cwd when no cwd is provided', async () => {

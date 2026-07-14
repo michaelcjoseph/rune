@@ -49,6 +49,7 @@ import {
   type GateRejectionFeedback,
   type ObjectionFinding,
   type ObjectionSeverity,
+  type RoleCancellation,
   type TaskEvidence,
 } from './team-task-workflow.js';
 import type { CancelReason } from '../transport/mutations.js';
@@ -172,7 +173,13 @@ export type OrchestrationResult =
       preserveWorktree?: true;
     }
   | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun }
-  | { kind: 'cancelled'; reason: CancelReason; task?: SelectedTask };
+  | {
+      kind: 'cancelled';
+      reason: CancelReason;
+      task?: SelectedTask;
+      /** Present when cancellation originated in a nested team role. */
+      cancellation?: RoleCancellation;
+    };
 
 export interface ParkedTaskRun {
   status: 'blocked-on-human';
@@ -717,6 +724,14 @@ async function resolveNonCloseoutEvidence(
   evidence: TaskEvidence,
   taskRecords: TaskRunRecord[],
 ): Promise<OrchestrationResult> {
+  if (evidence.outcome === 'cancelled' && evidence.cancellation !== undefined) {
+    return {
+      kind: 'cancelled',
+      reason: evidence.cancellation.source === 'internal' ? 'system' : 'user',
+      task,
+      cancellation: evidence.cancellation,
+    };
+  }
   if (hasNonReversibleSevereTerminalFinding(evidence)) {
     const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
       missingWriter: 'ok',

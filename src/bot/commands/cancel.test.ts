@@ -56,7 +56,7 @@ describe('handleCancel', () => {
       const sender = mockSender();
       await handleCancel(sender, 42, '');
       expect(mockCancelMostRecentForUser).toHaveBeenCalledOnce();
-      expect(mockCancelMostRecentForUser).toHaveBeenCalledWith(42);
+      expect(mockCancelMostRecentForUser).toHaveBeenCalledWith(42, 'telegram');
     });
 
     it('does not call cancelByPrefix when arg is empty', async () => {
@@ -85,7 +85,7 @@ describe('handleCancel', () => {
     it('handles arg with whitespace only as bare cancel', async () => {
       // '   '.trim() === '' so it should behave like bare /cancel
       await handleCancel(mockSender(), 42, '   ');
-      expect(mockCancelMostRecentForUser).toHaveBeenCalledWith(42);
+      expect(mockCancelMostRecentForUser).toHaveBeenCalledWith(42, 'telegram');
       expect(mockCancelByPrefix).not.toHaveBeenCalled();
     });
   });
@@ -95,7 +95,7 @@ describe('handleCancel', () => {
       const sender = mockSender();
       await handleCancel(sender, 42, 'abc123de');
       expect(mockCancelByPrefix).toHaveBeenCalledOnce();
-      expect(mockCancelByPrefix).toHaveBeenCalledWith('abc123de');
+      expect(mockCancelByPrefix).toHaveBeenCalledWith('abc123de', 'telegram');
     });
 
     it('does not call cancelMostRecentForUser when a prefix is given', async () => {

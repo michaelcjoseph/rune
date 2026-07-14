@@ -47,6 +47,7 @@ import { runPostMortem } from '../intent/postmortem.js';
 import type { FeedbackRecord, RoleStage } from '../intent/feedback-record.js';
 import {
   mapObjectionSeverityToOutcome,
+  RoleCancellationError,
   runTeamTaskWorkflow,
   type ObjectionClass,
   type ObjectionFinding,
@@ -186,6 +187,7 @@ export interface JudgmentModelCall {
     model: string;
     provider?: DispatchProvider;
     format?: RoleModelBinding['format'];
+    product?: string;
     systemPrompt: string;
     message: string;
     sessionId?: string;
@@ -213,14 +215,22 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
   format = 'claude',
   systemPrompt,
   message,
+  product,
   sessionId: providedSessionId,
 }) => {
   if (format === 'codex') {
     const result = await runCodex(`${systemPrompt}\n\n${message}`, {
       model,
       sandboxMode: 'read-only',
+      opLabel: `team:${role}`,
+      opKind: 'agent',
+      agentName: role,
+      ...(product !== undefined ? { product } : {}),
       env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
     });
+    if (result.cancellation !== undefined) {
+      throw new RoleCancellationError(role, result.cancellation);
+    }
     if (result.error) {
       throw new Error(`team role '${role}' model call failed: ${result.error}`);
     }
@@ -233,7 +243,13 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
     const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
       model,
       opLabel: `team:${role}`,
+      opKind: 'agent',
+      agentName: role,
+      ...(product !== undefined ? { product } : {}),
     });
+    if (result.cancellation !== undefined) {
+      throw new RoleCancellationError(role, result.cancellation);
+    }
     if (result.error) {
       throw new Error(`team role '${role}' model call failed: ${result.error}`);
     }
@@ -756,7 +772,7 @@ export interface BuildTeamTaskDepsArgs {
 }
 
 /** Compose a judgment role's two-channel charter prompt and run one call. */
-function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string) {
+function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string, product: string) {
   return (role: RoleName, binding: RoleModelBinding, instruction: string, body: string) => {
     const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const message = ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body;
@@ -765,6 +781,7 @@ function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string) {
       model: binding.alias,
       provider: binding.provider,
       format: binding.format,
+      product,
       systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       message,
     });
@@ -927,7 +944,7 @@ export function buildProductionTeamTaskDeps(
   const { sandbox, productsConfigPath, models } = args;
   const validationCommands = args.validationCommands ?? [];
   const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
-  const judge = makeJudge(seams, projectExemplarsDir);
+  const judge = makeJudge(seams, projectExemplarsDir, sandbox.product);
 
   // The QA work product, retained so the tech-lead reviews actual test
   // content rather than bare file paths (QaResult carries only testIds).
@@ -983,6 +1000,7 @@ export function buildProductionTeamTaskDeps(
         },
       });
     } catch (err) {
+      if (err instanceof RoleCancellationError) throw err;
       log.warn('Gate-triggered learning failed', { error: (err as Error).message });
     }
   };
@@ -1000,7 +1018,7 @@ export function buildProductionTeamTaskDeps(
     const emit = args.emit
       ? attributeRoleEvents(args.emit, role, binding)
       : undefined;
-    return seams.runExecution({
+    const result = await seams.runExecution({
       systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       prompt: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
       sandbox,
@@ -1009,6 +1027,10 @@ export function buildProductionTeamTaskDeps(
       productsConfigPath,
       ...(emit !== undefined ? { emit } : {}),
     });
+    if (!result.ok && result.cancellation !== undefined) {
+      throw new RoleCancellationError(role, result.cancellation);
+    }
+    return result;
   };
 
   return {
@@ -1214,6 +1236,7 @@ export function buildProductionTeamTaskDeps(
         ];
         return { kind: 'repaired', testIds, redCheck };
       } catch (err) {
+        if (err instanceof RoleCancellationError) throw err;
         return notRepaired(`tech-lead repair failed: ${(err as Error).message}`);
       }
     },
@@ -1271,6 +1294,7 @@ export function buildProductionTeamTaskDeps(
               model: models.coder.alias,
               provider: models.coder.provider,
               format: models.coder.format,
+              product: sandbox.product,
               systemPrompt,
               message,
               sessionId,
@@ -1278,6 +1302,7 @@ export function buildProductionTeamTaskDeps(
           },
         });
       } catch (err) {
+        if (err instanceof RoleCancellationError) throw err;
         throw new Error(`coder self-review failed: ${(err as Error).message}`);
       }
     },

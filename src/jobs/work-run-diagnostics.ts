@@ -154,7 +154,11 @@ function summaryRow(summary: WorkRunSummary | null, supervised: SupervisedRun | 
       slug: summary?.project ?? supervised?.project ?? 'unknown',
     },
     state: stateOf(summary, supervised),
-    ...(summary ? { outcome: summary.outcome, reason: summary.reason } : {}),
+    ...(summary ? {
+      outcome: summary.outcome,
+      reason: summary.reason,
+      ...(summary.cancellation !== undefined ? { cancellation: summary.cancellation } : {}),
+    } : {}),
     startedAt: summary?.startedAt ?? supervised?.startedAt,
     ...(summary?.endedAt ? { endedAt: summary.endedAt } : {}),
     ...(supervised?.lastHeartbeatAt ? { lastProgressAt: supervised.lastOutputAt ?? supervised.lastHeartbeatAt } : {}),

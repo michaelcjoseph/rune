@@ -18,7 +18,13 @@ import { appendInteraction } from '../utils/observation-log.js';
 // model-policy.ts is a leaf (node:fs + logger only) — no import cycle.
 import { resolveModel, loadModelPolicy } from '../intent/model-policy.js';
 import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
-import { registerOp, unregisterOp, isCancelled, setOpDetail } from '../transport/in-flight.js';
+import {
+  getCancellation,
+  registerOp,
+  unregisterOp,
+  setOpDetail,
+} from '../transport/in-flight.js';
+import type { OperationCancellation } from '../cancellation.js';
 import { formatToolUse } from './tool-labels.js';
 
 const log = createLogger('claude');
@@ -243,6 +249,9 @@ export function assertProjectMcpConfig(): void {
 export interface ClaudeResult {
   text: string | null;
   error: string | null;
+  /** Structured first-request cancellation captured before the live operation
+   * is unregistered. Present only when this spawn was cancelled through Rune. */
+  cancellation?: OperationCancellation;
 }
 
 // Per-session queue to prevent concurrent CLI writes to the same session
@@ -437,6 +446,12 @@ function execClaude(
   const childEnv = buildClaudeChildEnv(envMode);
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: ClaudeResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
     const child = spawn(CLAUDE_BIN, fullArgs, {
       // Explicit cwd (product-chat working repo) wins; otherwise a write-scoped
       // agent's cwd; otherwise the vault. rune-kb resolves regardless of cwd
@@ -503,6 +518,7 @@ function execClaude(
     });
 
     child.on('close', (code, signal) => {
+      if (settled) return;
       clearTimeout(timer);
       activeProcesses.delete(child);
       // Flush any trailing partial line as a best-effort parse.
@@ -518,9 +534,10 @@ function execClaude(
       const successText = streaming
         ? (streamState.resultText ?? streamState.finalText)
         : stdout;
-      if (opId !== null && isCancelled(opId)) {
+      const cancellation = opId === null ? undefined : getCancellation(opId);
+      if (opId !== null && cancellation !== undefined) {
         unregisterOp(opId, 'cancelled', 'Cancelled by user');
-        resolve({ text: null, error: 'Cancelled by user' });
+        finish({ text: null, error: 'Cancelled by user', cancellation });
       } else if (timedOut) {
         const tail = (s: string) => s.slice(-500).trim();
         log.error('Claude CLI timed out', {
@@ -532,41 +549,43 @@ function execClaude(
         });
         const error = `Claude timed out after ${timeout / 1000}s`;
         if (opId) unregisterOp(opId, 'error', error);
-        resolve({ text: null, error });
+        finish({ text: null, error });
       } else if (code !== 0) {
         const error = stderr.trim() || `Claude exited with code ${code}`;
         log.error('Claude CLI failed', { code, error, args: args.slice(0, 3) });
         if (opId) unregisterOp(opId, 'error', error);
-        resolve({ text: null, error });
+        finish({ text: null, error });
       } else {
         if (opId) unregisterOp(opId, 'success');
-        resolve({ text: successText.trim(), error: null });
+        finish({ text: successText.trim(), error: null });
       }
     });
 
     child.on('error', (err) => {
       clearTimeout(timer);
       activeProcesses.delete(child);
-      if (opId) unregisterOp(opId, 'error', err.message);
+      const cancellation = opId === null ? undefined : getCancellation(opId);
+      if (opId) {
+        unregisterOp(
+          opId,
+          cancellation !== undefined ? 'cancelled' : 'error',
+          cancellation !== undefined ? 'Cancelled by user' : err.message,
+        );
+      }
       log.error('Claude CLI spawn error', { error: err.message, args: args.slice(0, 3) });
-      resolve({ text: null, error: err.message });
+      finish(cancellation !== undefined
+        ? { text: null, error: 'Cancelled by user', cancellation }
+        : { text: null, error: err.message });
     });
   });
 }
 
+type ClaudeSessionOpts = AskClaudeWithContextOpts & { systemPrompt?: string };
+
 function askClaudeSession(
   message: string,
   sessionId: string,
-  model?: string,
-  systemPrompt?: string,
-  allowedTools?: string[],
-  opLabel?: string,
-  voice?: boolean,
-  cwd?: string,
-  writableRoots?: string[],
-  envMode?: ClaudeChildEnvMode,
-  product?: string,
-  mcpArgs?: string[],
+  opts: ClaudeSessionOpts = {},
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -575,20 +594,36 @@ function askClaudeSession(
       : ['-p', message, '--session-id', sessionId];
     // Voice is appended to the system prompt so it persists across all turns in
     // the session without being repeated in every user message.
-    const voiceBlock = voice ? buildVoicePromptSection() : '';
+    const voiceBlock = opts.voice ? buildVoicePromptSection() : '';
     const composedSystemPrompt = voiceBlock
-      ? (systemPrompt ? `${systemPrompt}\n\n${voiceBlock}` : voiceBlock)
-      : systemPrompt;
+      ? (opts.systemPrompt ? `${opts.systemPrompt}\n\n${voiceBlock}` : voiceBlock)
+      : opts.systemPrompt;
     if (composedSystemPrompt) args.push('--append-system-prompt', composedSystemPrompt);
-    if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
+    if (opts.allowedTools && opts.allowedTools.length > 0) {
+      args.push('--allowedTools', ...opts.allowedTools);
+    }
     // This is the Claude-only primitive. Provider-neutral chat resolves before
     // reaching here, so its fallback must remain a Claude alias even when the
     // application's default chat model is OpenAI-backed.
-    args.push('--model', model || config.ONESHOT_MODEL);
-    const opMeta: OpMeta | undefined = opLabel
-      ? { kind: 'chat', label: opLabel, ...(product ? { scope: product } : {}) }
+    args.push('--model', opts.model || config.ONESHOT_MODEL);
+    const opMeta: OpMeta | undefined = opts.opLabel
+      ? {
+          kind: opts.opKind ?? 'chat',
+          label: opts.opLabel,
+          ...(opts.agentName ? { agentName: opts.agentName } : {}),
+          ...(opts.product ? { scope: opts.product } : {}),
+        }
       : undefined;
-    const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots, envMode ?? 'default', mcpArgs);
+    const result = await execClaude(
+      args,
+      undefined,
+      opMeta,
+      undefined,
+      opts.cwd,
+      opts.writableRoots,
+      opts.envMode ?? 'default',
+      opts.mcpArgs,
+    );
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -601,7 +636,7 @@ function askClaudeSession(
  *  webview); omit for background/non-interactive callers. Pass `voice: true`
  *  for callers that produce prose the user reads (see src/vault/voice.ts). */
 export async function askClaude(message: string, sessionId: string, model?: string, opLabel?: string, voice?: boolean): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model, undefined, undefined, opLabel, voice);
+  return askClaudeSession(message, sessionId, { model, opLabel, voice });
 }
 
 /** Options for `askClaudeWithContext`. Bag-shaped because this entry point
@@ -615,6 +650,10 @@ export interface AskClaudeWithContextOpts {
   /** Friendly label for the in-flight op tracker (TG message, webview pill).
    *  Omit for background/non-interactive callers. */
   opLabel?: string;
+  /** Operation category for non-chat callers that share this executor. */
+  opKind?: OpKind;
+  /** Role/agent attribution for operation feeds. */
+  agentName?: string;
   /** Prepend the user's writing voice (see src/vault/voice.ts). Set for callers
    *  that produce prose the user reads; leave unset for structured output. */
   voice?: boolean;
@@ -645,20 +684,7 @@ export async function askClaudeWithContext(
   systemPrompt: string,
   opts: AskClaudeWithContextOpts = {},
 ): Promise<ClaudeResult> {
-  return askClaudeSession(
-    message,
-    sessionId,
-    opts.model,
-    systemPrompt,
-    opts.allowedTools,
-    opts.opLabel,
-    opts.voice,
-    opts.cwd,
-    opts.writableRoots,
-    opts.envMode,
-    opts.product,
-    opts.mcpArgs,
-  );
+  return askClaudeSession(message, sessionId, { ...opts, systemPrompt });
 }
 
 /** Trailing options for `askClaudeOneShot` — additive so existing positional

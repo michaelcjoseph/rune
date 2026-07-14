@@ -248,6 +248,47 @@ type TerminalBugRecordingDeps = OrchestrationDeps & {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — cancellation boundaries', () => {
+  it.each([
+    ['tech-lead', 'telegram', 'user'],
+    ['qa', 'cockpit', 'user'],
+    ['coder', 'internal', 'system'],
+    ['reviewer', 'cockpit', 'user'],
+  ] as const)(
+    'maps nested %s cancellation from %s to the %s cancellation terminal',
+    async (role, source, reason) => {
+      const cancellation = {
+        role,
+        operationId: '12345678-1234-1234-1234-123456789abc',
+        source,
+        requestedAt: '2026-07-13T12:34:56.000Z',
+      } as const;
+      const h = makeHarness({
+        runTaskWorkflow: async (task) => ({
+          taskId: task.id,
+          outcome: 'cancelled',
+          rolesInvoked: [role],
+          findingsLedger: [],
+          loopExitReason: 'operational',
+          objectionOpen: false,
+          handoffNotes: [],
+          cancellation,
+        }),
+      });
+
+      const result = await runProjectOrchestration(h.deps);
+
+      expect(result).toMatchObject({
+        kind: 'cancelled',
+        reason,
+        cancellation,
+        task: { text: 'Build the streak core' },
+      });
+      expect(h.state.tasksMd).toBe(TWO_TASKS);
+      expect(h.state.commits).toEqual([]);
+      expect(h.state.finalizeCalled).toBe(false);
+    },
+  );
+
   it('cancels before first task selection without workflow, closeout, or finalizer', async () => {
     const h = makeHarness({
       cancel: () => true,

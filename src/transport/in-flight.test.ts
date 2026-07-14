@@ -21,6 +21,7 @@ const {
   cancelByPrefix,
   listOps,
   isCancelled,
+  getCancellation,
   setInFlightBus,
   setOpDetail,
 } = await import('./in-flight.js');
@@ -139,7 +140,7 @@ describe('in-flight op registry', () => {
       // at least ensure the call doesn't throw.
       const child = makeChildProcess();
       const op = registerOp({ kind: 'agent', label: 'x', userId: 42, child });
-      cancelOp(op.opId); // marks as cancelled
+      cancelOp(op.opId, 'internal'); // marks as cancelled
       expect(() => unregisterOp(op.opId, 'success')).not.toThrow();
     });
   });
@@ -152,7 +153,7 @@ describe('in-flight op registry', () => {
 
     it('returns true after cancelOp has been called', () => {
       const op = registerOp(makeOp());
-      cancelOp(op.opId);
+      cancelOp(op.opId, 'internal');
       expect(isCancelled(op.opId)).toBe(true);
     });
 
@@ -162,23 +163,49 @@ describe('in-flight op registry', () => {
   });
 
   describe('cancelOp', () => {
+    it('records structured metadata before SIGTERM and retains it until unregister', () => {
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'metadata', userId: 42, child });
+      child.kill.mockImplementation(() => {
+        expect(getCancellation(op.opId)).toMatchObject({
+          operationId: op.opId,
+          source: 'cockpit',
+        });
+      });
+
+      cancelOp(op.opId, 'cockpit');
+      const cancellation = getCancellation(op.opId);
+      expect(cancellation?.requestedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      unregisterOp(op.opId, 'cancelled');
+      expect(getCancellation(op.opId)).toBeUndefined();
+    });
+
+    it('keeps the first cancellation request on repeated cancellation', () => {
+      const op = registerOp(makeOp());
+      cancelOp(op.opId, 'telegram');
+      const first = getCancellation(op.opId);
+      cancelOp(op.opId, 'cockpit');
+      expect(getCancellation(op.opId)).toEqual(first);
+      expect(first?.source).toBe('telegram');
+    });
+
     it('returns true and sends SIGTERM to the child process', () => {
       const child = makeChildProcess();
       const op = registerOp({ kind: 'agent', label: 'y', userId: 42, child });
-      const result = cancelOp(op.opId);
+      const result = cancelOp(op.opId, 'internal');
       expect(result).toBe(true);
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     });
 
     it('returns false for a nonexistent opId', () => {
-      expect(cancelOp('does-not-exist')).toBe(false);
+      expect(cancelOp('does-not-exist', 'internal')).toBe(false);
     });
 
     it('is idempotent — second cancelOp returns true without re-killing', () => {
       const child = makeChildProcess();
       const op = registerOp({ kind: 'agent', label: 'z', userId: 42, child });
-      cancelOp(op.opId);
-      cancelOp(op.opId);
+      cancelOp(op.opId, 'internal');
+      cancelOp(op.opId, 'internal');
       // kill should only have been called once
       expect(child.kill).toHaveBeenCalledOnce();
     });
@@ -187,18 +214,18 @@ describe('in-flight op registry', () => {
       const child = makeChildProcess();
       child.kill.mockImplementation(() => { throw new Error('process already dead'); });
       const op = registerOp({ kind: 'agent', label: 'fragile', userId: 42, child });
-      expect(() => cancelOp(op.opId)).not.toThrow();
+      expect(() => cancelOp(op.opId, 'internal')).not.toThrow();
     });
   });
 
   describe('cancelMostRecentForUser', () => {
     it('returns null when no ops are registered', () => {
-      expect(cancelMostRecentForUser(42)).toBeNull();
+      expect(cancelMostRecentForUser(42, 'internal')).toBeNull();
     });
 
     it('returns null when the user has no ops', () => {
       registerOp(makeOp({ userId: 99 }));
-      expect(cancelMostRecentForUser(42)).toBeNull();
+      expect(cancelMostRecentForUser(42, 'internal')).toBeNull();
     });
 
     it('cancels and returns the most recently started op for the user', async () => {
@@ -210,7 +237,7 @@ describe('in-flight op registry', () => {
       const child2 = makeChildProcess();
       registerOp({ kind: 'agent', label: 'second', userId: 42, child: child2 });
 
-      const cancelled = cancelMostRecentForUser(42);
+      const cancelled = cancelMostRecentForUser(42, 'internal');
       expect(cancelled).not.toBeNull();
       // 'second' has no friendly mapping, falls through to titleCase.
       expect(cancelled!.label).toBe('Second');
@@ -225,23 +252,23 @@ describe('in-flight op registry', () => {
       const op1 = registerOp({ kind: 'agent', label: 'older-active', userId: 42, child: child1 });
       const child2 = makeChildProcess();
       const op2 = registerOp({ kind: 'agent', label: 'newer-cancelled', userId: 42, child: child2 });
-      cancelOp(op2.opId); // pre-cancel the newer one
+      cancelOp(op2.opId, 'internal'); // pre-cancel the newer one
 
-      const cancelled = cancelMostRecentForUser(42);
+      const cancelled = cancelMostRecentForUser(42, 'internal');
       expect(cancelled!.opId).toBe(op1.opId);
     });
 
     it('does not affect ops for other users', () => {
       const child1 = makeChildProcess();
       registerOp({ kind: 'agent', label: 'user-99-op', userId: 99, child: child1 });
-      cancelMostRecentForUser(42);
+      cancelMostRecentForUser(42, 'internal');
       expect(child1.kill).not.toHaveBeenCalled();
     });
 
     it('returns public shape without child process', () => {
       const child = makeChildProcess();
       registerOp({ kind: 'agent', label: 'pub-test', userId: 42, child });
-      const pub = cancelMostRecentForUser(42);
+      const pub = cancelMostRecentForUser(42, 'internal');
       expect(pub).not.toBeNull();
       expect('child' in pub!).toBe(false);
       expect(typeof pub!.elapsedMs).toBe('number');
@@ -250,19 +277,19 @@ describe('in-flight op registry', () => {
 
   describe('cancelByPrefix', () => {
     it('returns null when prefix is too short (< 4 chars)', () => {
-      expect(cancelByPrefix('ab')).toBeNull();
+      expect(cancelByPrefix('ab', 'internal')).toBeNull();
     });
 
     it('returns null when no op matches the prefix', () => {
       registerOp(makeOp());
-      expect(cancelByPrefix('zzzz-0000')).toBeNull();
+      expect(cancelByPrefix('zzzz-0000', 'internal')).toBeNull();
     });
 
     it('finds and cancels an op by id prefix', () => {
       const child = makeChildProcess();
       const op = registerOp({ kind: 'agent', label: 'prefix-test', userId: 42, child });
       const prefix = op.opId.slice(0, 8);
-      const pub = cancelByPrefix(prefix);
+      const pub = cancelByPrefix(prefix, 'internal');
       expect(pub).not.toBeNull();
       expect(pub!.opId).toBe(op.opId);
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
@@ -271,7 +298,7 @@ describe('in-flight op registry', () => {
     it('returns public shape with correct fields', () => {
       const child = makeChildProcess();
       const op = registerOp({ kind: 'one-shot', label: 'prefix-pub', userId: 55, child });
-      const pub = cancelByPrefix(op.opId.slice(0, 4));
+      const pub = cancelByPrefix(op.opId.slice(0, 4), 'internal');
       // 'prefix-pub' has no friendly mapping → titleCase.
       expect(pub!.label).toBe('Prefix Pub');
       expect(pub!.userId).toBe(55);
@@ -442,9 +469,9 @@ describe('in-flight op registry', () => {
 
       const child = makeChildProcess();
       const op = registerOp({ kind: 'agent', label: 'cancel-end', userId: 42, child });
-      cancelOp(op.opId);
+      cancelOp(op.opId, 'internal');
       publishMock.mockClear();
-      unregisterOp(op.opId, 'success'); // caller says success, but op.cancelled wins
+      unregisterOp(op.opId, 'success'); // caller says success, but cancellation metadata wins
 
       const event = publishMock.mock.calls[0]![0];
       expect(event.subKind).toBe('end');

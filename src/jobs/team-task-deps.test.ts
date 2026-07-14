@@ -42,6 +42,7 @@ import {
 } from './orchestrated-work-runner.js';
 import { parsePolicy, type ModelEntry, type ModelPolicy } from '../intent/model-policy.js';
 import {
+  RoleCancellationError,
   runTeamTaskWorkflow,
   type FindingsLedgerEntry,
   type TeamTaskDeps,
@@ -440,10 +441,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
   });
 
   it('routes coder self-review through the coder model binding, not the judgment-role binding', async () => {
-    const calls: Array<{ role: string; model: string; provider?: string; format?: string; selfReview: boolean }> = [];
-    const judgment: JudgmentModelCall = async ({ role, model, provider, format, message }) => {
+    const calls: Array<{ role: string; model: string; provider?: string; format?: string; product?: string; selfReview: boolean }> = [];
+    const judgment: JudgmentModelCall = async ({ role, model, provider, format, product, message }) => {
       const selfReviewEcho = echoSelfReviewArtifact(message);
-      calls.push({ role, model, provider, format, selfReview: selfReviewEcho !== undefined });
+      calls.push({ role, model, provider, format, product, selfReview: selfReviewEcho !== undefined });
       if (selfReviewEcho !== undefined) return selfReviewEcho;
       return GREEN_JUDGMENT_REPLY;
     };
@@ -462,6 +463,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       model: policy.roleDefaults['coder'],
       provider: 'openai',
       format: 'codex',
+      product: 'rune',
       selfReview: true,
     });
   });
@@ -1476,6 +1478,42 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
 // ---------------------------------------------------------------------------
 
 describe('no-stub regression (Phase 8)', () => {
+  it.each(['qa', 'tech-lead', 'coder', 'reviewer'] as const)(
+    'preserves structured %s cancellation across production role bindings',
+    async (cancelledRole) => {
+      const cancellation = {
+        operationId: '12345678-1234-1234-1234-123456789abc',
+        source: 'cockpit' as const,
+        requestedAt: '2026-07-13T12:34:56.000Z',
+      };
+      const run = createProductionTaskWorkflowRunner(
+        {
+          sandbox: makeSandbox(),
+          productsConfigPath: '/nonexistent/products.json',
+          modelPolicyPath: REAL_POLICY_PATH,
+        },
+        makeSeams({
+          judgmentCall: async (input) => {
+            if (input.role === cancelledRole) {
+              throw new RoleCancellationError(cancelledRole, cancellation);
+            }
+            return greenJudgment(input);
+          },
+          runExecution: async (opts) => opts.role === cancelledRole
+            ? { ok: false, error: 'Cancelled by user', cancellation }
+            : greenExecution(),
+        }),
+      );
+
+      const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+      expect(evidence).toMatchObject({
+        outcome: 'cancelled',
+        cancellation: { role: cancelledRole, ...cancellation },
+      });
+    },
+  );
+
   it('the orchestrated applier production runtime binds createProductionTaskWorkflowRunner', () => {
     __resetOrchestratedRuntimeForTest();
     const runtime = __getRuntimeDepsForTest();

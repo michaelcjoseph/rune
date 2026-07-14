@@ -24,8 +24,32 @@ import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classi
 import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 import { readJsonlTail } from './jsonl-tail.js';
 import type { WorkRunTarget } from '../intent/run-target.js';
+import type { OperationCancellation } from '../cancellation.js';
 
 const log = createLogger('work-run-store');
+
+export interface WorkRunCancellation extends OperationCancellation {
+  role: string;
+}
+
+/** Parse the durable cancellation correlation shape at persistence boundaries. */
+export function parseWorkRunCancellation(value: unknown): WorkRunCancellation | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const source = record['source'];
+  if (
+    typeof record['role'] !== 'string' ||
+    typeof record['operationId'] !== 'string' ||
+    (source !== 'telegram' && source !== 'cockpit' && source !== 'internal') ||
+    typeof record['requestedAt'] !== 'string'
+  ) return undefined;
+  return {
+    role: record['role'],
+    operationId: record['operationId'],
+    source,
+    requestedAt: record['requestedAt'],
+  };
+}
 
 /** Contents of `logs/work-runs/<id>/summary.json` — the run's outcome facts
  *  (spec requirement 9) plus paths to the transcript and forensics. */
@@ -60,6 +84,8 @@ export interface WorkRunSummary {
    *  refusal reason) — persisted so the hold reason survives a restart and
    *  reaches the cockpit, not just the live Telegram notification. */
   gateHeldReason?: string;
+  /** Durable correlation for a nested team-role cancellation. */
+  cancellation?: WorkRunCancellation;
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */
@@ -149,6 +175,10 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   }
   const s = parsed as Partial<WorkRunSummary>;
   const rawTarget = (parsed as Record<string, unknown>)['target'];
+  const rawCancellation = (parsed as Record<string, unknown>)['cancellation'];
+  const cancellation = rawCancellation === undefined
+    ? undefined
+    : parseWorkRunCancellation(rawCancellation);
   const targetValid = rawTarget === undefined || (
     rawTarget !== null &&
     typeof rawTarget === 'object' &&
@@ -158,14 +188,20 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     typeof (rawTarget as Record<string, unknown>)['slug'] === 'string' &&
     ((rawTarget as Record<string, unknown>)['slug'] as string).trim() !== ''
   );
+  const cancellationValid = rawCancellation === undefined || cancellation !== undefined;
   if (
     s.id === id &&
     typeof s.product === 'string' &&
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
-    targetValid
+    targetValid &&
+    cancellationValid
   ) {
-    return { status: 'found', summary: s as WorkRunSummary };
+    const summary = {
+      ...s,
+      ...(cancellation !== undefined ? { cancellation } : {}),
+    } as WorkRunSummary;
+    return { status: 'found', summary };
   }
   log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
   return { status: 'invalid' };

@@ -3458,6 +3458,63 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it('persists a nested role cancellation with a direct terminal reason and correlation record', async () => {
+      const runId = 'mut-nested-role-cancel';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-nested-cancel-artifacts-'));
+      const cancellation = {
+        role: 'tech-lead' as const,
+        operationId: 'abc12345-1234-1234-1234-123456789abc',
+        source: 'cockpit' as const,
+        requestedAt: '2026-07-13T12:34:56.000Z',
+      };
+      const { runGit } = makeWorkProductGitStub({ commitShas: [], diffstat: '', status: '' });
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => { destroyed = true; },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (): Promise<OrchestrationResult> => ({
+          kind: 'cancelled',
+          reason: 'user',
+          task: { id: 'task-one', text: 'Task one', section: 'Phase 1' },
+          cancellation,
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const summary = JSON.parse(
+          readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8'),
+        ) as Record<string, any>;
+
+        expect(terminal).toMatchObject({
+          kind: 'failed',
+          data: {
+            cancelReason: 'user',
+            reason: 'tech-lead cancelled from cockpit (operation abc12345)',
+            cancellation,
+          },
+        });
+        expect(String((terminal!.data as Record<string, unknown>)['reason']))
+          .not.toMatch(/orchestration blocked|model call failed/i);
+        expect(summary).toMatchObject({
+          reason: 'tech-lead cancelled from cockpit (operation abc12345)',
+          cancellation,
+          exit: { cancelled: true, exitFact: 'user-cancel' },
+        });
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('maps system cancellation to work-product-classified completed artifacts', async () => {
       const runId = 'mut-system-cancel';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-system-cancel-artifacts-'));

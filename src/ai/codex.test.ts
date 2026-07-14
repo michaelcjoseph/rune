@@ -16,7 +16,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 vi.mock('../config.js', () => ({
-  default: { CLAUDE_TIMEOUT_MS: 600_000 },
+  default: { CLAUDE_TIMEOUT_MS: 600_000, TELEGRAM_USER_ID: 42 },
   PROJECT_ROOT: '/test/project',
 }));
 
@@ -295,6 +295,53 @@ describe('ai/codex', () => {
 
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       expect(result.error).toMatch(/timeout|timed out/i);
+    });
+
+    it('returns structured cancellation metadata for a registered Codex op', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = createChild({ neverClose: true });
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit('close', 143, null));
+        return true;
+      });
+      spawnMock.mockReturnValue(child);
+      const { cancelOp, listOps } = await import('../transport/in-flight.js');
+      const { runCodex } = await import('./codex.js');
+
+      const pending = runCodex('my prompt', { opLabel: 'team:reviewer' });
+      const op = listOps()[0];
+      expect(op).toBeDefined();
+      cancelOp(op!.opId, 'telegram');
+
+      await expect(pending).resolves.toMatchObject({
+        text: null,
+        error: 'Cancelled by user',
+        cancellation: {
+          operationId: op!.opId,
+          source: 'telegram',
+          requestedAt: expect.any(String),
+        },
+      });
+      expect(listOps()).toEqual([]);
+    });
+
+    it('preserves cancellation metadata when child error fires before close', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = createChild({ neverClose: true });
+      spawnMock.mockReturnValue(child);
+      const { cancelOp, listOps } = await import('../transport/in-flight.js');
+      const { runCodex } = await import('./codex.js');
+      const pending = runCodex('my prompt', { opLabel: 'team:reviewer' });
+      const op = listOps()[0]!;
+      cancelOp(op.opId, 'cockpit');
+      child.emit('error', new Error('kill race'));
+      child.emit('close', 1, null);
+
+      await expect(pending).resolves.toMatchObject({
+        error: 'Cancelled by user',
+        cancellation: { operationId: op.opId, source: 'cockpit' },
+      });
+      expect(listOps()).toEqual([]);
     });
 
     it('registers the child via registerActiveProcess and unregisters on close', async () => {
