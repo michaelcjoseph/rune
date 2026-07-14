@@ -14,8 +14,6 @@ if (typeof vaultDir !== 'string' || !vaultDir) {
 
 for (const key of Object.keys(process.env)) delete process.env[key];
 process.env['VAULT_DIR'] = vaultDir;
-process.env['TELEGRAM_BOT_TOKEN'] = 'artifact-mcp-readonly';
-process.env['TELEGRAM_USER_ID'] = '0';
 
 const [{ createRuneMcpServer }, vaultIndex] = await Promise.all([
   import('./server.js'),

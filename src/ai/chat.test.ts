@@ -104,6 +104,11 @@ describe('provider-aware chat', () => {
       writeEnabled: true,
       cwd: '/workspace/rune',
     });
+    const configOverrides = runCodex.mock.calls[0]![1].configOverrides as string[];
+    expect(configOverrides).toHaveLength(1);
+    expect(configOverrides[0]).toContain('cockpit_list_runs');
+    expect(configOverrides[0]).toContain('cockpit_inspect_run');
+    expect(configOverrides[0]).toContain('cockpit_active_runs');
   });
 
   it('scrubs the environment for global and product Codex chats alike', async () => {
@@ -259,6 +264,24 @@ describe('provider-aware chat', () => {
       writeEnabled: true,
       cwd: '/workspace/rune',
     });
+    const configOverrides = runCodex.mock.calls[0]![1].configOverrides as string[];
+    expect(configOverrides).toHaveLength(1);
+    expect(configOverrides[0]).toContain('cockpit_inspect_run');
+  });
+
+  it('passes the product-scoped MCP registration to Claude product chats', async () => {
+    await askChatWithContext({
+      ...base,
+      model: 'opus',
+      product: 'assay',
+      cwd: '/workspace/assay',
+      writeEnabled: true,
+    });
+
+    const options = askClaude.mock.calls[0]![3];
+    expect(options.mcpArgs?.slice(0, 2)).toEqual(['--strict-mcp-config', '--mcp-config']);
+    expect(options.mcpArgs?.[2]).toContain('RUNE_PRODUCT_CHAT_PRODUCT');
+    expect(options.mcpArgs?.[2]).toContain('assay');
   });
 
   it('rotates a full-access thread when its scoped writable root changes', async () => {

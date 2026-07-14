@@ -8,6 +8,7 @@ import { askClaudeWithContext, buildClaudeChildEnv } from './claude.js';
 import { runCodex } from './codex.js';
 import { scrubPathsInText } from './tool-labels.js';
 import { cleanupCodexThread } from './codex-sessions.js';
+import { buildProductChatMcpConfig } from './product-chat-mcp.js';
 
 const TRANSCRIPT_CHAR_BUDGET = 40_000;
 
@@ -105,6 +106,9 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     ? null
     : formatMatchedExecutor;
   const initialPrompt = bootstrapMessage(request.message, sameExecutor ? [] : request.priorMessages);
+  const productMcp = request.writeEnabled && request.product
+    ? buildProductChatMcpConfig(request.product)
+    : null;
 
   if (binding.format === 'claude') {
     const sessionId = sameExecutor?.sessionId ?? request.legacyClaudeSessionId ?? randomUUID();
@@ -116,6 +120,7 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
       ...(request.cwd ? { cwd: request.cwd } : {}),
       ...(request.writableRoot ? { writableRoots: [request.writableRoot] } : {}),
       ...(request.product ? { product: request.product, envMode: 'product-chat' as const } : {}),
+      ...(productMcp ? { mcpArgs: productMcp.claudeArgs } : {}),
     });
     return { ...result, error: safeError(result.error), executor: { format: 'claude', sessionId } };
   }
@@ -134,6 +139,10 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     // Codex is shell-capable even in read-only mode. Always use the secret-
     // scrubbed chat environment; global/Home chat must not inherit Rune's env.
     env: buildClaudeChildEnv('product-chat'),
+    ...(productMcp ? {
+      configOverrides: productMcp.codexConfigOverrides,
+      ignoreUserConfig: true,
+    } : {}),
     ...(request.product ? { product: request.product } : {}),
     opLabel: 'chat',
     onEvent: event => {

@@ -68,10 +68,7 @@ describe('buildArtifactMcpConfig', () => {
         expect.stringMatching(/broker\.sock$/),
       ]);
       expect(server.args.join(' ')).not.toContain('.env.local');
-      expect(server.env).toEqual({
-        TELEGRAM_BOT_TOKEN: 'artifact-mcp-readonly',
-        TELEGRAM_USER_ID: '0',
-      });
+      expect(server.env).toEqual({});
       const serialized = JSON.stringify(cfg);
       expect(serialized).not.toContain(f.vault);
       for (const forbidden of ['VAULT_DIR', 'RUNE_HTTP_SECRET', 'RUNE_MCP_SECRET', 'READWISE_TOKEN', 'WHOOP_CLIENT_SECRET']) {

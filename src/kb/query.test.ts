@@ -4,7 +4,7 @@ vi.mock('../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago' },
 }));
 
-vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
+vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn(), runBackgroundAgent: vi.fn() }));
 vi.mock('./search.js', () => ({
   searchVault: vi.fn(),
   searchWithFilter: vi.fn(),
@@ -13,12 +13,13 @@ vi.mock('./search.js', () => ({
 }));
 vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
 
-const { runAgent } = await import('../ai/claude.js');
+const { runAgent, runBackgroundAgent } = await import('../ai/claude.js');
 const { searchVault, searchWithFilter, rankWikiPages, searchInFiles } = await import('./search.js');
 const { readVaultFile } = await import('../vault/files.js');
 const { queryKB } = await import('./query.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
+const backgroundAgentMock = runBackgroundAgent as unknown as ReturnType<typeof vi.fn>;
 const searchMock = searchVault as unknown as ReturnType<typeof vi.fn>;
 const filterMock = searchWithFilter as unknown as ReturnType<typeof vi.fn>;
 const rankMock = rankWikiPages as unknown as ReturnType<typeof vi.fn>;
@@ -37,6 +38,7 @@ type QueryKBWithDeps = (
       options?: { directory?: string; maxResults?: number },
     ) => Array<{ file: string; line: number; content: string }>;
     agentTimeoutMs?: number;
+    agentUserVisible?: boolean;
   },
 ) => Promise<{ success: boolean; answer: string }>;
 
@@ -288,6 +290,23 @@ describe('kb/query', () => {
       undefined,
       true,
     );
+  });
+
+  it('uses the explicit background-agent path for a scoped MCP query', async () => {
+    backgroundAgentMock.mockResolvedValue({ text: 'scoped answer', error: null });
+
+    const result = await queryKB('scoped question', {
+      agentTimeoutMs: 150_000,
+      agentUserVisible: false,
+    });
+
+    expect(result).toEqual({ success: true, answer: 'scoped answer' });
+    expect(backgroundAgentMock).toHaveBeenCalledWith(
+      'kb-query',
+      expect.any(String),
+      { timeoutMs: 150_000, voice: true },
+    );
+    expect(agentMock).not.toHaveBeenCalled();
   });
 
   it('infers entity type filter for "who is" questions', async () => {

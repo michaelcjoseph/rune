@@ -1,5 +1,6 @@
 import { createLogger } from '../utils/logger.js';
 import type { SupervisedRun } from '../intent/supervision.js';
+import type { WorkRunTarget } from '../intent/run-target.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('notification-bus');
@@ -89,10 +90,7 @@ export interface BusOpEventEnd extends BusOpEventBase {
 
 export type BusOpEvent = BusOpEventStart | BusOpEventProgress | BusOpEventEnd;
 
-export interface BusRunTarget {
-  kind: 'project' | 'bug';
-  slug: string;
-}
+export type BusRunTarget = WorkRunTarget;
 
 export interface BusRunAgent {
   role: string;

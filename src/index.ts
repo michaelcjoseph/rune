@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import config from './config.js';
+import config, { assertOperatorConfig } from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
 import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge, assertProjectMcpConfig } from './ai/claude.js';
@@ -47,6 +47,8 @@ import { createSenders } from './transport/sender.js';
 import type { MutationDescriptor, MutationEvent } from './transport/mutations.js';
 
 const log = createLogger('main');
+
+assertOperatorConfig();
 
 type OrchestratedWorkPayload = {
   projectSlug: string;

@@ -17,10 +17,11 @@
  * See spec.md §"Layer 3", tasks.md Phase 6 A2.1.
  */
 
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { SupervisedRun, SupervisedRunStatus } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
 
 const VALID_STATUSES: ReadonlySet<SupervisedRunStatus> = new Set<SupervisedRunStatus>([
   'running',
@@ -31,6 +32,7 @@ const VALID_STATUSES: ReadonlySet<SupervisedRunStatus> = new Set<SupervisedRunSt
 ]);
 
 const log = createLogger('supervision-store');
+const SUPERVISION_VISIBILITY_MAX_BYTES = 768 * 1024;
 
 // ---------------------------------------------------------------------------
 // Read
@@ -76,7 +78,8 @@ export function readAllRuns(filePath: string): SupervisedRun[] {
   const valid: SupervisedRun[] = [];
   let dropped = 0;
   for (const entry of parsed) {
-    if (isSupervisedRun(entry)) valid.push(entry); else dropped++;
+    const run = normalizeSupervisedRun(entry);
+    if (run) valid.push(run); else dropped++;
   }
   if (dropped > 0) {
     log.warn('readAllRuns: dropped malformed entries', { path: filePath, dropped });
@@ -84,23 +87,154 @@ export function readAllRuns(filePath: string): SupervisedRun[] {
   return valid;
 }
 
-function isSupervisedRun(value: unknown): value is SupervisedRun {
-  if (!value || typeof value !== 'object') return false;
+export interface BoundedSupervisionRead {
+  runs: SupervisedRun[];
+  /** False means ownership evidence could not be read in full. */
+  complete: boolean;
+}
+
+/** Byte-bounded complete snapshot for model-facing diagnostic authorization. */
+export function readAllRunsBounded(
+  filePath: string,
+  maxBytes = 1024 * 1024,
+): BoundedSupervisionRead {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) return { runs: [], complete: false };
+  try {
+    if (statSync(filePath).size > maxBytes) return { runs: [], complete: false };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { runs: [], complete: true }
+      : { runs: [], complete: false };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch {
+    return { runs: [], complete: false };
+  }
+  if (!Array.isArray(parsed)) return { runs: [], complete: false };
+  let complete = true;
+  const runs = parsed.flatMap(entry => {
+    const run = normalizeSupervisedRun(entry);
+    if (!run) complete = false;
+    return run ? [run] : [];
+  });
+  return { runs, complete };
+}
+
+function normalizeParkedQuestion(value: unknown): SupervisedRun['parkedQuestion'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const question = value as Record<string, unknown>;
+  if (question['source'] !== 'ask-user-question' ||
+      typeof question['question'] !== 'string' ||
+      typeof question['askedAt'] !== 'string' ||
+      !Array.isArray(question['options'])) return undefined;
+  const options = question['options'].flatMap(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const option = raw as Record<string, unknown>;
+    if (typeof option['id'] !== 'string' || typeof option['label'] !== 'string' || typeof option['value'] !== 'string') {
+      return [];
+    }
+    return [{
+      id: option['id'],
+      label: option['label'],
+      value: option['value'],
+      ...(typeof option['description'] === 'string' ? { description: option['description'] } : {}),
+    }];
+  });
+  if (options.length !== question['options'].length) return undefined;
+  return {
+    source: 'ask-user-question',
+    question: question['question'],
+    options,
+    ...(typeof question['toolUseId'] === 'string' ? { toolUseId: question['toolUseId'] } : {}),
+    askedAt: question['askedAt'],
+  };
+}
+
+function normalizeSupervisedRun(value: unknown): SupervisedRun | null {
+  if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
-  return (
-    typeof v['id'] === 'string' &&
+  if (!(
+    typeof v['id'] === 'string' && VALID_SLUG.test(v['id']) &&
     typeof v['product'] === 'string' &&
     typeof v['project'] === 'string' &&
     typeof v['status'] === 'string' &&
     VALID_STATUSES.has(v['status'] as SupervisedRunStatus) &&
     typeof v['startedAt'] === 'string' &&
     typeof v['lastHeartbeatAt'] === 'string'
-  );
+  )) return null;
+  const run = { ...v } as unknown as SupervisedRun;
+  if (v['target'] !== undefined) {
+    const target = v['target'];
+    if (
+      target && typeof target === 'object' && !Array.isArray(target) &&
+      ((target as Record<string, unknown>)['kind'] === 'project' || (target as Record<string, unknown>)['kind'] === 'bug') &&
+      typeof (target as Record<string, unknown>)['slug'] === 'string'
+    ) {
+      run.target = target as SupervisedRun['target'];
+    } else {
+      delete run.target;
+    }
+  }
+  if (v['parkedQuestion'] !== undefined) {
+    const parkedQuestion = normalizeParkedQuestion(v['parkedQuestion']);
+    if (parkedQuestion) run.parkedQuestion = parkedQuestion;
+    else delete run.parkedQuestion;
+  }
+  return run;
 }
 
 // ---------------------------------------------------------------------------
 // Write
 // ---------------------------------------------------------------------------
+
+/**
+ * Bound the current-state visibility store without ever dropping an active or
+ * parked run. Terminal history is already durable in work-run summaries and
+ * mutations.jsonl, so retain the newest terminal rows that fit and discard the
+ * oldest. Surviving rows preserve their original order.
+ */
+export function compactSupervisedRuns(
+  runs: SupervisedRun[],
+  maxBytes = SUPERVISION_VISIBILITY_MAX_BYTES,
+): SupervisedRun[] {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) return runs;
+  const serializedBytes = (values: SupervisedRun[]) =>
+    Buffer.byteLength(JSON.stringify(values, null, 2), 'utf8');
+  if (serializedBytes(runs) <= maxBytes) return runs;
+
+  const retained = new Set(runs.filter(run =>
+    run.status === 'running' || run.status === 'blocked-on-human'));
+  // In a pretty-printed JSON array every row is its pretty JSON with two
+  // leading spaces per line, plus exactly two separator/newline bytes. The
+  // empty array contributes the initial two bracket bytes. Computing this once
+  // per row avoids repeatedly serializing the growing retained set.
+  const rowCost = (run: SupervisedRun): number => {
+    const indented = JSON.stringify(run, null, 2)
+      .split('\n')
+      .map(line => `  ${line}`)
+      .join('\n');
+    return Buffer.byteLength(indented, 'utf8') + 2;
+  };
+  let retainedBytes = 2;
+  for (const run of retained) retainedBytes += rowCost(run);
+  const terminalsNewestFirst = runs
+    .filter(run => !retained.has(run))
+    .sort((a, b) => {
+      const aTime = Date.parse(a.lastHeartbeatAt || a.startedAt);
+      const bTime = Date.parse(b.lastHeartbeatAt || b.startedAt);
+      return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+    });
+
+  for (const terminal of terminalsNewestFirst) {
+    const cost = rowCost(terminal);
+    if (retainedBytes + cost > maxBytes) continue;
+    retained.add(terminal);
+    retainedBytes += cost;
+  }
+  return runs.filter(run => retained.has(run));
+}
 
 /**
  * Write every run to `filePath`, atomically via temp-then-rename so a
@@ -111,11 +245,12 @@ function isSupervisedRun(value: unknown): value is SupervisedRun {
  * `mutations-log.ts` pattern.
  */
 export function writeAllRuns(runs: SupervisedRun[], filePath: string): void {
+  const compacted = compactSupervisedRuns(runs);
   // PID-tagged temp name avoids collisions with other Rune processes only;
   // intra-process safety is guaranteed by Node's single-threaded event loop.
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
   try {
-    writeFileSync(tmp, JSON.stringify(runs, null, 2), 'utf8');
+    writeFileSync(tmp, JSON.stringify(compacted, null, 2), 'utf8');
     renameSync(tmp, filePath);
   } catch (err) {
     log.error('writeAllRuns: failed to persist runs', {

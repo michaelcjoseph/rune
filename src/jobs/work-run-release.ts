@@ -426,6 +426,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     id: run.id,
     project: run.project,
     product: run.product,
+    target: run.target ?? { kind: 'project', slug: run.project },
     outcome,
     reason: scrubbedReason,
     exit,

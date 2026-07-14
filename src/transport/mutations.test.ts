@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SupervisedRun } from '../intent/supervision.js';
 
 // --- Mocks before any dynamic imports ---
 
@@ -433,7 +434,24 @@ describe('mutations', () => {
       const run = firstArg as { id: string; status: string; project: string };
       expect(run.status).toBe('blocked-on-human');
       expect(run.project).toBe('demo');
+      expect((run as any).target).toEqual({ kind: 'project', slug: 'demo' });
       expect(typeof run.id).toBe('string');
+    });
+
+    it('persists an explicit bug target on the supervision record', async () => {
+      registerApplier(makeApplier({
+        kind: 'work-run',
+        autoApprove: false,
+        validateResult: { ok: true },
+      }));
+
+      await createMutation('work-run', {
+        projectSlug: 'bug-fix-worktree',
+        bugId: 'BUG-42',
+      }, 'webview');
+
+      const calls = await waitForUpserts(1);
+      expect((calls[0]![0] as SupervisedRun).target).toEqual({ kind: 'bug', slug: 'BUG-42' });
     });
 
     it('createMutation seeds an autoApprove mutation as "running"', async () => {

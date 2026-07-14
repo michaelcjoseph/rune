@@ -22,6 +22,7 @@ import {
   writeFileSync,
   existsSync,
   readdirSync,
+  mkdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +31,7 @@ import {
   writeSummary,
   appendIndexRow,
   readRecentIndex,
+  readWorkRunSummaryResult,
 } from './work-run-store.js';
 import type { WorkRunSummary, WorkRunIndexRow } from './work-run-store.js';
 
@@ -160,6 +162,29 @@ describe('writeSummary', () => {
       }
     },
   );
+});
+
+describe('readWorkRunSummaryResult', () => {
+  it('distinguishes missing, invalid, and valid ownership evidence', () => {
+    expect(readWorkRunSummaryResult(tmpDir, 'missing-run')).toEqual({ status: 'missing' });
+
+    const invalidDir = join(tmpDir, 'invalid-run');
+    mkdirSync(invalidDir);
+    writeFileSync(join(invalidDir, 'summary.json'), '{bad json');
+    expect(readWorkRunSummaryResult(tmpDir, 'invalid-run')).toEqual({ status: 'invalid' });
+
+    const nullTargetDir = join(tmpDir, 'null-target-run');
+    mkdirSync(nullTargetDir);
+    writeFileSync(join(nullTargetDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id: 'null-target-run' }),
+      target: null,
+    }));
+    expect(readWorkRunSummaryResult(tmpDir, 'null-target-run')).toEqual({ status: 'invalid' });
+
+    const valid = makeSummary({ id: 'valid-run' });
+    writeSummary(join(tmpDir, 'valid-run'), valid);
+    expect(readWorkRunSummaryResult(tmpDir, 'valid-run')).toEqual({ status: 'found', summary: valid });
+  });
 });
 
 // ---------------------------------------------------------------------------

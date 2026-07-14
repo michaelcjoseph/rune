@@ -14,6 +14,10 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
+import {
+  buildIsolatedMcpRegistration,
+  type IsolatedStdioMcpServer,
+} from '../ai/isolated-mcp-config.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { getProductConfig } from './sandbox-runtime.js';
 
@@ -35,13 +39,6 @@ export interface BuildArtifactMcpConfigOpts {
   platform?: NodeJS.Platform;
 }
 
-type StdioServerConfig = {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: Record<string, string>;
-};
-
 function requireAbsoluteFile(path: string, label: string, executable = false): void {
   if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path`);
   if (!existsSync(path) || !statSync(path).isFile()) {
@@ -56,35 +53,6 @@ function requireVaultDirectory(path: string): void {
     throw new Error(`VAULT_DIR is not a directory: ${path}`);
   }
   accessSync(path, constants.R_OK | constants.X_OK);
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function tomlArray(values: string[]): string {
-  return `[${values.map(tomlString).join(',')}]`;
-}
-
-function tomlStringTable(values: Record<string, string>): string {
-  return `{${Object.entries(values)
-    .map(([key, value]) => `${tomlString(key)}=${tomlString(value)}`)
-    .join(',')}}`;
-}
-
-function codexMcpOverride(server: StdioServerConfig): string {
-  const table = [
-    `command=${tomlString(server.command)}`,
-    `args=${tomlArray(server.args)}`,
-    `cwd=${tomlString(server.cwd)}`,
-    `env=${tomlStringTable(server.env)}`,
-    'required=true',
-    `enabled_tools=${tomlArray(['vault_search', 'journal_range', 'follow_wikilinks'])}`,
-    `default_tools_approval_mode=${tomlString('approve')}`,
-    'startup_timeout_sec=10',
-    'tool_timeout_sec=60',
-  ].join(',');
-  return `mcp_servers={${tomlString(ARTIFACT_MCP_SERVER_NAME)}={${table}}}`;
 }
 
 function seatbeltString(value: string): string {
@@ -178,11 +146,7 @@ export async function buildArtifactMcpConfig(
 
   const broker = spawn(nodePath, ['--import', loaderPath, brokerPath, socketPath], {
     cwd: projectRoot,
-    env: {
-      PATH: process.env['PATH'] ?? '',
-      TELEGRAM_BOT_TOKEN: 'artifact-mcp-readonly',
-      TELEGRAM_USER_ID: '0',
-    },
+    env: {},
     detached: true,
     stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
   });
@@ -241,22 +205,22 @@ export async function buildArtifactMcpConfig(
     throw err;
   }
 
-  const env = {
-    TELEGRAM_BOT_TOKEN: 'artifact-mcp-readonly',
-    TELEGRAM_USER_ID: '0',
-  };
-  const server: StdioServerConfig = {
+  const env = {};
+  const server: IsolatedStdioMcpServer = {
     command: nodePath,
     args: ['--import', loaderPath, relayPath, socketPath],
     cwd: projectRoot,
     env,
   };
-  const inlineClaudeConfig = JSON.stringify({
-    mcpServers: { [ARTIFACT_MCP_SERVER_NAME]: server },
+  const registration = buildIsolatedMcpRegistration({
+    serverName: ARTIFACT_MCP_SERVER_NAME,
+    server,
+    enabledTools: ['vault_search', 'journal_range', 'follow_wikilinks'],
+    startupTimeoutSec: 10,
+    toolTimeoutSec: 60,
   });
   return {
-    claudeArgs: ['--strict-mcp-config', '--mcp-config', inlineClaudeConfig],
-    codexConfigOverrides: [codexMcpOverride(server)],
+    ...registration,
     sandboxProfilePath: profilePath,
     stop,
   };

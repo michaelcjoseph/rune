@@ -489,6 +489,9 @@ const PRODUCT_CHAT_TOOLS = [
   'mcp__rune-kb__kb_query',
   'mcp__rune-kb__kb_search',
   'mcp__rune-kb__kb_stats',
+  'mcp__rune-kb__cockpit_list_runs',
+  'mcp__rune-kb__cockpit_inspect_run',
+  'mcp__rune-kb__cockpit_active_runs',
 ];
 
 async function handleConversation(

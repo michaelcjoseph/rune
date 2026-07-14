@@ -76,10 +76,19 @@ import {
   writeRecoveredTerminalMutation,
   isMutationShutdownInProgress,
 } from '../transport/mutations.js';
+import { runTargetFromDescriptor, type WorkRunTarget } from '../intent/run-target.js';
 import { createLogger } from '../utils/logger.js';
 import { appendMutationLine } from './mutations-log.js';
 import { upsertRun } from './supervision-store.js';
 import { createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
+import {
+  appendOrchestratedTaskRunRecord,
+  readOrchestratedTaskRunRecords,
+} from './task-run-record-store.js';
+export {
+  appendOrchestratedTaskRunRecord,
+  readOrchestratedTaskRunRecords,
+} from './task-run-record-store.js';
 import {
   writeSummary,
   appendIndexRow,
@@ -927,7 +936,6 @@ export async function fileTerminalBugsToBacklog(opts: {
 // Durable run checkpoints + boot recovery
 // ---------------------------------------------------------------------------
 
-const ORCHESTRATED_TASK_RECORDS_FILE = 'task-records.jsonl';
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
 const ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE = 'notification-publications.jsonl';
 // Durable evidence for a failed closeout validation: the sandbox worktree is
@@ -961,32 +969,6 @@ type OrchestratedNotificationPublicationInput = {
 
 type OrchestratedNotificationPublicationErrorInput =
   OrchestratedNotificationPublicationInput & { error: string };
-
-export function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, record: TaskRunRecord): void {
-  const dir = join(baseDir, runId);
-  mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, ORCHESTRATED_TASK_RECORDS_FILE), JSON.stringify(record) + '\n', 'utf8');
-}
-
-export function readOrchestratedTaskRunRecords(baseDir: string, runId: string): TaskRunRecord[] {
-  let raw: string;
-  try {
-    raw = readFileSync(join(baseDir, runId, ORCHESTRATED_TASK_RECORDS_FILE), 'utf8');
-  } catch {
-    return [];
-  }
-
-  const records: TaskRunRecord[] = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      records.push(JSON.parse(line) as TaskRunRecord);
-    } catch {
-      log.warn('orchestrated task-records.jsonl: skipped malformed line', { runId });
-    }
-  }
-  return records;
-}
 
 export function writeOrchestratedRunCursor(baseDir: string, runId: string, cursor: OrchestrationRunCursor): void {
   const dir = join(baseDir, runId);
@@ -1482,6 +1464,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 id: descriptor.id,
                 project: projectSlug,
                 product,
+                target: runTargetFromDescriptor(descriptor),
                 branch,
                 baseSha: runSandbox.baseSha ?? '',
                 startedAtMs,
@@ -1871,6 +1854,7 @@ async function persistTerminalArtifacts(args: {
     id: descriptor.id,
     project: projectSlug,
     product,
+    target: runTargetFromDescriptor(descriptor),
     branch,
     baseSha: sandbox.baseSha ?? '',
     startedAtMs,
@@ -1996,6 +1980,7 @@ function buildOrchestratedSummary(args: {
   id: string;
   project: string;
   product: string;
+  target: WorkRunTarget;
   branch: string;
   baseSha: string;
   startedAtMs: number;
@@ -2006,7 +1991,7 @@ function buildOrchestratedSummary(args: {
   workProduct: WorkProductFacts | null;
   result: OrchestrationResult | null;
 }): WorkRunSummary {
-  const { id, project, product, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, workProduct, result } = args;
+  const { id, project, product, target, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, workProduct, result } = args;
   const data = (terminal.data ?? {}) as Record<string, unknown>;
   const cancelReason = data['cancelReason'];
   const exit: ExitFacts = {
@@ -2027,6 +2012,7 @@ function buildOrchestratedSummary(args: {
     id,
     project,
     product,
+    target,
     outcome: classification.outcome,
     reason: typeof data['reason'] === 'string' ? data['reason'] : classification.reason,
     exit,

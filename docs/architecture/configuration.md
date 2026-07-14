@@ -12,6 +12,8 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`TELEGRAM_USER_ID`** — numeric ID from @userinfobot.
 - **`VAULT_DIR`** — path to Obsidian vault.
 
+The main Rune entrypoint calls `assertOperatorConfig()` before boot side effects and therefore still fails fast when any required operator setting is absent. The two Telegram fields are lazy `config` getters so narrowly scoped subprocess entrypoints can import shared Rune modules without fabricating unrelated bot credentials; those subprocesses receive only the environment their surface needs. `VAULT_DIR` remains required at config import.
+
 ## Integrations (optional)
 
 - **`FAMILY_NAMES`** — comma-separated names scanned by `/family` (e.g. `Alice,Bob`). Empty disables the command.
@@ -78,7 +80,7 @@ Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journ
 - **`logs/registry.json`** — intent-layer product/project registry, exposed via `config.REGISTRY_FILE`; always rebuildable (not source of truth).
 - **`logs/intent-proposal-queue.json`** — journal-to-intent proposal queue (project 08), exposed via `config.INTENT_PROPOSAL_QUEUE_FILE`; pending entries surface in the webview's Pending Approvals panel and in review prep. Approving routes through `dispatchApprovalStatus` → `actionApprovedIntentProposal` (vault-intake appends a journal-sourced bullet to `projects/<product>.md`; roadmap/register-product paths throw "wire-up deferred" and leave the entry pending for retry).
 - **`logs/egress-denials.jsonl`** — append-only audit of denied egress attempts (`src/jobs/egress-policy.ts`), exposed via `config.EGRESS_DENIAL_LOG`; advisory while `EGRESS_ENFORCEMENT_MODE` is `documented-gap`.
-- **`logs/supervised-runs.json`** — persistent store for current `SupervisedRun[]` state (`src/jobs/supervision-store.ts`), exposed via `config.SUPERVISED_RUNS_FILE`; holds current state per run (not events) and is always rebuildable.
+- **`logs/supervised-runs.json`** — persistent store for current `SupervisedRun[]` state (`src/jobs/supervision-store.ts`), exposed via `config.SUPERVISED_RUNS_FILE`; holds current state and durable project-or-bug target identity per run (not events) and is always rebuildable. Upserts retain every running/parked row while compacting oldest terminal rows toward a 768 KiB visibility budget; durable terminal history lives in per-run summaries and `mutations.jsonl`.
 - **`logs/observation-interactions.jsonl`** — append-only per-interaction signals (`src/utils/observation-log.ts`); consumed by the observation sensor reader; `detail` must carry only structured metadata.
 - **`logs/dispatch-log.jsonl`** — append-only audit of every multi-model dispatch attempt (`src/jobs/dispatch-runtime.ts`), exposed via `config.DISPATCH_LOG_FILE`.
 - **`logs/planning-sessions.json`** — persistent store for active `StoredPlanningSession[]` (`src/reviews/planning.ts`), exposed via `config.PLANNING_SESSIONS_FILE`; restored at startup via `restorePlanningSessions()`.

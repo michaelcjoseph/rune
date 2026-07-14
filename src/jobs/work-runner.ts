@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
+import { runTargetFromDescriptor, type WorkRunTarget } from '../intent/run-target.js';
 import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type StreamJsonEnvelope, type TranscriptSink } from './work-run-transcript.js';
 import { parseWorkRunSentinel, type WorkRunSentinel } from './work-run-sentinel.js';
@@ -762,6 +763,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               id: descriptor.id,
               project: projectSlug,
               product,
+              target: runTargetFromDescriptor(descriptor),
               branch,
               baseSha,
               t0,
@@ -957,6 +959,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 id: descriptor.id,
                 project: projectSlug,
                 product,
+                target: runTargetFromDescriptor(descriptor),
                 branch,
                 baseSha,
                 t0,
@@ -1528,6 +1531,7 @@ interface BuildSummaryOpts {
   id: string;
   project: string;
   product: string;
+  target: WorkRunTarget;
   branch: string;
   baseSha: string;
   /** Run start time (`Date.now()` ms). */
@@ -1550,7 +1554,7 @@ interface BuildSummaryOpts {
 }
 
 function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
-  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt, merged, branchDeleted, baseBranch, gateHeldReason } = opts;
+  const { id, project, product, target, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt, merged, branchDeleted, baseBranch, gateHeldReason } = opts;
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
   const outcome = readOutcome(terminalEvent);
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
@@ -1559,6 +1563,7 @@ function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
     id,
     project,
     product,
+    target,
     outcome,
     reason,
     exit,

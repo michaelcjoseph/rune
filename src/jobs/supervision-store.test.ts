@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { isQuietRun, planQuietNudges } from '../intent/supervision.js';
 import {
+  compactSupervisedRuns,
   readAllRuns,
   writeAllRuns,
   upsertRun,
@@ -100,6 +101,31 @@ describe('readAllRuns', () => {
   it('returns [] when the JSON root value is a scalar number', () => {
     writeFileSync(filePath, '42', 'utf8');
     expect(readAllRuns(filePath)).toEqual([]);
+  });
+});
+
+describe('compactSupervisedRuns', () => {
+  it('keeps all active rows and the newest terminal rows that fit', () => {
+    const active = makeRun('active-run', { status: 'running' });
+    const parked = makeRun('parked-run', { status: 'blocked-on-human' });
+    const oldTerminal = makeRun('old-terminal', {
+      status: 'completed',
+      lastHeartbeatAt: '2026-01-01T00:01:00.000Z',
+      project: 'x'.repeat(200),
+    });
+    const newTerminal = makeRun('new-terminal', {
+      status: 'failed',
+      lastHeartbeatAt: '2026-01-01T00:02:00.000Z',
+      project: 'x'.repeat(200),
+    });
+    const activeBytes = Buffer.byteLength(JSON.stringify([active, parked, newTerminal], null, 2));
+
+    const compacted = compactSupervisedRuns(
+      [oldTerminal, active, newTerminal, parked],
+      activeBytes,
+    );
+
+    expect(compacted.map(run => run.id)).toEqual(['active-run', 'new-terminal', 'parked-run']);
   });
 });
 

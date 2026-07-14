@@ -123,6 +123,49 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('product-chat diagnostic MCP surface', () => {
+  const expected = [
+    'cockpit_active_runs',
+    'cockpit_inspect_run',
+    'cockpit_list_runs',
+    'kb_query',
+    'kb_search',
+    'kb_stats',
+    'repo_search',
+  ];
+
+  it('declares the bounded product-chat tool set without adding diagnostics to global surfaces', () => {
+    const tools = (serverModule as Record<string, unknown>)['PRODUCT_CHAT_MCP_TOOLS'];
+    expect(tools, 'PRODUCT_CHAT_MCP_TOOLS is not exported — implementation pending')
+      .toEqual(expect.any(Array));
+    expect([...(tools as string[])].sort()).toEqual(expected);
+    expect(serverModule.ADMIN_TOOLS).not.toEqual(expect.arrayContaining([
+      'cockpit_list_runs',
+      'cockpit_inspect_run',
+      'cockpit_active_runs',
+    ]));
+    expect(serverModule.APP_SURFACE_TOOLS).not.toEqual(expect.arrayContaining([
+      'cockpit_list_runs',
+      'cockpit_inspect_run',
+      'cockpit_active_runs',
+    ]));
+  });
+
+  it('creates a product-scoped server that exposes exactly the product-chat tools', async () => {
+    const factory = (serverModule as Record<string, unknown>)['createProductChatServer'];
+    if (typeof factory !== 'function') {
+      expect.fail('createProductChatServer is not exported — implementation pending');
+    }
+    const server = (factory as (product: string) => McpServer)('assay');
+    const client = await connectClient(server);
+    expect(await listedToolNames(client)).toEqual(expected);
+
+    const inspect = (await client.listTools()).tools.find((tool) => tool.name === 'cockpit_inspect_run');
+    expect(inspect?.inputSchema).not.toHaveProperty('properties.product');
+    await client.close();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §4 — Admin search surface pins
 //

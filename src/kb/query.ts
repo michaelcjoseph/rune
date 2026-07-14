@@ -1,4 +1,4 @@
-import { runAgent } from '../ai/claude.js';
+import { runAgent, runBackgroundAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
 import { rankWikiPages, searchInFiles, searchVault, searchWithFilter } from './search.js';
 import { createLogger } from '../utils/logger.js';
@@ -21,6 +21,9 @@ export interface QueryKBDeps {
    *  TOOL_TIMEOUT_OVERRIDES_MS wrapper ceiling so the agent's own timeout
    *  kills the child and surfaces cleanly instead of orphaning it. */
   agentTimeoutMs?: number;
+  /** Whether the synthesis run belongs to the interactive operator surface.
+   * Product-scoped MCP processes set this false and require no Telegram id. */
+  agentUserVisible?: boolean;
 }
 
 /** Infer a wiki page type filter from the question phrasing. */
@@ -230,7 +233,9 @@ Instructions:
 3. Note confidence (well-documented vs. sparse coverage) and call out conflicting or insufficient context
 4. If the context contains no relevant information, say so clearly — don't make things up${candidateContext}${bodiesContext}${indexFallbackContext}${vaultContext}`;
 
-  const result = await runAgent('kb-query', prompt, deps.agentTimeoutMs, undefined, true);
+  const result = deps.agentUserVisible === false
+    ? await runBackgroundAgent('kb-query', prompt, { timeoutMs: deps.agentTimeoutMs, voice: true })
+    : await runAgent('kb-query', prompt, deps.agentTimeoutMs, undefined, true);
 
   if (result.error) {
     log.error('Query failed', { error: result.error });

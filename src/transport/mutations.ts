@@ -4,6 +4,7 @@ import { upsertRun } from '../jobs/supervision-store.js';
 import { applyOutcomeToDescriptor, type WorkOutcome, type WorkProductFacts } from '../jobs/work-run-classify.js';
 import { type SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
+import { runTargetFromDescriptor } from '../intent/run-target.js';
 import config from '../config.js';
 import {
   NotificationBus,
@@ -11,7 +12,6 @@ import {
   buildRunProgressEventFromCommitPoll,
   buildRunStateEventFromSupervision,
   type BusRunOutcome,
-  type BusRunTarget,
 } from './notification-bus.js';
 
 const log = createLogger('mutations');
@@ -66,6 +66,7 @@ function buildSupervisedRun(
     kind: d.kind,
     product,
     project,
+    target: runTargetFromDescriptor(d),
     status,
     startedAt: d.createdAt,
     lastHeartbeatAt: nowIso,
@@ -155,23 +156,6 @@ function safeUpsertRun(run: SupervisedRun): void {
       error: (err as Error).message,
     });
   }
-}
-
-function runTargetFromDescriptor(descriptor: MutationDescriptor): BusRunTarget {
-  const payload = descriptor.payload as Record<string, unknown>;
-  const target = payload['target'];
-  if (target && typeof target === 'object' && !Array.isArray(target)) {
-    const obj = target as Record<string, unknown>;
-    if ((obj['kind'] === 'project' || obj['kind'] === 'bug') && typeof obj['slug'] === 'string') {
-      return { kind: obj['kind'], slug: obj['slug'] };
-    }
-  }
-  if (typeof payload['bugId'] === 'string') return { kind: 'bug', slug: payload['bugId'] };
-  const slug =
-    typeof payload['projectSlug'] === 'string' ? payload['projectSlug']
-    : typeof payload['ref'] === 'string' ? payload['ref']
-    : descriptor.target.ref || descriptor.id;
-  return { kind: 'project', slug };
 }
 
 function runEventBase(descriptor: MutationDescriptor, ts: string) {

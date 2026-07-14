@@ -22,6 +22,8 @@ import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classi
 // `KNOWN_PHASES` from `PHASE_ORDER` keeps the two in lockstep (a phase added to
 // the finalizer can't silently fall out of the store's validation).
 import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
+import { readJsonlTail } from './jsonl-tail.js';
+import type { WorkRunTarget } from '../intent/run-target.js';
 
 const log = createLogger('work-run-store');
 
@@ -31,6 +33,8 @@ export interface WorkRunSummary {
   id: string;
   project: string;
   product: string;
+  /** User-facing target identity; absent on legacy summaries. */
+  target?: WorkRunTarget;
   outcome: WorkOutcome;
   reason: string;
   exit: ExitFacts;
@@ -105,32 +109,72 @@ export function writeSummary(dir: string, summary: WorkRunSummary): void {
   }
 }
 
+export type WorkRunSummaryReadResult =
+  | { status: 'found'; summary: WorkRunSummary }
+  | { status: 'missing' }
+  | { status: 'invalid' };
+
 /**
- * Read a single run's `summary.json`, or `null` if it is missing/corrupt.
+ * Read a single run's `summary.json` while preserving the security-relevant
+ * distinction between missing evidence and invalid/unreadable evidence.
  *
  * `id` MUST be slug-validated by the caller (VALID_SLUG) before this is called —
  * it is joined into the path verbatim, mirroring `writeSummary`'s contract. The
  * caller (the authenticated `GET /api/work-runs/:id` route) is the boundary.
  */
-export function readWorkRunSummary(dir: string, id: string): WorkRunSummary | null {
+export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummaryReadResult {
   // Defense-in-depth: `id` is joined into the path, so reject a non-slug id here
   // too — every call site gets the same hard boundary even if it forgot to
   // guard (mirrors createTranscriptSink's VALID_SLUG check).
-  if (!VALID_SLUG.test(id)) return null;
+  if (!VALID_SLUG.test(id)) return { status: 'invalid' };
+  let raw: string;
+  try {
+    raw = readFileSync(join(dir, id, 'summary.json'), 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { status: 'missing' }
+      : { status: 'invalid' };
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(join(dir, id, 'summary.json'), 'utf8'));
+    parsed = JSON.parse(raw);
   } catch {
-    return null; // missing or corrupt
+    return { status: 'invalid' };
   }
   // Lightweight shape guard (mirrors readRecentIndex) — a well-formed-JSON file
   // that isn't a summary is dropped, not returned as a bogus WorkRunSummary.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
+    return { status: 'invalid' };
+  }
   const s = parsed as Partial<WorkRunSummary>;
-  if (typeof s.id === 'string' && typeof s.outcome === 'string') {
-    return s as WorkRunSummary;
+  const rawTarget = (parsed as Record<string, unknown>)['target'];
+  const targetValid = rawTarget === undefined || (
+    rawTarget !== null &&
+    typeof rawTarget === 'object' &&
+    !Array.isArray(rawTarget) &&
+    (((rawTarget as Record<string, unknown>)['kind'] === 'project') ||
+      ((rawTarget as Record<string, unknown>)['kind'] === 'bug')) &&
+    typeof (rawTarget as Record<string, unknown>)['slug'] === 'string' &&
+    ((rawTarget as Record<string, unknown>)['slug'] as string).trim() !== ''
+  );
+  if (
+    s.id === id &&
+    typeof s.product === 'string' &&
+    s.product.trim() !== '' &&
+    typeof s.outcome === 'string' &&
+    targetValid
+  ) {
+    return { status: 'found', summary: s as WorkRunSummary };
   }
   log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
-  return null;
+  return { status: 'invalid' };
+}
+
+/** Compatibility reader for non-authorization surfaces. */
+export function readWorkRunSummary(dir: string, id: string): WorkRunSummary | null {
+  const result = readWorkRunSummaryResult(dir, id);
+  return result.status === 'found' ? result.summary : null;
 }
 
 /** Append one row to `index.jsonl` (one JSON object per line). Creates the
@@ -175,6 +219,23 @@ export function readRecentIndex(filePath: string, n: number): WorkRunIndexRow[] 
   }
   // Newest-first, capped at n.
   return rows.slice(-n).reverse();
+}
+
+/** Fixed-byte variant for model-facing diagnostics; newest first. */
+export function readRecentIndexBounded(
+  filePath: string,
+  n: number,
+  maxBytes = 1024 * 1024,
+): WorkRunIndexRow[] {
+  if (n <= 0) return [];
+  return readJsonlTail(filePath, maxBytes, n * 4)
+    .filter((entry): entry is WorkRunIndexRow => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+      const row = entry as Partial<WorkRunIndexRow>;
+      return typeof row.id === 'string' && VALID_SLUG.test(row.id) && typeof row.outcome === 'string';
+    })
+    .slice(-n)
+    .reverse();
 }
 
 // ---------------------------------------------------------------------------

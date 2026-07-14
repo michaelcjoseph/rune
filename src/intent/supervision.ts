@@ -19,6 +19,8 @@
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 3"), test-plan.md (§10)}.
  */
 
+import type { WorkRunTarget } from './run-target.js';
+
 /**
  * Status of a supervised run. `running` / `blocked-on-human` are in-progress; `completed` /
  * `failed` are terminal; `unknown` is a run whose state could not be determined after a
@@ -41,6 +43,8 @@ export interface SupervisedRun {
   product: string;
   /** The project slug the run is executing. */
   project: string;
+  /** User-facing target identity. Bug-fix runs must not be mislabeled as projects. */
+  target?: WorkRunTarget;
   status: SupervisedRunStatus;
   /** ISO-8601 timestamp the run started. */
   startedAt: string;

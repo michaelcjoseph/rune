@@ -35,8 +35,14 @@ function parseNumericEnv(
 export const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const config = {
-  TELEGRAM_BOT_TOKEN: required('TELEGRAM_BOT_TOKEN'),
-  TELEGRAM_USER_ID: Number(required('TELEGRAM_USER_ID')),
+  /** Operator-only fields are lazy so scoped MCP subprocesses can import
+   * shared KB modules without inventing unrelated Telegram credentials. */
+  get TELEGRAM_BOT_TOKEN() {
+    return required('TELEGRAM_BOT_TOKEN');
+  },
+  get TELEGRAM_USER_ID() {
+    return Number(required('TELEGRAM_USER_ID'));
+  },
 
   VAULT_DIR: required('VAULT_DIR'),
   WORKSPACE_DIR: optional('RUNE_WORKSPACE_DIR') ?? PROJECT_ROOT,
@@ -388,3 +394,10 @@ const config = {
 } as const;
 
 export default config;
+
+/** Preserve fail-fast startup validation for the full Rune operator process. */
+export function assertOperatorConfig(): void {
+  void config.TELEGRAM_BOT_TOKEN;
+  void config.TELEGRAM_USER_ID;
+  void config.VAULT_DIR;
+}

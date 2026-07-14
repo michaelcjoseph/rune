@@ -20,6 +20,7 @@ vi.mock('node:fs', () => ({
 
 vi.mock('./config.js', () => ({
   PROJECT_ROOT: '/tmp/rune',
+  assertOperatorConfig: vi.fn(() => calls.push('assert-operator-config')),
   default: {
     LOGS_DIR: '/tmp/rune/logs',
     WORKTREE_ROOT: '/tmp/rune/worktrees',

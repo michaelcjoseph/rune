@@ -7,6 +7,9 @@ import {
   queryVaultIndex as daemonIndexSearch,
 } from '../kb/./vault-index.js';
 import { getMcpMetricsSnapshot, instrumentMcpTool, type McpToolCallback } from './metrics.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
+import { PRODUCT_CHAT_MCP_TOOLS } from './product-chat-tools.js';
+export { PRODUCT_CHAT_MCP_TOOLS } from './product-chat-tools.js';
 
 type BroadVaultSearch = (
   query: string,
@@ -16,6 +19,8 @@ type BroadVaultSearch = (
 export interface CreateRuneMcpServerOptions {
   tools: readonly ToolName[];
   name?: string;
+  /** Server-owned scope for product-chat diagnostic tools. Never caller input. */
+  productScope?: string;
   kbQueryBroadSearch?: BroadVaultSearch;
   getActiveSessionCount?: () => number;
 }
@@ -84,7 +89,8 @@ export type ToolName =
   | (typeof ADMIN_TOOLS)[number]
   | (typeof CONTENT_TOOLS)[number]
   | (typeof HEALTH_TOOLS)[number]
-  | (typeof UTILITY_TOOLS)[number];
+  | (typeof UTILITY_TOOLS)[number]
+  | (typeof PRODUCT_CHAT_MCP_TOOLS)[number];
 
 /** Lazy loader for the read-tools trio handler + deps modules (shared by
  *  three registrations; Node's module cache makes repeat calls free). */
@@ -116,6 +122,8 @@ const lazyLogMealTool = () =>
 
 const lazyUpdateWorkoutPlanTool = () =>
   Promise.all([import('./tools/update-workout-plan.js'), import('./tools/update-workout-plan-deps.js')]);
+
+const lazyCockpitRunTools = () => import('./tools/cockpit-runs.js');
 
 function daemonBroadSearch(
   query: string,
@@ -150,6 +158,13 @@ function warmIndexAgeMs(status: ReturnType<typeof daemonIndexStatus>): number | 
   return Math.max(0, Date.now() - timestamp);
 }
 
+function requireProductScope(opts: CreateRuneMcpServerOptions): string {
+  if (!opts.productScope || !VALID_SLUG.test(opts.productScope)) {
+    throw new Error('Product-scoped MCP tools require a valid server-owned product scope.');
+  }
+  return opts.productScope;
+}
+
 /** 150s leaves headroom under the 180s kb_query TOOL_TIMEOUT_OVERRIDES_MS
  *  wrapper timeout, so the agent's own timeout SIGTERMs the child and
  *  surfaces its error instead of the wrapper orphaning a live agent. */
@@ -165,9 +180,15 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
       async ({ question }) => {
         const broadSearch = opts.kbQueryBroadSearch
           ?? (opts.name === 'rune-mcp' ? daemonBroadSearch : undefined);
+        const queryDeps = {
+          agentTimeoutMs: KB_QUERY_AGENT_TIMEOUT_MS,
+          // A product-chat MCP is a scoped background process. It has no
+          // operator identity and must not require or fabricate Telegram env.
+          ...(opts.productScope !== undefined ? { agentUserVisible: false } : {}),
+        };
         const result = broadSearch
-          ? await queryKB(question, { searchVault: broadSearch, agentTimeoutMs: KB_QUERY_AGENT_TIMEOUT_MS })
-          : await queryKB(question, { agentTimeoutMs: KB_QUERY_AGENT_TIMEOUT_MS });
+          ? await queryKB(question, { ...queryDeps, searchVault: broadSearch })
+          : await queryKB(question, queryDeps);
         return {
           content: [{ type: 'text' as const, text: result.answer }],
           isError: !result.success,
@@ -569,6 +590,53 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
     );
   },
 
+  cockpit_list_runs: (server, opts) => {
+    const product = requireProductScope(opts);
+    server.tool(
+      'cockpit_list_runs',
+      'List recent Cockpit work runs for this product only, with bounded terminal diagnostics.',
+      {
+        limit: z.number().int().min(1).max(20).optional().describe('Maximum runs to return (default 10)'),
+      },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      async (input) => {
+        const { callCockpitRunTool } = await lazyCockpitRunTools();
+        return callCockpitRunTool(product, 'listRuns', input);
+      },
+    );
+  },
+
+  cockpit_inspect_run: (server, opts) => {
+    const product = requireProductScope(opts);
+    server.tool(
+      'cockpit_inspect_run',
+      'Inspect one work run in this product using a full ID or unique authorized ID prefix.',
+      {
+        runId: z.string().min(8).max(100).describe('Full run ID or unique product-scoped prefix (minimum 8 characters)'),
+        transcriptLines: z.number().int().min(1).max(100).optional().describe('Display transcript tail lines (default 50)'),
+      },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      async (input) => {
+        const { callCockpitRunTool } = await lazyCockpitRunTools();
+        return callCockpitRunTool(product, 'inspectRun', input);
+      },
+    );
+  },
+
+  cockpit_active_runs: (server, opts) => {
+    const product = requireProductScope(opts);
+    server.tool(
+      'cockpit_active_runs',
+      'List running and parked Cockpit work runs for this product with bounded safe log tails.',
+      {},
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      async () => {
+        const { callCockpitRunTool } = await lazyCockpitRunTools();
+        return callCockpitRunTool(product, 'activeRuns');
+      },
+    );
+  },
+
   log_conversation: (server) => {
     server.tool(
       'log_conversation',
@@ -631,4 +699,13 @@ export function createRuneMcpServer(opts: CreateRuneMcpServerOptions): McpServer
  *  tools (MCP health expansion) so local Claude Code sessions get them too. */
 export function createKBServer(): McpServer {
   return createRuneMcpServer({ tools: [...ADMIN_TOOLS, ...HEALTH_TOOLS] });
+}
+
+/** Dedicated product-chat server. Diagnostics never join local admin or remote surfaces. */
+export function createProductChatServer(productScope: string): McpServer {
+  if (!VALID_SLUG.test(productScope)) throw new Error('Invalid product scope.');
+  return createRuneMcpServer({
+    tools: PRODUCT_CHAT_MCP_TOOLS,
+    productScope,
+  });
 }

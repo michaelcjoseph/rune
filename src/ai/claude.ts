@@ -403,6 +403,7 @@ function execClaude(
   cwd?: string,
   writableRoots?: string[],
   envMode: ClaudeChildEnvMode = 'default',
+  mcpArgs?: string[],
 ): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
@@ -414,7 +415,7 @@ function execClaude(
   const streaming = !!opMeta && opMeta.kind !== 'classifier';
   const baseArgs = [
     '--dangerously-skip-permissions',
-    ...getProjectMcpArgs(),
+    ...(mcpArgs ?? getProjectMcpArgs()),
     // Default spawns add the whole WORKSPACE_DIR (read access to every repo +
     // the vault). A product chat passes `writableRoots` to narrow this to its
     // own repo. NOTE: under --dangerously-skip-permissions this `--add-dir` set
@@ -565,6 +566,7 @@ function askClaudeSession(
   writableRoots?: string[],
   envMode?: ClaudeChildEnvMode,
   product?: string,
+  mcpArgs?: string[],
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -586,7 +588,7 @@ function askClaudeSession(
     const opMeta: OpMeta | undefined = opLabel
       ? { kind: 'chat', label: opLabel, ...(product ? { scope: product } : {}) }
       : undefined;
-    const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots, envMode ?? 'default');
+    const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots, envMode ?? 'default', mcpArgs);
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -632,6 +634,8 @@ export interface AskClaudeWithContextOpts {
   envMode?: ClaudeChildEnvMode;
   /** Product scope for product-chat op-events. Omit for global chat. */
   product?: string;
+  /** Complete strict MCP registration override for a configured product chat. */
+  mcpArgs?: string[];
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt. */
@@ -653,6 +657,7 @@ export async function askClaudeWithContext(
     opts.writableRoots,
     opts.envMode,
     opts.product,
+    opts.mcpArgs,
   );
 }
 
@@ -922,15 +927,21 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
-  const userId = config.TELEGRAM_USER_ID;
-  _bus?.publish({ kind: 'agent-event', subKind: 'start', agent: agentName, runId, userId, startedAt });
+  // Background/scoped callers intentionally have no operator identity. Do not
+  // force them to fabricate Telegram credentials merely to run an agent.
+  const userId = userVisible ? config.TELEGRAM_USER_ID : undefined;
+  if (userId !== undefined) {
+    _bus?.publish({ kind: 'agent-event', subKind: 'start', agent: agentName, runId, userId, startedAt });
+  }
   const opMeta: OpMeta | undefined = userVisible
     ? { kind: 'agent', label: agentName, agentName, userId }
     : undefined;
   const result = await execClaude(args, timeoutMs, opMeta, writeScope);
   const durationMs = Date.now() - t0;
   const status = result.error ? 'error' : 'success';
-  _bus?.publish({ kind: 'agent-event', subKind: 'end', agent: agentName, runId, userId, startedAt, durationMs, status });
+  if (userId !== undefined) {
+    _bus?.publish({ kind: 'agent-event', subKind: 'end', agent: agentName, runId, userId, startedAt, durationMs, status });
+  }
   const entry = JSON.stringify({ agent: agentName, startedAt, durationMs, status });
   try {
     appendFileSync(join(config.LOGS_DIR, 'agent-runs.jsonl'), entry + '\n');
@@ -953,6 +964,21 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     // Non-fatal — observation logging is best-effort, same as agent-runs.jsonl
   }
   return result;
+}
+
+export interface BackgroundAgentOptions {
+  timeoutMs?: number;
+  voice?: boolean;
+  writeScope?: AgentWriteScope;
+}
+
+/** Explicit non-operator agent path for cron and isolated MCP processes. */
+export function runBackgroundAgent(
+  agentName: string,
+  prompt: string,
+  opts: BackgroundAgentOptions = {},
+): Promise<ClaudeResult> {
+  return runAgent(agentName, prompt, opts.timeoutMs, false, opts.voice, opts.writeScope);
 }
 
 const SESSION_SUMMARY_INSTRUCTIONS = `Summarize our conversation so far in this exact format (nothing else, no markdown fences):

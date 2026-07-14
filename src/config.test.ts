@@ -17,17 +17,28 @@ describe('config', () => {
   it('throws when TELEGRAM_BOT_TOKEN is missing', async () => {
     delete process.env['TELEGRAM_BOT_TOKEN'];
     delete process.env['TELEGRAM_USER_ID'];
-    await expect(() => import('./config.js')).rejects.toThrow(
-      'Missing required env var: TELEGRAM_BOT_TOKEN',
-    );
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    const { assertOperatorConfig } = await import('./config.js');
+    expect(() => assertOperatorConfig()).toThrow('Missing required env var: TELEGRAM_BOT_TOKEN');
   });
 
   it('throws when TELEGRAM_USER_ID is missing', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     delete process.env['TELEGRAM_USER_ID'];
-    await expect(() => import('./config.js')).rejects.toThrow(
-      'Missing required env var: TELEGRAM_USER_ID',
-    );
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    const { assertOperatorConfig } = await import('./config.js');
+    expect(() => assertOperatorConfig()).toThrow('Missing required env var: TELEGRAM_USER_ID');
+  });
+
+  it('loads the product-chat subsystem without placeholder Telegram credentials', async () => {
+    delete process.env['TELEGRAM_BOT_TOKEN'];
+    delete process.env['TELEGRAM_USER_ID'];
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_PRODUCT_CHAT_PRODUCT'] = 'assay';
+    const { default: config } = await import('./config.js');
+    expect(config.VAULT_DIR).toBe('/tmp/vault');
+    expect(() => config.TELEGRAM_BOT_TOKEN).toThrow(/TELEGRAM_BOT_TOKEN/);
+    expect(() => config.TELEGRAM_USER_ID).toThrow(/TELEGRAM_USER_ID/);
   });
 
   it('loads successfully when all required vars are set', async () => {

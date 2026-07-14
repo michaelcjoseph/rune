@@ -5,9 +5,12 @@ const mockStartReview = vi.hoisted(() => vi.fn());
 const mockHandleBlog = vi.hoisted(() => vi.fn());
 
 vi.mock('../../config.js', () => ({
+  PROJECT_ROOT: '/test/project',
   default: {
     TELEGRAM_USER_ID: 42,
     VAULT_DIR: '/test/vault',
+    LOGS_DIR: '/test/logs',
+    WORKSPACE_DIR: '/test/workspace',
     TIMEZONE: 'America/Chicago',
     RESOLVER_MIN_WORDS: 5,
     RESOLVER_CONFIDENCE_THRESHOLD: 0.7,
@@ -1473,6 +1476,9 @@ describe('dispatchText — product-scoped webview sessions', () => {
       'mcp__rune-kb__repo_search',
       'mcp__rune-kb__kb_query',
       'mcp__rune-kb__kb_search',
+      'mcp__rune-kb__cockpit_list_runs',
+      'mcp__rune-kb__cockpit_inspect_run',
+      'mcp__rune-kb__cockpit_active_runs',
     ]));
     expect(options.allowedTools).not.toContain(retiredMcpTool('repo_search'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_query'));
@@ -1532,6 +1538,9 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.allowedTools).not.toContain('Edit');
     expect(options.allowedTools).not.toContain('Write');
     expect(options.allowedTools).not.toContain('Bash');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_list_runs');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_inspect_run');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_active_runs');
   });
 
   it('keeps an unresolved product scope read-only and out of a product cwd', async () => {
