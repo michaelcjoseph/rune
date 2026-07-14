@@ -36,7 +36,7 @@ const base = {
   systemPrompt: 'SYSTEM',
   priorMessages: [],
   executor: null,
-  writeEnabled: false,
+  authority: 'read-only' as const,
   allowedTools: ['Read'],
 };
 
@@ -78,7 +78,8 @@ describe('provider-aware chat', () => {
       executor: {
         format: 'codex',
         sessionId: 'codex-thread',
-        writeEnabled: false,
+        authority: 'read-only',
+        cwd: '/test/vault',
       },
     });
   });
@@ -87,9 +88,10 @@ describe('provider-aware chat', () => {
     const result = await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
-      writeEnabled: true,
+      authority: 'product-full-access',
       product: 'rune',
       cwd: '/workspace/rune',
+      writableRoot: '/workspace/rune',
     });
 
     expect(runCodex).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
@@ -101,8 +103,9 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      writeEnabled: true,
+      authority: 'product-full-access',
       cwd: '/workspace/rune',
+      writableRoot: '/workspace/rune',
     });
     const configOverrides = runCodex.mock.calls[0]![1].configOverrides as string[];
     expect(configOverrides).toHaveLength(1);
@@ -137,7 +140,8 @@ describe('provider-aware chat', () => {
       executor: {
         format: 'codex',
         sessionId: 'codex-thread',
-        writeEnabled: false,
+        authority: 'read-only',
+        cwd: '/test/vault',
       },
     });
 
@@ -150,7 +154,8 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      writeEnabled: false,
+      authority: 'read-only',
+      cwd: '/test/vault',
     });
   });
 
@@ -163,7 +168,7 @@ describe('provider-aware chat', () => {
       executor: {
         format: 'codex',
         sessionId: 'full-access-thread',
-        writeEnabled: true,
+        authority: 'product-full-access',
         cwd: '/workspace/rune',
       },
     });
@@ -180,7 +185,8 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      writeEnabled: false,
+      authority: 'read-only',
+      cwd: '/test/vault',
     });
   });
 
@@ -209,7 +215,8 @@ describe('provider-aware chat', () => {
       model: 'gpt-5.6-terra',
       product: 'rune',
       cwd: '/workspace/rune',
-      writeEnabled: true,
+      writableRoot: '/workspace/rune',
+      authority: 'product-full-access',
       priorMessages: [{ role: 'assistant', text: 'earlier read-only answer', ts: 'now' }],
       executor: {
         format: 'codex',
@@ -230,8 +237,9 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      writeEnabled: true,
+      authority: 'product-full-access',
       cwd: '/workspace/rune',
+      writableRoot: '/workspace/rune',
     });
   });
 
@@ -241,13 +249,15 @@ describe('provider-aware chat', () => {
       model: 'gpt-5.6-terra',
       product: 'rune',
       cwd: '/workspace/rune',
-      writeEnabled: true,
+      writableRoot: '/workspace/rune',
+      authority: 'product-full-access',
       priorMessages: [{ role: 'user', text: 'do not replay this product turn', ts: 'now' }],
       executor: {
         format: 'codex',
         sessionId: 'full-access-thread',
         writeEnabled: true,
         cwd: '/workspace/rune',
+        writableRoot: '/workspace/rune',
       },
     });
 
@@ -261,12 +271,41 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'full-access-thread',
-      writeEnabled: true,
+      authority: 'product-full-access',
       cwd: '/workspace/rune',
+      writableRoot: '/workspace/rune',
     });
     const configOverrides = runCodex.mock.calls[0]![1].configOverrides as string[];
     expect(configOverrides).toHaveLength(1);
     expect(configOverrides[0]).toContain('cockpit_inspect_run');
+  });
+
+  it('rotates matching Codex metadata without a thread id and replays the boundary prompt', async () => {
+    await askChatWithContext({
+      ...base,
+      model: 'gpt-5.6-terra',
+      product: 'rune',
+      cwd: '/workspace/rune',
+      writableRoot: '/workspace/rune',
+      authority: 'product-full-access',
+      priorMessages: [{ role: 'assistant', text: 'earlier boundary context', ts: 'now' }],
+      executor: {
+        format: 'codex',
+        authority: 'product-full-access',
+        cwd: '/workspace/rune',
+        writableRoot: '/workspace/rune',
+      },
+    });
+
+    const [prompt, options] = runCodex.mock.calls[0]!;
+    expect(prompt).toContain('SYSTEM');
+    expect(prompt).toContain('VOICE');
+    expect(prompt).toContain('earlier boundary context');
+    expect(options).toEqual(expect.objectContaining({
+      sandboxMode: 'danger-full-access',
+      cwd: '/workspace/rune',
+    }));
+    expect(options).not.toHaveProperty('resumeSessionId');
   });
 
   it('passes the product-scoped MCP registration to Claude product chats', async () => {
@@ -275,7 +314,8 @@ describe('provider-aware chat', () => {
       model: 'opus',
       product: 'assay',
       cwd: '/workspace/assay',
-      writeEnabled: true,
+      writableRoot: '/workspace/assay',
+      authority: 'product-full-access',
     });
 
     const options = askClaude.mock.calls[0]![3];
@@ -291,12 +331,12 @@ describe('provider-aware chat', () => {
       product: 'writing',
       cwd: '/workspace/writing',
       writableRoot: '/workspace/writing/docs/brand',
-      writeEnabled: true,
+      authority: 'product-full-access',
       priorMessages: [{ role: 'assistant', text: 'earlier scoped answer', ts: 'now' }],
       executor: {
         format: 'codex',
         sessionId: 'writing-scope-thread',
-        writeEnabled: true,
+        authority: 'product-full-access',
         cwd: '/workspace/writing',
         writableRoot: '/workspace/writing/docs/rune',
       },
@@ -314,7 +354,7 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      writeEnabled: true,
+      authority: 'product-full-access',
       cwd: '/workspace/writing',
       writableRoot: '/workspace/writing/docs/brand',
     });
@@ -326,13 +366,15 @@ describe('provider-aware chat', () => {
       model: 'gpt-5.6-terra',
       product: 'rune',
       cwd: '/workspace/rune-new',
-      writeEnabled: true,
+      writableRoot: '/workspace/rune-new',
+      authority: 'product-full-access',
       priorMessages: [{ role: 'assistant', text: 'earlier repository answer', ts: 'now' }],
       executor: {
         format: 'codex',
         sessionId: 'old-repository-thread',
-        writeEnabled: true,
+        authority: 'product-full-access',
         cwd: '/workspace/rune-old',
+        writableRoot: '/workspace/rune-old',
       },
     });
 
@@ -353,12 +395,12 @@ describe('provider-aware chat', () => {
       product: 'writing',
       cwd: '/workspace/writing',
       writableRoot: '/workspace/writing/docs/rune',
-      writeEnabled: true,
+      authority: 'product-full-access',
       priorMessages: [{ role: 'user', text: 'do not replay scoped history', ts: 'now' }],
       executor: {
         format: 'codex',
         sessionId: 'writing-scope-thread',
-        writeEnabled: true,
+        authority: 'product-full-access',
         cwd: '/workspace/writing',
         writableRoot: '/workspace/writing/docs/rune',
       },
@@ -374,27 +416,31 @@ describe('provider-aware chat', () => {
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'writing-scope-thread',
-      writeEnabled: true,
+      authority: 'product-full-access',
       cwd: '/workspace/writing',
       writableRoot: '/workspace/writing/docs/rune',
     });
   });
 
-  it('does not upgrade a legacy configured product thread until the session is cleared', async () => {
+  it('rotates a metadata-less legacy product thread and replays its transcript', async () => {
     await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
       product: 'rune',
       cwd: '/workspace/rune',
-      writeEnabled: true,
+      writableRoot: '/workspace/rune',
+      authority: 'product-full-access',
+      priorMessages: [{ role: 'assistant', text: 'legacy answer to replay', ts: 'now' }],
       executor: { format: 'codex', sessionId: 'legacy-thread' },
     });
 
-    expect(runCodex).toHaveBeenCalledWith('current question', expect.objectContaining({
-      resumeSessionId: 'legacy-thread',
+    const [prompt, options] = runCodex.mock.calls[0]!;
+    expect(prompt).toContain('legacy answer to replay');
+    expect(options).toEqual(expect.objectContaining({
+      cwd: '/workspace/rune',
+      sandboxMode: 'danger-full-access',
     }));
-    const options = runCodex.mock.calls[0]![1];
-    expect(options).not.toHaveProperty('sandboxMode');
+    expect(options).not.toHaveProperty('resumeSessionId');
   });
 
   it('preserves context when a cross-provider switch starts a Claude session', async () => {

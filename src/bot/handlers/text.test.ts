@@ -1488,7 +1488,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
     expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
       scope: productScope,
-      writeEnabled: true,
+      authority: 'product-full-access',
     }));
   });
 
@@ -1574,7 +1574,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.allowedTools).not.toContain('Bash');
     expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
       scope: productScope,
-      writeEnabled: false,
+      authority: 'read-only',
     }));
   });
 

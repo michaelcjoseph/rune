@@ -1,39 +1,5 @@
 ## Active
 
-- [ ] Codex product chats are sometimes provisioned read-only even though product development chats require full repository write authority.
-  - Expected.
-    Every resolved product chat, for both Claude and Codex, starts with full write authority in its product repository, including .git, managed worktrees, package-manager caches needed by normal development, and subprocesses launched from that repository.
-    Claude product chats use the existing --dangerously-skip-permissions posture.
-    Codex product chats use -s danger-full-access.
-    Global/Home chats and unresolved product chats remain read-only. Vault-write, secret-handling, and cross-product restrictions remain policy constraints, not sandbox guarantees.
-  - Actual.
-    This Codex product chat for rune was provisioned with sandbox_mode: read-only and a restricted filesystem profile.
-    It can inspect the repository but cannot append a requested bug report to docs/projects/bugs.md, modify source, or perform normal Git-backed development work.
-    Giving .git write permission alone would not fix this. The active sandbox blocks writes before Git metadata is relevant.
-  - Why this is a configuration error.
-    The source-level Codex chat dispatcher already requests danger-full-access for a fresh write-enabled product thread in src/ai/chat.ts (runCodex(... { sandboxMode: request.writeEnabled ? 'danger-full-access' : 'read-only' })).
-    Codex resumes cannot pass -s; they retain the sandbox policy of the original thread. A thread initially created read-only therefore remains read-only until it is rotated.
-    The current session proves the authority selected by the product-chat launcher/control plane does not reliably match the product scope and writeEnabled state passed by Rune.
-  - Required fix.
-    At the Codex product-chat provisioning boundary, derive sandbox authority from the resolved chat scope:
-    resolved product workspace: danger-full-access
-    Home/global or unresolved product: read-only
-    Ensure fresh Codex threads for resolved product chats always receive -s danger-full-access.
-    When a stored Codex executor/thread was created with weaker authority, invalidate and rotate it before the next product-chat turn instead of resuming it.
-    Preserve the existing Claude behavior and make both providers use one explicit product-chat authority policy, rather than separate implied defaults.
-    Add end-to-end assertions on the actual spawned/session environment, not only runCodex argv construction.
-  - Repro.
-    Open a resolved Cockpit product chat using Codex.
-    Ask it to make a small edit inside the active product repository.
-    Observe a read-only/restricted filesystem profile or an operation-permitted failure.
-    Start a fresh resolved Codex product chat and verify the spawned Codex command carries -s danger-full-access.
-    Resume that thread and verify it retains full authority. Repeat with a pre-existing read-only thread and verify Rune rotates it rather than resuming it.
-  - Acceptance criteria.
-    A fresh Claude or Codex chat for any resolved product can create, edit, delete, run tests, and commit files within that product repository and its managed worktrees.
-    Codex’s fresh spawn receives -s danger-full-access; Claude retains --dangerously-skip-permissions.
-    A previously read-only Codex thread is never resumed as a write-enabled product chat.
-    Global/Home and unresolved product chats remain read-only.
-    An integration test exercises the real product-chat launch path and verifies effective authority for both providers, including .git writes and a normal source-file edit.
 - [ ] Cockpit recovery can target an active orchestrated run after its worktree has been removed, then leaks a raw ENOENT instead of reporting that recovery is impossible.
   - Observed failure. Run 0e6a4c21 for project 22-fix-run-dispatch showed: ENOENT: no such file or directory, scandir '.../.worktrees/rune/22-fix-run-dispatch/docs/projects'.
   - What should have happened.
@@ -160,11 +126,13 @@
 (empty)
 
 ## Done
+- [x] **Codex product chats could retain read-only or unknown thread authority instead of receiving full repository access.** **(Fixed 2026-07-14 — the webview conversation boundary now derives one provider-neutral `ChatAuthority` from product scope plus successful workspace resolution. Resolved product chats use `product-full-access`; Home/global and unresolved products use `read-only`. The same decision controls prompt capability, tools, product MCP, Codex `-s danger-full-access`, and persisted executor metadata while Claude retains its existing full-trust product posture. Full access is type-bound to product/cwd/scoped-root metadata, and Codex resumes require a non-empty thread id plus exact authority, effective cwd, and scoped-root matches. Explicit legacy `writeEnabled:true/false` records remain recognized, but metadata-less, threadless, weaker, or differently-bound threads rotate automatically with transcript replay and are cleaned through session replacement. Controlled Claude/Codex CLI fixtures drive the real webview launch path in temporary repositories and prove source plus `.git` writes/commit, matching Codex resume, and legacy read-only rotation. Focused tests, type-check, and the full 327-file suite (5,315 passed, 8 todo) pass.)**
+
 - [x] **Nested orchestration-role cancellation was reported as a generic blocked run without durable source or child-operation correlation.** **(Fixed 2026-07-13 — the first cancellation request is recorded before SIGTERM as provider-neutral `{operationId,source,requestedAt}` metadata with explicit Telegram/cockpit/internal provenance. Claude and Codex judgment and execution roles register as product-scoped agent operations and propagate a typed role cancellation through workflow and orchestration. User sources use the existing failed/user-cancel terminal; internal cancellation uses completed/system-cancel; the task stays unchecked and cleanup is unchanged. Terminals name the role, source, and shortened operation ID without blocker/model-failure wording. Scrubbed correlation persists in `WorkRunSummary`, is normalized at read time, and appears in diagnostics after the live child exits. Focused tests, type-check, the full 326-file suite (5,311 passed, 8 todo), docs-sync, security, architecture, code, test, and simplification reviews pass.)**
 
 - [x] **Product chats could not inspect their own Cockpit work-run records.** **(Fixed 2026-07-13 — configured product chats now receive a dedicated strict seven-tool `rune-kb` stdio surface for both Claude and Codex, including `cockpit_list_runs`, `cockpit_inspect_run`, and `cockpit_active_runs`. Server-owned product scope is checked fail-closed before artifact reads; bounded readers and DTOs cap files, records, transcript tails, strings, nested objects, and final JSON while scrubbing secrets and host paths. Home/global, unresolved product, normal local, artifact-role, and remote MCP surfaces remain unchanged. Focused routing, provider-registration, server-surface, authorization, malformed-input, redaction, and bounds tests cover the fix.)**
 
-- [x] **Codex-backed product chats could edit product files but could not write Git metadata, preventing normal repository work.** **(Fixed 2026-07-13 — fresh write-enabled Codex product threads now use `danger-full-access`; Home/global and unresolved products remain read-only. Authority or workspace changes rotate the thread safely. Existing product threads require `/fresh` or `/clear` to receive the new policy. Secret scrubbing and all non-chat sandbox boundaries are unchanged; focused tests, full suite, and type-check pass.)**
+- [x] **Codex-backed product chats could edit product files but could not write Git metadata, preventing normal repository work.** **(Fixed 2026-07-13 — fresh write-enabled Codex product threads use `danger-full-access`; Home/global and unresolved products remain read-only. Authority or workspace changes rotate the thread safely. Hardened 2026-07-14 so legacy weaker or unknown product threads rotate automatically rather than requiring `/fresh` or `/clear`. Secret scrubbing and all non-chat sandbox boundaries are unchanged.)**
 
 - [x] **Orchestrated coder can't reach pkms: rune-kb MCP not registered in the coder's child-sandbox context, so MCP-only tasks fail on a missing deliverable.**
   - **Symptom.** The orchestrated run for product `writing`/`brand` (michaelcjoseph.com, project 01) failed on task `voice-guidelines-copy` (run `b03af189`). Round cap reached with unresolved task feedback. Empty diff. The deliverable (copied voice guidelines under `docs/rune/`) was absent from both the diff and the branch tree-state.

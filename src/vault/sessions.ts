@@ -16,6 +16,7 @@ const PROMPT_FILE_CHAR_LIMIT = 4_000;
 const MAX_PROJECT_CONTEXTS = 5;
 
 export type Transport = 'telegram' | 'webview';
+export type ChatAuthority = 'read-only' | 'product-full-access';
 export type SessionScope =
   | { kind: 'global'; product?: undefined }
   | { kind: 'product'; product: string };
@@ -62,18 +63,19 @@ export interface BuildSessionSystemPromptInput {
   scope?: SessionScope;
   productContext?: ProductPromptContext;
   workspaceDir?: string;
-  /** When true, the product preamble describes Rune as able to edit/run code in
-   *  the product repo (Phase 2 write-enabled chat). When false/omitted, it
-   *  describes a read-and-reason posture. The actual tool allowlist + writable
-   *  dirs are enforced at the spawn (src/bot/handlers/text.ts, src/ai/claude.ts);
-   *  this flag only keeps the prompt's stated capability honest. */
-  writeEnabled?: boolean;
+  /** Provider-neutral authority derived from the resolved chat scope. The
+   *  product preamble uses it to state the same capability that the spawn
+   *  receives; omitted defaults to read-only. */
+  authority?: ChatAuthority;
 }
 
 export interface ConversationExecutor {
   format: 'claude' | 'codex';
   sessionId?: string;
-  /** Codex-only posture bound to the persistent thread at creation time. */
+  /** Codex-only authority bound to the persistent thread at creation time. */
+  authority?: ChatAuthority;
+  /** Legacy Codex posture. Explicit true/false records are normalized when
+   *  deciding whether a thread can resume; absence means unknown authority. */
   writeEnabled?: boolean;
   /** Codex-only product workspace bound to the persistent thread. */
   cwd?: string;
@@ -134,15 +136,16 @@ function buildGenericSystemPrompt(workspaceDir: string | undefined): string {
 /** Identity preamble for a PRODUCT-scoped chat. Unlike the global vault persona,
  *  Rune here is the development agent for one product, working IN that product's
  *  repo; the second brain is reached read-only through the rune-kb MCP, never as
- *  the working directory. `writeEnabled` flips the stated capability between
+ *  the working directory. `authority` flips the stated capability between
  *  read-and-reason and edit-and-run (kept in sync with the spawn's tool
  *  allowlist + writable dirs — see src/bot/handlers/text.ts). */
 function buildProductIdentityPreamble(
   product: string,
   repoPath: string | undefined,
   scopePath: string | undefined,
-  writeEnabled: boolean,
+  authority: ChatAuthority,
 ): string {
+  const writeEnabled = authority === 'product-full-access';
   const workRoot = repoPath && scopePath ? join(repoPath, scopePath) : repoPath;
   const repoSentence = repoPath
     ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
@@ -235,14 +238,14 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
     return buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
   }
 
-  const writeEnabled = input.writeEnabled ?? false;
+  const authority = input.authority ?? 'read-only';
   const context = input.productContext ?? loadProductPromptContext(scope.product);
   if (!context) {
-    const preamble = buildProductIdentityPreamble(scope.product, undefined, undefined, writeEnabled);
+    const preamble = buildProductIdentityPreamble(scope.product, undefined, undefined, authority);
     return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.`;
   }
 
-  const preamble = buildProductIdentityPreamble(scope.product, context.repoPath, context.scopePath, writeEnabled);
+  const preamble = buildProductIdentityPreamble(scope.product, context.repoPath, context.scopePath, authority);
   const productPrompt = buildProductContextPrompt(scope, context);
   const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - preamble.length - 2);
   const boundedProductPrompt = productPrompt.length > available

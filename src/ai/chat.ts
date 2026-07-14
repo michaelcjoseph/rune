@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import config from '../config.js';
 import { loadModelPolicy, type ModelEntry } from '../intent/model-policy.js';
-import type { ConversationExecutor, ConversationMessage } from '../vault/sessions.js';
+import type { ChatAuthority, ConversationExecutor, ConversationMessage } from '../vault/sessions.js';
 import { buildVoicePromptSection } from '../vault/voice.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { askClaudeWithContext, buildClaudeChildEnv } from './claude.js';
@@ -12,7 +12,7 @@ import { buildProductChatMcpConfig } from './product-chat-mcp.js';
 
 const TRANSCRIPT_CHAR_BUDGET = 40_000;
 
-export interface ChatRequest {
+interface ChatRequestBase {
   /** Pre-provider sessions used Rune's public id as the Claude CLI id. */
   legacyClaudeSessionId?: string;
   message: string;
@@ -20,12 +20,23 @@ export interface ChatRequest {
   systemPrompt: string;
   priorMessages: ConversationMessage[];
   executor: ConversationExecutor | null;
-  cwd?: string;
-  writableRoot?: string;
-  writeEnabled: boolean;
   allowedTools: string[];
-  product?: string;
 }
+
+export type ChatRequest = ChatRequestBase & (
+  | {
+      authority: Extract<ChatAuthority, 'read-only'>;
+      cwd?: never;
+      writableRoot?: never;
+      product?: string;
+    }
+  | {
+      authority: Extract<ChatAuthority, 'product-full-access'>;
+      cwd: string;
+      writableRoot: string;
+      product: string;
+    }
+);
 
 export interface ChatResult {
   text: string | null;
@@ -87,26 +98,37 @@ function codexExecutorMatchesRequest(
   executor: ConversationExecutor,
   request: ChatRequest,
 ): boolean {
-  if (executor.writeEnabled === undefined) {
-    // Threads persisted before posture tracking keep their original policy.
-    // The exception is an unresolved product: fail closed instead of resuming
-    // a legacy product thread from the vault with an unknown sandbox posture.
-    return !request.product || request.writeEnabled;
-  }
-  return executor.writeEnabled === request.writeEnabled &&
-    executor.cwd === request.cwd &&
+  if (!executor.sessionId?.trim()) return false;
+  const authority = executor.authority ?? (
+    executor.writeEnabled === true
+      ? 'product-full-access'
+      : executor.writeEnabled === false
+        ? 'read-only'
+        : null
+  );
+  if (!authority) return false;
+
+  // Older explicit read-only records omitted cwd because the Codex primitive
+  // defaulted it to the vault. That binding is known and can be normalized;
+  // metadata-less posture records remain unknown and are never resumed.
+  const cwd = executor.cwd ?? (executor.writeEnabled === false ? config.VAULT_DIR : undefined);
+  const requestCwd = request.cwd ?? config.VAULT_DIR;
+  return authority === request.authority &&
+    cwd === requestCwd &&
     executor.writableRoot === request.writableRoot;
 }
 
 export async function askChatWithContext(request: ChatRequest): Promise<ChatResult> {
   const binding = resolveChatModel(request.model);
   const formatMatchedExecutor = request.executor?.format === binding.format ? request.executor : null;
-  const sameExecutor = formatMatchedExecutor?.format === 'codex' &&
-    !codexExecutorMatchesRequest(formatMatchedExecutor, request)
-    ? null
-    : formatMatchedExecutor;
+  const sameExecutor = formatMatchedExecutor?.format === 'codex'
+    ? (codexExecutorMatchesRequest(formatMatchedExecutor, request) ? formatMatchedExecutor : null)
+    : formatMatchedExecutor?.sessionId?.trim()
+      ? formatMatchedExecutor
+      : null;
   const initialPrompt = bootstrapMessage(request.message, sameExecutor ? [] : request.priorMessages);
-  const productMcp = request.writeEnabled && request.product
+  const fullAccess = request.authority === 'product-full-access';
+  const productMcp = fullAccess && request.product
     ? buildProductChatMcpConfig(request.product)
     : null;
 
@@ -135,7 +157,7 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     model: request.model,
     cwd: request.cwd ?? config.VAULT_DIR,
     persistentSession: true,
-    ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: request.writeEnabled ? 'danger-full-access' : 'read-only' }),
+    ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: fullAccess ? 'danger-full-access' : 'read-only' }),
     // Codex is shell-capable even in read-only mode. Always use the secret-
     // scrubbed chat environment; global/Home chat must not inherit Rune's env.
     env: buildClaudeChildEnv('product-chat'),
@@ -160,13 +182,9 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     executor: {
       format: 'codex',
       ...(threadId ? { sessionId: threadId } : {}),
-      ...(sameExecutor?.format === 'codex' && sameExecutor.writeEnabled === undefined
-        ? {}
-        : {
-            writeEnabled: request.writeEnabled,
-            ...(request.cwd ? { cwd: request.cwd } : {}),
-            ...(request.writableRoot ? { writableRoot: request.writableRoot } : {}),
-          }),
+      authority: request.authority,
+      cwd: request.cwd ?? config.VAULT_DIR,
+      ...(request.writableRoot ? { writableRoot: request.writableRoot } : {}),
     },
   };
 }

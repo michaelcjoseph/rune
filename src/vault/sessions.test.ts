@@ -54,7 +54,7 @@ type BuildSessionSystemPrompt = (input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
-  writeEnabled?: boolean;
+  authority?: 'read-only' | 'product-full-access';
 }) => string;
 
 function requireBuildSessionSystemPrompt(): BuildSessionSystemPrompt {
@@ -72,7 +72,7 @@ function buildSessionSystemPrompt(input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
-  writeEnabled?: boolean;
+  authority?: 'read-only' | 'product-full-access';
 }): string {
   return requireBuildSessionSystemPrompt()(input);
 }
@@ -528,12 +528,12 @@ describe('vault/sessions', () => {
       expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
     });
 
-    it('states scoped edit + raw Bash capability honestly when writeEnabled', () => {
+    it('states scoped edit + raw Bash capability honestly with full product authority', () => {
       const prompt = buildSessionSystemPrompt({
         scope: runeScope,
         productContext: runeContext,
         workspaceDir: '/workspace',
-        writeEnabled: true,
+        authority: 'product-full-access' as const,
       });
 
       // Can read, edit, and run code in the repo.
@@ -563,14 +563,14 @@ describe('vault/sessions', () => {
           scopePath: 'docs/rune',
         },
         workspaceDir: '/workspace',
-        writeEnabled: true,
+        authority: 'product-full-access',
       });
 
       expect(prompt).toContain('Your working repo is /workspace/site (focused on docs/rune).');
       expect(prompt).toContain('Your editable product workspace is /workspace/site/docs/rune.');
     });
 
-    it('keeps read-and-reason language (no edit claim) when writeEnabled is off', () => {
+    it('keeps read-and-reason language (no edit claim) with read-only authority', () => {
       const prompt = buildSessionSystemPrompt({
         scope: runeScope,
         productContext: runeContext,
@@ -744,7 +744,7 @@ describe('vault/sessions', () => {
       const executor = {
         format: 'codex' as const,
         sessionId: 'writing-scope-thread',
-        writeEnabled: true,
+        authority: 'product-full-access' as const,
         cwd: '/workspace/writing',
         writableRoot: '/workspace/writing/docs/rune',
       };

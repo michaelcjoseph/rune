@@ -536,18 +536,26 @@ async function handleConversationTurn(
     // and product chats whose repo can't be resolved — stay read-only with the
     // vault cwd.
     const workspace = scope?.kind === 'product' ? resolveProductChatWorkspace(scope.product) : null;
-    const writeEnabled = !!workspace;
+    const chatAccess = workspace && scope?.kind === 'product'
+      ? {
+          authority: 'product-full-access' as const,
+          cwd: workspace.repoRoot,
+          writableRoot: workspace.workRoot,
+          product: scope.product,
+        }
+      : {
+          authority: 'read-only' as const,
+          ...(scope?.kind === 'product' ? { product: scope.product } : {}),
+        };
     const result = await askChatWithContext({
       ...(session.executor === undefined ? { legacyClaudeSessionId: session.sessionId } : {}),
       message: text,
       model: session.model,
-      systemPrompt: buildSessionSystemPrompt({ scope, writeEnabled }),
+      systemPrompt: buildSessionSystemPrompt({ scope, authority: chatAccess.authority }),
       priorMessages,
       executor: session.executor ?? null,
-      ...(workspace ? { cwd: workspace.repoRoot, writableRoot: workspace.workRoot } : {}),
-      writeEnabled,
-      allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
-      ...(scope?.kind === 'product' ? { product: scope.product } : {}),
+      ...chatAccess,
+      allowedTools: chatAccess.authority === 'product-full-access' ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
     });
 
     if (result.error) {
