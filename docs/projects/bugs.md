@@ -1,5 +1,160 @@
 ## Active
 
+- [ ] Codex product chats are sometimes provisioned read-only even though product development chats require full repository write authority.
+  - Expected.
+    Every resolved product chat, for both Claude and Codex, starts with full write authority in its product repository, including .git, managed worktrees, package-manager caches needed by normal development, and subprocesses launched from that repository.
+    Claude product chats use the existing --dangerously-skip-permissions posture.
+    Codex product chats use -s danger-full-access.
+    Global/Home chats and unresolved product chats remain read-only. Vault-write, secret-handling, and cross-product restrictions remain policy constraints, not sandbox guarantees.
+  - Actual.
+    This Codex product chat for rune was provisioned with sandbox_mode: read-only and a restricted filesystem profile.
+    It can inspect the repository but cannot append a requested bug report to docs/projects/bugs.md, modify source, or perform normal Git-backed development work.
+    Giving .git write permission alone would not fix this. The active sandbox blocks writes before Git metadata is relevant.
+  - Why this is a configuration error.
+    The source-level Codex chat dispatcher already requests danger-full-access for a fresh write-enabled product thread in src/ai/chat.ts (runCodex(... { sandboxMode: request.writeEnabled ? 'danger-full-access' : 'read-only' })).
+    Codex resumes cannot pass -s; they retain the sandbox policy of the original thread. A thread initially created read-only therefore remains read-only until it is rotated.
+    The current session proves the authority selected by the product-chat launcher/control plane does not reliably match the product scope and writeEnabled state passed by Rune.
+  - Required fix.
+    At the Codex product-chat provisioning boundary, derive sandbox authority from the resolved chat scope:
+    resolved product workspace: danger-full-access
+    Home/global or unresolved product: read-only
+    Ensure fresh Codex threads for resolved product chats always receive -s danger-full-access.
+    When a stored Codex executor/thread was created with weaker authority, invalidate and rotate it before the next product-chat turn instead of resuming it.
+    Preserve the existing Claude behavior and make both providers use one explicit product-chat authority policy, rather than separate implied defaults.
+    Add end-to-end assertions on the actual spawned/session environment, not only runCodex argv construction.
+  - Repro.
+    Open a resolved Cockpit product chat using Codex.
+    Ask it to make a small edit inside the active product repository.
+    Observe a read-only/restricted filesystem profile or an operation-permitted failure.
+    Start a fresh resolved Codex product chat and verify the spawned Codex command carries -s danger-full-access.
+    Resume that thread and verify it retains full authority. Repeat with a pre-existing read-only thread and verify Rune rotates it rather than resuming it.
+  - Acceptance criteria.
+    A fresh Claude or Codex chat for any resolved product can create, edit, delete, run tests, and commit files within that product repository and its managed worktrees.
+    Codex’s fresh spawn receives -s danger-full-access; Claude retains --dangerously-skip-permissions.
+    A previously read-only Codex thread is never resumed as a write-enabled product chat.
+    Global/Home and unresolved product chats remain read-only.
+    An integration test exercises the real product-chat launch path and verifies effective authority for both providers, including .git writes and a normal source-file edit.
+- [ ] Cockpit recovery can target an active orchestrated run after its worktree has been removed, then leaks a raw ENOENT instead of reporting that recovery is impossible.
+  - Observed failure. Run 0e6a4c21 for project 22-fix-run-dispatch showed: ENOENT: no such file or directory, scandir '.../.worktrees/rune/22-fix-run-dispatch/docs/projects'.
+  - What should have happened.
+    - A run marked recoverable must retain its worktree until recovery either re-dispatches it or explicitly reaches a terminal cleanup decision.
+    - If the worktree has already been removed, Cockpit must reject recovery with a clear non-retryable response such as worktree no longer exists; this run cannot be recovered.
+    - A run with uncommitted work must be preserved or explicitly parked before teardown. It must not be presented as recoverable after cleanup has discarded its state.
+  - What actually happened.
+    - The run completed QA, tech-lead test review, and coder implementation for fix-attempt-terminal-states.
+    - The coder reported npm run build and npm test passing, but the run was cancelled before task orchestration committed or finalized the work.
+    - Its terminal record reports dirty-uncommitted, zero commits, and reaped-after-terminal-result.
+    - The worktree was removed. git worktree list no longer contains 22-fix-run-dispatch.
+    - A recovery request still used the durable cursor’s old worktreePath, then called readdirSync(<worktree>/docs/projects) and threw raw ENOENT.
+    - The uncommitted implementation and tests were lost with the removed worktree.
+  - Root cause.
+    r- eadTasksMdForRecoveredCursor() in src/jobs/orchestrated-work-runner.ts assumes cursor.worktreePath/docs/projects exists and calls readdirSync() without an existence check or error translation.
+    - Recovery eligibility is based on an active run plus a resumable cursor. It does not verify that the cursor’s worktree remains registered and present before exposing or executing recovery.
+    - Worktree teardown can therefore race with, or precede, the operator recovery path.
+  - Repro.
+    - Start an orchestrated run and let it reach a resumable state with a durable cursor.
+    - Cancel or otherwise terminalize it so its dirty, uncommitted worktree is reaped.
+    - Before the Cockpit model fully clears its recoverable control, invoke Recover.
+    - Observe the raw ENOENT for <worktree>/docs/projects.
+  - Fix.
+    - Make recovery preflight verify that cursor.worktreePath exists, is a registered worktree for the expected branch, and contains the project’s tasks.md.
+    - Treat a missing or invalid worktree as not-resumable, never as an internal server error. Return a path-scrubbed operator message.
+    - Tie Cockpit’s recover affordance to the same lifecycle invariant: only expose Recover while the worktree is preserved and recovery preflight passes.
+    - Prevent ordinary terminal cleanup from removing a worktree while a resumable cursor remains actionable. Dirty work should be WIP-committed and parked, or the cursor should be invalidated atomically before removal.
+  - Acceptance criteria.
+    - Recover on a missing worktree returns HTTP 409 with a clear, path-scrubbed reason, not HTTP 500 or raw ENOENT.
+    - Cockpit does not render Recover for a run whose preserved worktree no longer exists.
+    - A cancelled run with dirty work and a resumable cursor either preserves a recoverable worktree or records a WIP commit and parks it for human action.
+    - Recovery never destroys or silently loses uncommitted work.
+    - Tests cover the missing-directory case, an unregistered worktree, a valid resumable recovery, and the UI projection/control state.
+- [ ] Bug: orchestrated brand work runs fail during sandbox initialization and do not consistently inherit the Rune MCP
+  - Issue
+    The voice-guidelines-copy task in project 01-rune-writing-product cannot execute in the michaelcjoseph.com worktree.
+    Worker shell startup fails before any command runs with:
+    sandbox-exec: sandbox_apply: Operation not permitted
+    Patch writes also fail, so the worker cannot create docs/rune/voice.md.
+    The Rune MCP is registered and available in the brand product chat, but worker attempts receive inconsistent MCP inventories. Earlier attempts reached writing/voice.md; the final retry reported no Rune/pkms MCP server.
+    The result is an empty diff, no validation run, and an orchestration retry loop against an infrastructure failure.
+  - Affected run
+    Run: da582875-1929-44a3-8ddb-12af058c80b0
+    Product: brand
+    Project: 01-rune-writing-product
+    Task: voice-guidelines-copy
+  - Expected behavior
+    A worker dispatched for the brand product initializes a sandbox that can read, write, and execute commands inside /Users/jarvis/workspace/michaelcjoseph.com.
+    The worker inherits the same registered rune-kb MCP capabilities available to the product chat.
+    The worker can retrieve pkms/writing/voice.md through MCP, write the owned copy to docs/rune/voice.md, and run npm run build.
+  - Actual behavior
+    The sandbox rejects setup before command execution, including pwd and npm run build.
+    apply_patch cannot write to the declared worktree.
+    MCP availability differs between retries in the same run.
+    The task cannot produce its only required artifact.
+  - Reproduction
+    Start an orchestrated work run for product brand, targeting 01-rune-writing-product.
+    Dispatch voice-guidelines-copy.
+    Have the coder run any shell command in the declared worktree.
+    Observe sandbox initialization fail with sandbox_apply: Operation not permitted.
+    Attempt a patch under docs/rune/.
+    Observe the write fail.
+    Inspect the worker MCP inventory across retries.
+    Observe that Rune MCP availability is not stable, despite being available in the parent product chat.
+  - Required fix
+    Correct the sandbox profile or initialization path used by orchestrated brand workers so it authorizes the declared worktree for shell execution and file writes.
+    Ensure the worker receives the product chat’s registered rune-kb MCP configuration on every retry and every role handoff.
+    Verify this applies to the actual worker process, not only the parent product-chat process.
+    Preserve the existing privacy boundary: the worker must retrieve PKMS content only through Rune MCP, never through direct filesystem access.
+  - Acceptance criteria
+    A fresh brand work run can execute pwd successfully inside /Users/jarvis/workspace/michaelcjoseph.com.
+    The same worker can create, modify, and inspect a temporary file under docs/rune/.
+    The worker’s MCP inventory includes the Rune KB tools, including a content-query path sufficient to retrieve writing/voice.md.
+    MCP availability remains present across coder retries and role transitions in one run.
+    voice-guidelines-copy completes by creating docs/rune/voice.md from MCP-sourced content.
+    npm run build runs successfully after the file is created.
+    The resulting work run records a non-empty diff and completes without retrying because of sandbox initialization or missing MCP tools.
+- [ ] Bug: work run fails before execution because its isolated worktree is missing
+  - Project: 01-probe-harness-pilot
+  - Failed run: 5fe6989f
+  - Error:
+    `ENOENT: no such file or directory, scandir '/Users/jarvis/workspace/rune/.worktrees/assay/01-probe-harness-pilot/docs/projects'`
+  - Expected behavior, every time a project work run starts:
+    Resolve the product repository correctly: /Users/jarvis/workspace/assay.
+    Create or reuse the run’s isolated Git worktree before any project discovery, planning, or agent execution.
+    Check out the intended branch and verify the worktree directory exists.
+    Verify the project directory exists inside that worktree: docs/projects/01-probe-harness-pilot/.
+    Only then scan docs/projects/, load the project’s tasks.md, and begin work.
+    If worktree provisioning fails, stop with an actionable setup error that identifies the failed provisioning step. Do not attempt to read project files from a nonexistent path.
+  - Actual behavior:
+    The runner attempted to scan docs/projects within /Users/jarvis/workspace/rune/.worktrees/assay/01-probe-harness-pilot.
+    That directory had not been created or was unavailable to the runner.
+    The initial directory scan threw ENOENT.
+    The run failed before it could inspect the project, select a task, create a plan, or make any repository changes.
+  - Evidence:
+    The active repository exists at /Users/jarvis/workspace/assay.
+    The project exists at docs/projects/01-probe-harness-pilot/ in that repository.
+    Git reports only the primary worktree at /Users/jarvis/workspace/assay; no isolated worktree for 01-probe-harness-pilot is registered.
+    Therefore the failure is in cockpit worktree provisioning or path resolution, not in the project’s files.
+  - Reproduction steps:
+    Start a cockpit work run for project 01-probe-harness-pilot against the assay product.
+    Allow the runner to initialize its isolated worktree.
+    Observe that the runner attempts to read: /Users/jarvis/workspace/rune/.worktrees/assay/01-probe-harness-pilot/docs/projects.
+    Observe the run fail with ENOENT before any project task runs.
+  - Root cause hypothesis:
+    The runner derives a worktree path but does not successfully create or mount that worktree before scanning it.
+    A stale run/worktree record, an incorrect base-repository mapping, or an unhandled worktree-creation failure can produce the same result.
+  - Required fix:
+    Make worktree creation an explicit, checked initialization step.
+    Confirm the worktree exists and is a valid Git worktree before scanning docs/projects.
+    Resolve the source repository from the active product configuration, not from a stale hard-coded or cached path.
+    If the expected worktree is absent, either create it or fail with a clear provisioning error that includes the source repo, target path, and underlying Git error.
+    Clean up stale worktree records and failed run directories before retrying a run with the same project identifier.
+  - Acceptance criteria:
+    Starting a work run for 01-probe-harness-pilot creates or reuses a valid worktree before project discovery begins.
+    git worktree list shows the run worktree while the run is active.
+    The runner can read docs/projects/01-probe-harness-pilot/tasks.md from its worktree.
+    A normal run proceeds past initialization into task selection and planning.
+    A simulated worktree-creation failure produces a provisioning-specific error, not an unhandled ENOENT from scandir.
+    Retrying after a failed initialization does not require manual filesystem cleanup and does not reuse an invalid worktree path.
+
 ## Loop-filed
 
 (empty)
