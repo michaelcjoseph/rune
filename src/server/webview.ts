@@ -1631,6 +1631,23 @@ function appendAttemptUpdate(attempt: Omit<FixAttempt, 'updatedAt'> & { updatedA
   });
 }
 
+function appendAttemptUpdateUnlessTerminal(
+  attempt: Omit<FixAttempt, 'updatedAt'> & { updatedAt?: string },
+): void {
+  const latest = getLatestFixAttempt(
+    readLatestFixAttempts(config.FIX_ATTEMPTS_FILE),
+    attempt.product,
+    attempt.bugId,
+  );
+  if (latest && (
+    latest.attemptId !== attempt.attemptId
+    || (latest.state !== 'gating' && latest.state !== 'proceeding')
+  )) {
+    return;
+  }
+  appendAttemptUpdate(attempt);
+}
+
 function errorDetail(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -1641,7 +1658,7 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
     try {
       facts = await runPmTechLeadBugScoping({ product, bug });
     } catch (err) {
-      appendAttemptUpdate({
+      appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
@@ -1654,7 +1671,7 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
 
     const gate = evaluateBugFixGate(facts);
     if (gate.decision === 'declined') {
-      appendAttemptUpdate({
+      appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
@@ -1672,7 +1689,7 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
         scope: { bug, facts },
       });
       if (handoff.accepted === true) {
-        appendAttemptUpdate({
+        appendAttemptUpdateUnlessTerminal({
           attemptId,
           product,
           bugId: bug.id,
@@ -1681,16 +1698,16 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
         });
         return;
       }
-      appendAttemptUpdate({
+      appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
-        state: 'handoff-failed',
+        state: handoff.reason === 'not-single-product' ? 'declined' : 'handoff-failed',
         reason: handoff.reason || 'handoff-unavailable',
         ...(handoff.detail !== undefined ? { detail: handoff.detail } : {}),
       });
     } catch (err) {
-      appendAttemptUpdate({
+      appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
@@ -1707,7 +1724,7 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
       error: errorDetail(err),
     });
     try {
-      appendAttemptUpdate({
+      appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,

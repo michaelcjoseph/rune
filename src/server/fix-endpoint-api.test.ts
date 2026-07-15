@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BugScopingFacts } from '../jobs/bug-fix-gate.js';
+import type { StartFixRunResult } from '../jobs/fix-run-handoff.js';
 
 vi.mock('../transport/mutations.js', () => ({ createMutation: vi.fn(), cancelMutation: vi.fn(), activeRuns: new Map() }));
 vi.mock('../transport/in-flight.js', () => ({ cancelOp: vi.fn(), listOps: vi.fn(() => []) }));
@@ -108,7 +109,9 @@ vi.mock('../jobs/pm-techlead-bug-scoping.js', () => ({
   runPmTechLeadBugScoping: mockRunPmTechLeadBugScoping,
 }));
 
-const mockStartFixRun = vi.fn(async () => ({ accepted: true, runId: 'run-fix-accepted' }));
+const mockStartFixRun = vi.fn<() => Promise<StartFixRunResult>>(
+  async () => ({ accepted: true, runId: 'run-fix-accepted' }),
+);
 vi.mock('../jobs/fix-run-handoff.js', () => ({
   startFixRun: mockStartFixRun,
 }));
@@ -339,6 +342,79 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     expect(readAttemptLines()).not.toContainEqual(
       expect.objectContaining({ state: 'proceeding', runId: expect.any(String) }),
     );
+  });
+
+  it('records a single-product policy rejection as declined, retaining the handoff reason and detail', async () => {
+    mockStartFixRun.mockResolvedValue({
+      accepted: false,
+      reason: 'not-single-product',
+      detail: 'Deliverable repo is owned by relay.',
+    });
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    expect(readAttemptLines()).toEqual([
+      expect.objectContaining({ state: 'gating' }),
+      expect.objectContaining({
+        attemptId: res.body.attemptId,
+        state: 'declined',
+        reason: 'not-single-product',
+        detail: 'Deliverable repo is owned by relay.',
+      }),
+    ]);
+  });
+
+  it.each([
+    'unknown-product',
+    'not-repo-backed',
+    'scaffold-failed',
+    'commit-failed',
+    'dispatch-rejected',
+  ])('records the %s handoff rejection as handoff-failed', async (reason) => {
+    mockStartFixRun.mockResolvedValue({ accepted: false, reason, detail: `${reason} detail` });
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'handoff-failed',
+      reason,
+      detail: `${reason} detail`,
+    });
+  });
+
+  it('does not overwrite a terminal attempt recorded while the handoff is in flight', async () => {
+    let resolveHandoff!: (result: StartFixRunResult) => void;
+    mockStartFixRun.mockReturnValueOnce(new Promise<StartFixRunResult>((resolve) => {
+      resolveHandoff = resolve;
+    }));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: res.body.attemptId,
+      product: 'aura',
+      bugId: 'bug-open',
+      state: 'fixed',
+      runId: 'run-already-terminal',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    });
+
+    resolveHandoff({ accepted: false, reason: 'dispatch-rejected' });
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'fixed',
+      runId: 'run-already-terminal',
+    });
   });
 
   it('surfaces declined and handoff-failed Fix attempts in the product deep view', async () => {
