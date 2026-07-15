@@ -61,7 +61,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Dispatch
 
-- [ ] **start-fix-run-dispatch** — Implement `startFixRun` in `src/jobs/fix-run-handoff.ts`
+- [x] **start-fix-run-dispatch** — Implement `startFixRun` in `src/jobs/fix-run-handoff.ts`
   replacing the throwing stub: run the guard; scaffold-and-commit; dispatch
   `createMutation('orchestrated-work', { projectSlug, product }, 'webview')`; on
   `createMutation` `!ok` return `{ accepted: false, reason: 'dispatch-rejected', detail }`; on

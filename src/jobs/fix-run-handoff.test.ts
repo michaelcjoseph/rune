@@ -33,6 +33,44 @@ async function loadGuard(): Promise<{
   return mod as unknown as Awaited<ReturnType<typeof loadGuard>>;
 }
 
+type StartDeps = {
+  products: Record<string, ProductConfig>;
+  resolveDeliverableRepo: (bug: BacklogItem, product: string, products: Record<string, ProductConfig>) => string;
+  scaffoldAndCommitFixProject: (input: {
+    repoPath: string;
+    baseBranch: string;
+    product: string;
+    bugId: string;
+    bug: BacklogItem;
+    facts: Record<string, unknown>;
+  }) => Promise<{ ok: true; projectSlug: string; commitSha: string } | { ok: false; reason: 'scaffold-failed' | 'commit-failed'; detail?: string }>;
+  createMutation: (kind: string, payload: Record<string, unknown>, source: string) => Promise<
+    { ok: true; descriptor: { id: string } } | { ok: false; reason: string }
+  >;
+};
+
+async function loadStart(): Promise<{
+  startFixRun: (input: { product: string; bugId: string; scope: { bug: BacklogItem; facts: Record<string, unknown> } }, deps: StartDeps) => Promise<unknown>;
+}> {
+  const mod = await import('./fix-run-handoff.js');
+  expect(mod.startFixRun, 'expected startFixRun to be exported').toBeTypeOf('function');
+  return mod as unknown as Awaited<ReturnType<typeof loadStart>>;
+}
+
+function startDeps(overrides: Partial<StartDeps> = {}): StartDeps {
+  return {
+    products: { rune: repoBackedProduct },
+    resolveDeliverableRepo: () => repoBackedProduct.repoPath,
+    scaffoldAndCommitFixProject: vi.fn(async () => ({
+      ok: true as const,
+      projectSlug: '22-fix-bug-save-crash',
+      commitSha: 'a'.repeat(40),
+    })),
+    createMutation: vi.fn(async () => ({ ok: true as const, descriptor: { id: 'fix-run-123' } })),
+    ...overrides,
+  };
+}
+
 describe('single-product fix-run guard', () => {
   it('accepts only when the resolved deliverable repo is the product mutation repo', async () => {
     const { guardSingleProduct } = await loadGuard();
@@ -77,5 +115,85 @@ describe('single-product fix-run guard', () => {
       products: { rune: repoBackedProduct },
       resolveDeliverableRepo: () => '/workspace/another-product',
     })).toMatchObject({ accepted: false, reason: 'not-single-product' });
+  });
+});
+
+describe('startFixRun dispatch handoff', () => {
+  const input = {
+    product: 'rune',
+    bugId: bug.id,
+    scope: {
+      bug,
+      facts: {
+        itemEligible: true,
+        fieldsComplete: true,
+        pmAssessed: true,
+        pmWellScoped: true,
+        techLeadReviewed: true,
+      },
+    },
+  };
+
+  it('scaffolds on the selected product base branch and immediately dispatches orchestrated-work', async () => {
+    const { startFixRun } = await loadStart();
+    const deps = startDeps();
+
+    await expect(startFixRun(input, deps)).resolves.toEqual({ accepted: true, runId: 'fix-run-123' });
+    expect(deps.scaffoldAndCommitFixProject).toHaveBeenCalledWith({
+      repoPath: '/workspace/rune',
+      baseBranch: 'main',
+      product: 'rune',
+      bugId: bug.id,
+      bug,
+      facts: input.scope.facts,
+    });
+    expect(deps.createMutation).toHaveBeenCalledWith(
+      'orchestrated-work',
+      { projectSlug: '22-fix-bug-save-crash', product: 'rune' },
+      'webview',
+    );
+  });
+
+  it.each([
+    ['unknown product', startDeps({ products: {} }), 'unknown-product'],
+    ['projection-only product', startDeps({ products: { rune: { ...repoBackedProduct, repoPath: '' } } }), 'not-repo-backed'],
+    ['divergent deliverable repo', startDeps({ resolveDeliverableRepo: () => '/workspace/another-product' }), 'not-single-product'],
+  ])('returns the stable %s guard reason without scaffolding or dispatching', async (_case, deps, reason) => {
+    const { startFixRun } = await loadStart();
+
+    await expect(startFixRun(input, deps)).resolves.toEqual({ accepted: false, reason });
+    expect(deps.scaffoldAndCommitFixProject).not.toHaveBeenCalled();
+    expect(deps.createMutation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ ok: false as const, reason: 'scaffold-failed' as const, detail: 'path conflict' }, 'scaffold-failed'],
+    [{ ok: false as const, reason: 'commit-failed' as const, detail: 'base branch is not checked out' }, 'commit-failed'],
+  ])('preserves the typed %s result and never dispatches after scaffold/commit failure', async (scaffoldResult, reason) => {
+    const { startFixRun } = await loadStart();
+    const deps = startDeps({ scaffoldAndCommitFixProject: vi.fn(async () => scaffoldResult) });
+
+    await expect(startFixRun(input, deps)).resolves.toEqual({ accepted: false, reason, detail: scaffoldResult.detail });
+    expect(deps.createMutation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['scaffold', startDeps({ scaffoldAndCommitFixProject: vi.fn(async () => { throw new Error('unexpected infrastructure crash'); }) })],
+    ['dispatch', startDeps({ createMutation: vi.fn(async () => { throw new Error('unexpected infrastructure crash'); }) })],
+  ])('propagates an unexpected %s crash as a throw instead of swallowing it as a decline', async (_case, deps) => {
+    const { startFixRun } = await loadStart();
+
+    await expect(startFixRun(input, deps)).rejects.toThrow('unexpected infrastructure crash');
+  });
+
+  it('turns a rejected orchestrated-work mutation into the stable dispatch-rejected result', async () => {
+    const { startFixRun } = await loadStart();
+    const deps = startDeps({ createMutation: vi.fn(async () => ({ ok: false as const, reason: 'orchestrated work disabled' })) });
+
+    await expect(startFixRun(input, deps)).resolves.toEqual({
+      accepted: false,
+      reason: 'dispatch-rejected',
+      detail: 'orchestrated work disabled',
+    });
   });
 });

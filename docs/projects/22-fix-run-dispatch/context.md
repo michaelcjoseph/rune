@@ -170,8 +170,9 @@ _None yet._
 
 ## Next Task Handoff
 
-- Added deterministic one-task fix-project scaffolding that commits only the generated spec and tasks files while preserving unrelated staged and dirty operator work.
-- Supports idempotent retries, reports typed scaffold or commit failures, handles conflicting existing paths, and logs the project slug and commit SHA.
-- Added regression coverage for generated content, commit isolation, preservation of operator work, and retry behavior.
+- Returns stable guard, scaffold, commit, and dispatch rejection results.
+- Preserves unexpected dependency failures as throws.
+- Adds reason-bearing dispatch logs and injectable dependencies.
+- Validation passed: `npm run build`.
+- Validation passed: `npm test` — 330 files, 5,389 passed, 8 todo.
 - No tests removed.
-- Validation: `npm run build` passed; `npm test` passed with 330 files, 5,380 tests, and 8 todo.
