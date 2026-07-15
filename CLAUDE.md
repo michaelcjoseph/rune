@@ -55,7 +55,7 @@ Detailed reference, read on demand (not loaded every session):
 - **`integrations/`** — telegram / whoop / readwise clients.
 - **`vault/`, `workspace/`** — guarded file accessors (`readVaultFile`/`writeVaultFile` etc.), journal, git, sessions, voice.
 - **`writer/`, `roles/`** — role-agent SOUL + memory loaders (writer + six product-team roles).
-- **`utils/`** — time (America/Chicago), logging, path scrubbing, telemetry logs.
+- **`utils/`** — time (America/Chicago), logging, path scrubbing, telemetry logs, launchd-safe toolchain PATH construction.
 - **`cli/`** — local CLI · **`scripts/`** — dev tools (evals, intent-scan, backfill) · **`policies/`** — model/escalation/products config.
 
 ## Commands

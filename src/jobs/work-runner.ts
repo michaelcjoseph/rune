@@ -25,7 +25,7 @@ import { VALID_SLUG, worktreePathFor, workBranchName, type SandboxSpec } from '.
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
 import { resolveLiveWorkProject } from './work-project.js';
-import { buildToolchainPath } from './credential-injector.js';
+import { buildToolchainPath } from '../utils/toolchain-path.js';
 
 const log = createLogger('work-runner');
 

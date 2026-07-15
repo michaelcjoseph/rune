@@ -21,9 +21,10 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { constants as fsConstants, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { cp, lstat, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   isContainedIn,
@@ -479,47 +480,97 @@ function normalizeWorktreePath(path: string): string {
  * `/work` run can't run the project's tests. Most projects can use a fast
  * symlink to the parent checkout's modules. Turbopack rejects that layout: its
  * workspace-root inference treats the external target as an invalid dependency.
- * For direct Next.js projects we therefore make a local, dereferenced copy
- * instead. macOS copy-on-write keeps the common case cheap while the worktree
- * still presents a real in-root `node_modules` tree to Turbopack.
+ * For Next.js projects we therefore make a local, dereferenced copy instead.
+ * macOS copy-on-write keeps the common case cheap while the worktree still
+ * presents a real in-root `node_modules` tree to Turbopack.
+ *
+ * The copy is async (`fs.promises.cp`) — this process also serves Telegram
+ * polling, HTTP/cockpit, and cron, and a synchronous walk of a real Next.js
+ * `node_modules` (~20k+ files) would freeze the event loop for seconds. It is
+ * also staged: the tree is copied to a sibling staging dir and renamed into
+ * place, so `node_modules` is only ever absent or complete — a crash mid-copy
+ * can't pin a later run to a half-copied tree via the early-return below. A
+ * leftover staging dir (hard kill mid-copy) sits outside the worktree, so it
+ * never dirties `git status` there; it is removed here on the next attempt
+ * and by the startup orphan sweep (it is never git-registered).
  *
  * Best-effort: no-ops when the source is absent (repo never installed) or a
- * `node_modules` already exists in the worktree, and never throws — a run can
+ * `node_modules` already exists in the worktree, and never rejects — a run can
  * still do non-test work without deps, so a link failure must not abort setup.
  */
-export function linkWorktreeDeps(repoPath: string, worktree: string): void {
+export async function linkWorktreeDeps(
+  repoPath: string,
+  worktree: string,
+  scopePath?: string,
+): Promise<void> {
   const src = join(repoPath, 'node_modules');
   const dest = join(worktree, 'node_modules');
   if (!existsSync(src) || existsSync(dest)) return;
-  try {
-    if (usesNextJs(repoPath)) {
-      cpSync(src, dest, {
-        recursive: true,
-        // Package-manager bin links and linked packages must not resolve back
-        // outside the worktree either.
-        dereference: true,
-        mode: fsConstants.COPYFILE_FICLONE,
-      });
-      return;
+
+  if (!usesNextJs(repoPath, scopePath)) {
+    try {
+      symlinkSync(src, dest, 'dir');
+    } catch {
+      // Non-fatal: the run proceeds, it just won't have a local test runner.
     }
-    symlinkSync(src, dest, 'dir');
+    return;
+  }
+
+  const staging = depsStagingPathFor(worktree);
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    await cp(src, staging, {
+      recursive: true,
+      // Package-manager bin links and linked packages must not resolve back
+      // outside the worktree either. `dereference` only materializes links
+      // whose target resolves; the filter drops dangling ones (e.g. optional
+      // platform binaries never installed), which cp would otherwise copy
+      // verbatim — still pointing outside the worktree.
+      dereference: true,
+      mode: fsConstants.COPYFILE_FICLONE,
+      filter: async (source) => {
+        try {
+          if (!(await lstat(source)).isSymbolicLink()) return true;
+          await stat(source); // throws when the link target is missing
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+    renameSync(staging, dest);
   } catch {
-    // A failed copy can leave a partial destination behind. Remove only the
-    // destination this invocation just created so a repair/retry is not pinned
-    // to an unusable dependency tree.
-    try { rmSync(dest, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(staging, { recursive: true, force: true }); } catch { /* best-effort */ }
     // Non-fatal: the run proceeds, it just won't have a local test runner.
   }
 }
 
-/** A direct Next dependency is enough to select Turbopack-safe provisioning. */
-function usesNextJs(repoPath: string): boolean {
+/** Sibling staging path for the Next.js dependency copy — outside the
+ *  worktree so an interrupted copy never dirties `git status` there. */
+function depsStagingPathFor(worktree: string): string {
+  return join(dirname(worktree), `${basename(worktree)}.node_modules.staging`);
+}
+
+/**
+ * A direct Next dependency is enough to select Turbopack-safe provisioning.
+ * Scoped products (one repo, product rooted at `scopePath`) may declare
+ * Next.js only in the scoped app's own manifest, so that one is consulted
+ * alongside the repo root's.
+ */
+function usesNextJs(repoPath: string, scopePath?: string): boolean {
+  const manifestDirs = scopePath ? [repoPath, join(repoPath, scopePath)] : [repoPath];
+  return manifestDirs.some((dir) => manifestDeclaresNext(join(dir, 'package.json')));
+}
+
+function manifestDeclaresNext(manifestPath: string): boolean {
   try {
-    const manifest = JSON.parse(readFileSync(join(repoPath, 'package.json'), 'utf8')) as {
+    const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (typeof manifest !== 'object' || manifest === null) return false;
+    const { dependencies, devDependencies } = manifest as {
       dependencies?: Record<string, unknown>;
       devDependencies?: Record<string, unknown>;
     };
-    return 'next' in (manifest.dependencies ?? {}) || 'next' in (manifest.devDependencies ?? {});
+    return 'next' in (dependencies ?? {}) || 'next' in (devDependencies ?? {});
   } catch {
     return false;
   }
@@ -674,7 +725,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   // A fresh worktree has no node_modules (git worktrees don't carry the
   // gitignored dir), so `npx`/`vitest`/`tsx` can't resolve and a /work run
   // can't run the project's tests — half of the 2026-06-01 noop (bugs.md).
-  linkWorktreeDeps(product.repoPath, worktree);
+  await linkWorktreeDeps(product.repoPath, worktree, product.scopePath);
 
   return {
     product: opts.product,

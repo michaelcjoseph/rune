@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildSandboxEnv } from './credential-injector.js';
@@ -117,9 +117,15 @@ describe('michaelcjoseph.com product config', () => {
       });
 
       expect(env).toMatchObject({
-        PATH: '/usr/bin:/bin',
         WRITING_ONLY_TOKEN: 'writing-product-secret',
       });
+      // PATH is routed through buildToolchainPath, which prepends the running
+      // Node's bin dir (+ Homebrew/system dirs where present) to the stubbed
+      // base — assert containment, not the exact string.
+      const pathEntries = (env['PATH'] ?? '').split(':');
+      expect(pathEntries).toEqual(
+        expect.arrayContaining(['/usr/bin', '/bin', dirname(process.execPath)]),
+      );
       expect(env).not.toHaveProperty('BRAND_ONLY_TOKEN');
       expect(env).not.toHaveProperty('RUNE_ONLY_TOKEN');
       expect(env).not.toHaveProperty('TELEGRAM_BOT_TOKEN');

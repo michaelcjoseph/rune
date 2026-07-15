@@ -25,9 +25,10 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 // Module under test — does not exist yet; every test must fail at this import.
 // ---------------------------------------------------------------------------
 
+import { buildToolchainPath } from '../utils/toolchain-path.js';
+
 import {
   readCredentials,
-  buildToolchainPath,
   getBaseEnv,
   buildSandboxEnv,
   DEFAULT_BASE_ENV_KEYS,
@@ -206,11 +207,13 @@ describe('readCredentials', () => {
 // ---------------------------------------------------------------------------
 
 describe('getBaseEnv', () => {
-  it('keeps the inherited PATH while adding the Node runtime bin directory', () => {
-    const result = buildToolchainPath('/custom/tools');
+  it('routes PATH through buildToolchainPath (launchd-safe toolchain dirs prepended)', () => {
+    vi.stubEnv('PATH', '/custom/tools');
 
-    expect(result.split(':')).toContain('/custom/tools');
-    expect(result.split(':')).toContain(dirname(process.execPath));
+    const result = getBaseEnv(['PATH']);
+
+    expect(result['PATH']).toBe(buildToolchainPath('/custom/tools'));
+    expect(result['PATH']?.split(':')).toContain(dirname(process.execPath));
   });
 
   it('returns only the keys from process.env that appear in the allowlist', () => {

@@ -191,6 +191,11 @@ const {
 // surface goes through.
 const { scrubPathsInText } = await import('../ai/tool-labels.js');
 
+// Not mocked — the real launchd-safe PATH builder, imported dynamically (same
+// reason as above) so the wiring test below exercises the same production
+// logic work-runner.ts's `PATH: buildToolchainPath()` call uses.
+const { buildToolchainPath } = await import('../utils/toolchain-path.js');
+
 // --- Runtime-deps test doubles (Phase 2: classification + persist seam) ---
 
 /** A controllable GitRunner stub. Default responses classify a clean exit-0
@@ -595,6 +600,35 @@ describe('workRunApplier', () => {
       // wedge the run open (docs/projects/bugs.md).
       expect(spawnOpts.detached).toBe(true);
       expect(spawnOpts.env.RUNE_VITEST_CACHE_DIR).toBe('/tmp/isolated-vitest/06-webview');
+    });
+
+    it('sets spawn PATH via buildToolchainPath so launchd\'s sparse PATH still resolves Node/npm/Homebrew bins', async () => {
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-1',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+        source: 'webview',
+        target: { type: 'work-run', ref: '06-webview' },
+        preview: { summary: 'work-run on 06-webview' },
+        createdAt: new Date().toISOString(),
+      } as any;
+
+      const ctx = { bus: null as any, cancel: () => false };
+      for await (const _event of workRunApplier.apply(descriptor, ctx)) {
+        // drain
+      }
+
+      const [, , spawnOpts] = mockSpawn.mock.calls[0]!;
+      // Same seam production code calls: with the fs mocks in this suite,
+      // buildToolchainPath's preferred candidates all resolve `existsSync` to
+      // false, so this matches on the (deduped) inherited PATH — the exact
+      // value work-runner.ts's own `buildToolchainPath()` call produces.
+      expect(spawnOpts.env.PATH).toBe(buildToolchainPath());
     });
 
     it('yields a completed terminal event on exit code 0', async () => {

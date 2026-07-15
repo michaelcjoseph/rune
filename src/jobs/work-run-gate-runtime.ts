@@ -45,7 +45,7 @@ import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { redactSecrets } from './work-run-transcript.js';
-import { buildToolchainPath } from './credential-injector.js';
+import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import config, { PROJECT_ROOT } from '../config.js';
 
 const log = createLogger('work-run-gate-runtime');
@@ -102,9 +102,6 @@ const VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS = 1_000;
  * `timedOut` — the same wedge work-runner.ts guards with REAP_FORCE_DONE_MS.
  */
 const VALIDATION_STDIO_DRAIN_MS = 10_000;
-const VALIDATION_BASE_ENV_KEYS = [
-  'PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TERM', 'SHELL', 'TMPDIR',
-] as const;
 const VALIDATION_SANDBOX_PROFILE = [
   '(version 1)',
   '(allow default)',
@@ -115,12 +112,9 @@ const VALIDATION_SANDBOX_PROFILE = [
 ].join('');
 
 function buildValidationEnv(cwd: string, reportOptions = '', initialDepth = '1'): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of VALIDATION_BASE_ENV_KEYS) {
-    const value = process.env[key];
-    if (value !== undefined) env[key] = value;
-  }
-  env.PATH = buildToolchainPath(env.PATH);
+  // Shell basics + launchd-safe PATH via the same allowlist filter the
+  // sandboxed-agent env uses — one key list, no drift between the two.
+  const env: NodeJS.ProcessEnv = { ...getBaseEnv(DEFAULT_BASE_ENV_KEYS) };
   if (reportOptions) {
     env.NODE_OPTIONS = reportOptions;
     env.RUNE_VALIDATION_REPORT_NODE_OPTIONS = reportOptions;

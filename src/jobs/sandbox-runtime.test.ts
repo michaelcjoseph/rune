@@ -9,9 +9,11 @@ import {
   readlinkSync,
   realpathSync,
   readFileSync,
+  symlinkSync,
+  chmodSync,
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
@@ -1322,6 +1324,9 @@ describe('linkWorktreeDeps', () => {
   let repo: string;
   let worktree: string;
 
+  /** The sibling dir the Next.js copy stages into before the atomic rename. */
+  const stagingFor = (wt: string) => join(dirname(wt), `${basename(wt)}.node_modules.staging`);
+
   beforeEach(() => {
     repo = mkdtempSync(join(tmpdir(), 'rune-deps-repo-'));
     worktree = mkdtempSync(join(tmpdir(), 'rune-deps-wt-'));
@@ -1329,14 +1334,15 @@ describe('linkWorktreeDeps', () => {
 
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
+    rmSync(stagingFor(worktree), { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
   });
 
-  it('symlinks the repo node_modules into the worktree, resolving to the source', () => {
+  it('symlinks the repo node_modules into the worktree, resolving to the source', async () => {
     mkdirSync(join(repo, 'node_modules', '.bin'), { recursive: true });
     writeFileSync(join(repo, 'node_modules', '.bin', 'vitest'), '#!/bin/sh\n');
 
-    linkWorktreeDeps(repo, worktree);
+    await linkWorktreeDeps(repo, worktree);
 
     const dest = join(worktree, 'node_modules');
     expect(lstatSync(dest).isSymbolicLink()).toBe(true);
@@ -1345,38 +1351,151 @@ describe('linkWorktreeDeps', () => {
     expect(existsSync(join(dest, '.bin', 'vitest'))).toBe(true);
   });
 
-  it('copies dependencies locally for a Next.js project so Turbopack stays inside the worktree', () => {
+  it('copies dependencies locally for a Next.js project so Turbopack stays inside the worktree', async () => {
     writeFileSync(join(repo, 'package.json'), JSON.stringify({
       dependencies: { next: '16.2.9' },
     }));
     mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
     writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
 
-    linkWorktreeDeps(repo, worktree);
+    await linkWorktreeDeps(repo, worktree);
+
+    const dest = join(worktree, 'node_modules');
+    expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
+    // The staging dir was renamed into place, not left behind.
+    expect(existsSync(stagingFor(worktree))).toBe(false);
+  });
+
+  it('copies dependencies locally for a Next.js project declared only in devDependencies', async () => {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      devDependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+
+    await linkWorktreeDeps(repo, worktree);
 
     const dest = join(worktree, 'node_modules');
     expect(lstatSync(dest).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
   });
 
-  it('no-ops when the repo has no node_modules (never installed)', () => {
-    linkWorktreeDeps(repo, worktree);
+  it('copies dependencies locally for a scoped product whose Next.js app declares next only in the scoped manifest', async () => {
+    // Repo root: no next. Scoped app dir: declares next. The scoped product
+    // must still get Turbopack-safe provisioning.
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ dependencies: {} }));
+    mkdirSync(join(repo, 'apps', 'site'), { recursive: true });
+    writeFileSync(join(repo, 'apps', 'site', 'package.json'), JSON.stringify({
+      dependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+
+    await linkWorktreeDeps(repo, worktree, 'apps/site');
+
+    const dest = join(worktree, 'node_modules');
+    expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
+  });
+
+  it('drops dangling symlinks from the Next.js copy instead of carrying them into the worktree', async () => {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      dependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+    // A dangling link (e.g. an optional platform binary that was never
+    // installed) — `dereference` can't materialize it, and copying it
+    // verbatim would leave a link pointing outside the worktree.
+    symlinkSync(join(repo, 'no-such-target'), join(repo, 'node_modules', 'dangling'));
+
+    await linkWorktreeDeps(repo, worktree);
+
+    const dest = join(worktree, 'node_modules');
+    expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
+    expect(existsSync(join(dest, 'dangling'))).toBe(false);
+    expect(() => lstatSync(join(dest, 'dangling'))).toThrow(); // not even a link
+  });
+
+  it('falls back to symlinking when package.json is malformed (Next.js detection fails closed to the fast path)', async () => {
+    writeFileSync(join(repo, 'package.json'), 'this is { not valid json');
+    mkdirSync(join(repo, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', '.bin', 'vitest'), '#!/bin/sh\n');
+
+    await expect(linkWorktreeDeps(repo, worktree)).resolves.toBeUndefined();
+
+    const dest = join(worktree, 'node_modules');
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(dest)).toBe(join(repo, 'node_modules'));
+  });
+
+  it('falls back to symlinking when the repo has no package.json at all', async () => {
+    mkdirSync(join(repo, 'node_modules', '.bin'), { recursive: true });
+
+    await linkWorktreeDeps(repo, worktree);
+
+    expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(true);
+  });
+
+  it('cleans up staging and leaves no node_modules when the Next.js copy fails partway (e.g. an unreadable file)', async () => {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      dependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+    const unreadable = join(repo, 'node_modules', 'unreadable.txt');
+    writeFileSync(unreadable, 'secret');
+    chmodSync(unreadable, 0o000);
+
+    try {
+      await expect(linkWorktreeDeps(repo, worktree)).resolves.toBeUndefined();
+      // The copy staged outside the worktree and failed before the rename:
+      // no half-copied node_modules is pinned into the worktree, and the
+      // staging dir is removed so a retry starts clean.
+      expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
+      expect(existsSync(stagingFor(worktree))).toBe(false);
+    } finally {
+      chmodSync(unreadable, 0o600);
+    }
+  });
+
+  it('removes a stale staging dir left by a hard-killed prior copy before re-provisioning', async () => {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      dependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+    // Simulate a prior copy killed mid-flight: a partial staging dir exists.
+    mkdirSync(stagingFor(worktree), { recursive: true });
+    writeFileSync(join(stagingFor(worktree), 'partial.txt'), 'stale');
+
+    await linkWorktreeDeps(repo, worktree);
+
+    const dest = join(worktree, 'node_modules');
+    expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
+    expect(existsSync(join(dest, 'partial.txt'))).toBe(false);
+    expect(existsSync(stagingFor(worktree))).toBe(false);
+  });
+
+  it('no-ops when the repo has no node_modules (never installed)', async () => {
+    await linkWorktreeDeps(repo, worktree);
     expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
   });
 
-  it('leaves an existing worktree node_modules untouched', () => {
+  it('leaves an existing worktree node_modules untouched', async () => {
     mkdirSync(join(repo, 'node_modules'), { recursive: true });
     mkdirSync(join(worktree, 'node_modules'), { recursive: true });
 
-    linkWorktreeDeps(repo, worktree);
+    await linkWorktreeDeps(repo, worktree);
 
     // Still a real dir, not replaced by a symlink.
     expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(false);
   });
 
-  it('never throws when the worktree path does not exist', () => {
+  it('never rejects when the worktree path does not exist', async () => {
     mkdirSync(join(repo, 'node_modules'), { recursive: true });
-    expect(() => linkWorktreeDeps(repo, join(worktree, 'missing', 'nested'))).not.toThrow();
+    await expect(linkWorktreeDeps(repo, join(worktree, 'missing', 'nested'))).resolves.toBeUndefined();
   });
 });
 

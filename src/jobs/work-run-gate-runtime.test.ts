@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
 import { defaultRunGit, removeVitestCache, vitestCacheDirFor } from './sandbox-runtime.js';
 import {
@@ -353,6 +353,25 @@ describe('runValidationCommands', () => {
       ], tmpRoot, 5_000);
       expect(result.outputTail).toContain('undefined');
       expect(result.outputTail).not.toContain('arbitrary-secret-value-7491');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('adds the Node runtime bin dir to the validation child PATH even when the inherited PATH omits it (launchd sparse-PATH fix)', async () => {
+    // Simulate launchd's sparse PATH: no Node/npm/Homebrew bin dir present.
+    vi.stubEnv('PATH', '/definitely/not/a/real/dir');
+    try {
+      const result = await runValidationCommandArgv([
+        process.execPath,
+        '-e',
+        'console.error(process.env.PATH)',
+      ], tmpRoot, 5_000);
+      expect(result.exitCode).toBe(0);
+      // buildToolchainPath prepends the running Node's own bin dir …
+      expect(result.outputTail).toContain(dirname(process.execPath));
+      // … while still keeping the (sparse) inherited PATH intact.
+      expect(result.outputTail).toContain('/definitely/not/a/real/dir');
     } finally {
       vi.unstubAllEnvs();
     }
