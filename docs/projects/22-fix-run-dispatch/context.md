@@ -170,10 +170,8 @@ _None yet._
 
 ## Next Task Handoff
 
-- Adds a reusable single-product guard that accepts matching repo-backed products and rejects unknown, projection-only, or divergent-repo products with stable reasons.
-- Avoids deliverable-resolver calls for invalid products.
-- Leaves `startFixRun` dispatch unchanged for the next task.
-- Validation: `npm run build` passed.
-- Validation: `npm test` passed with 329 files, 5,379 tests, and 8 todos.
-- No tests removed or weakened.
-- No commit created.
+- Added deterministic one-task fix-project scaffolding that commits only the generated spec and tasks files while preserving unrelated staged and dirty operator work.
+- Supports idempotent retries, reports typed scaffold or commit failures, handles conflicting existing paths, and logs the project slug and commit SHA.
+- Added regression coverage for generated content, commit isolation, preservation of operator work, and retry behavior.
+- No tests removed.
+- Validation: `npm run build` passed; `npm test` passed with 330 files, 5,380 tests, and 8 todo.

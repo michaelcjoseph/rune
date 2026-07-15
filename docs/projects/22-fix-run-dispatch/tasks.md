@@ -49,7 +49,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Scaffold
 
-- [ ] **fix-project-scaffold-commit** — Deterministic minimal one-task fix-project
+- [x] **fix-project-scaffold-commit** — Deterministic minimal one-task fix-project
   scaffold-and-commit helper. Derive a stable slug (e.g. `NN-fix-<bugId>`) from `{ bug, facts }`
   and write `docs/projects/<slug>/spec.md` + `tasks.md` (spec states bug/facts/acceptance;
   tasks carries exactly one unchecked implementation task with tests). Commit only those paths
