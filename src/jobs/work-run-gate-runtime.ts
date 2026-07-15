@@ -45,6 +45,7 @@ import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { redactSecrets } from './work-run-transcript.js';
+import { buildToolchainPath } from './credential-injector.js';
 import config, { PROJECT_ROOT } from '../config.js';
 
 const log = createLogger('work-run-gate-runtime');
@@ -119,6 +120,7 @@ function buildValidationEnv(cwd: string, reportOptions = '', initialDepth = '1')
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
+  env.PATH = buildToolchainPath(env.PATH);
   if (reportOptions) {
     env.NODE_OPTIONS = reportOptions;
     env.RUNE_VALIDATION_REPORT_NODE_OPTIONS = reportOptions;

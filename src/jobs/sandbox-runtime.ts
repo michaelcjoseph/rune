@@ -21,7 +21,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { constants as fsConstants, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -472,15 +472,16 @@ function normalizeWorktreePath(path: string): string {
  * stderr line.
  */
 /**
- * Symlink the product repo's `node_modules` into a freshly-created worktree.
+ * Provision the product repo's `node_modules` into a freshly-created worktree.
  *
  * Git worktrees don't copy the (gitignored) `node_modules`, so a new worktree
  * has no installed dependencies — `npx`/`vitest`/`tsx` fail to resolve and a
- * `/work` run can't run the project's tests. Symlinking the parent repo's
- * already-installed modules is fast and avoids a per-run `npm ci`. The run is
- * spawned with `--dangerously-skip-permissions` (work-runner.ts), which lifts
- * the working-dir containment so a link whose target sits outside the worktree
- * still resolves.
+ * `/work` run can't run the project's tests. Most projects can use a fast
+ * symlink to the parent checkout's modules. Turbopack rejects that layout: its
+ * workspace-root inference treats the external target as an invalid dependency.
+ * For direct Next.js projects we therefore make a local, dereferenced copy
+ * instead. macOS copy-on-write keeps the common case cheap while the worktree
+ * still presents a real in-root `node_modules` tree to Turbopack.
  *
  * Best-effort: no-ops when the source is absent (repo never installed) or a
  * `node_modules` already exists in the worktree, and never throws — a run can
@@ -491,9 +492,36 @@ export function linkWorktreeDeps(repoPath: string, worktree: string): void {
   const dest = join(worktree, 'node_modules');
   if (!existsSync(src) || existsSync(dest)) return;
   try {
+    if (usesNextJs(repoPath)) {
+      cpSync(src, dest, {
+        recursive: true,
+        // Package-manager bin links and linked packages must not resolve back
+        // outside the worktree either.
+        dereference: true,
+        mode: fsConstants.COPYFILE_FICLONE,
+      });
+      return;
+    }
     symlinkSync(src, dest, 'dir');
   } catch {
+    // A failed copy can leave a partial destination behind. Remove only the
+    // destination this invocation just created so a repair/retry is not pinned
+    // to an unusable dependency tree.
+    try { rmSync(dest, { recursive: true, force: true }); } catch { /* best-effort */ }
     // Non-fatal: the run proceeds, it just won't have a local test runner.
+  }
+}
+
+/** A direct Next dependency is enough to select Turbopack-safe provisioning. */
+function usesNextJs(repoPath: string): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(join(repoPath, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, unknown>;
+      devDependencies?: Record<string, unknown>;
+    };
+    return 'next' in (manifest.dependencies ?? {}) || 'next' in (manifest.devDependencies ?? {});
+  } catch {
+    return false;
   }
 }
 

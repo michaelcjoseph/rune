@@ -1345,6 +1345,20 @@ describe('linkWorktreeDeps', () => {
     expect(existsSync(join(dest, '.bin', 'vitest'))).toBe(true);
   });
 
+  it('copies dependencies locally for a Next.js project so Turbopack stays inside the worktree', () => {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({
+      dependencies: { next: '16.2.9' },
+    }));
+    mkdirSync(join(repo, 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+
+    linkWorktreeDeps(repo, worktree);
+
+    const dest = join(worktree, 'node_modules');
+    expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(dest, 'next', 'package.json'), 'utf8')).toContain('next');
+  });
+
   it('no-ops when the repo has no node_modules (never installed)', () => {
     linkWorktreeDeps(repo, worktree);
     expect(existsSync(join(worktree, 'node_modules'))).toBe(false);

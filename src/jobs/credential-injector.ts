@@ -26,7 +26,8 @@
  * See docs/projects/08-intent-layer/{spec.md §"Layer 4", tasks.md Phase 6 A1.2}.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { delimiter, dirname } from 'node:path';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { getProductConfig, vitestCacheDirFor } from './sandbox-runtime.js';
 import { createLogger } from '../utils/logger.js';
@@ -61,6 +62,27 @@ export const DEFAULT_BASE_ENV_KEYS = [
   'SHELL',
   'TMPDIR',
 ] as const;
+
+/**
+ * Construct a launchd-safe command path for sandboxed product processes.
+ *
+ * launchd commonly starts Rune with a sparse PATH, even when the Node process
+ * itself came from a version manager. Put that Node installation first so its
+ * sibling npm/npx remain available, retain the inherited custom path, and add
+ * the conventional macOS tool locations used by Homebrew and system tools
+ * (including rg). No secret-bearing environment variables are involved.
+ */
+export function buildToolchainPath(inheritedPath = process.env['PATH'] ?? ''): string {
+  const preferred = [
+    dirname(process.execPath),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ].filter(existsSync);
+  const inherited = inheritedPath.split(delimiter).filter(Boolean);
+  return [...new Set([...preferred, ...inherited])].join(delimiter);
+}
 
 // ---------------------------------------------------------------------------
 // Dotenv parser
@@ -147,7 +169,11 @@ export function getBaseEnv(allowlist: readonly string[]): Record<string, string>
   const out: Record<string, string> = {};
   for (const key of allowlist) {
     const value = process.env[key];
-    if (value !== undefined) out[key] = value;
+    if (key === 'PATH') {
+      out[key] = buildToolchainPath(value);
+    } else if (value !== undefined) {
+      out[key] = value;
+    }
   }
   return out;
 }

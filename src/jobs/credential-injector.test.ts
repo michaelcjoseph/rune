@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { SandboxSpec } from '../intent/sandbox.js';
 
@@ -27,6 +27,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 
 import {
   readCredentials,
+  buildToolchainPath,
   getBaseEnv,
   buildSandboxEnv,
   DEFAULT_BASE_ENV_KEYS,
@@ -205,6 +206,13 @@ describe('readCredentials', () => {
 // ---------------------------------------------------------------------------
 
 describe('getBaseEnv', () => {
+  it('keeps the inherited PATH while adding the Node runtime bin directory', () => {
+    const result = buildToolchainPath('/custom/tools');
+
+    expect(result.split(':')).toContain('/custom/tools');
+    expect(result.split(':')).toContain(dirname(process.execPath));
+  });
+
   it('returns only the keys from process.env that appear in the allowlist', () => {
     // PATH and HOME are virtually always defined in any Node process
     const result = getBaseEnv(['PATH', 'HOME']);

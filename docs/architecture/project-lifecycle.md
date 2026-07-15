@@ -54,7 +54,7 @@ Downstream order (A6→A12) is fixed: breakdown → tech-lead self-review → `p
 | B2 | Worktree from `baseSha` | `createWorktree` | preconditions (target path free, repo has HEAD); resume rebase-reconciles against `baseBranch` | `SandboxSpec` returned, project dir found, baseline tasks snapshotted | `jobs/sandbox-runtime.ts` `createWorktree` |
 | B3 | Build deps + start loop | `buildOrchestrationDeps` | none (setup) | loop begins. Per-task round cap = `ORCHESTRATED_ROUND_CAP` = 3 (hard-clamped ≤4) | `orchestrated-work-runner.ts` |
 
-The branch is `rune-work/<slug>` cut at the repo HEAD `baseSha`; `node_modules` is symlinked in. `orchestrated-work` and legacy `work-run` share the deterministic per-project worktree path and concurrency caps, so the same project never runs twice concurrently.
+The branch is `rune-work/<slug>` cut at the repo HEAD `baseSha`. Dependency provisioning keeps the fast external `node_modules` symlink for ordinary products, but direct Next.js projects receive a local dereferenced copy so Turbopack resolves every dependency within the worktree. `orchestrated-work` and legacy `work-run` share the deterministic per-project worktree path and concurrency caps, so the same project never runs twice concurrently.
 
 ---
 
