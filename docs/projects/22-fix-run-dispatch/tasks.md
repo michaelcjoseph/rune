@@ -39,7 +39,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Guard
 
-- [ ] **single-product-guard** — Add the fail-closed single-product guard used by
+- [x] **single-product-guard** — Add the fail-closed single-product guard used by
   `startFixRun`: a `resolveDeliverableRepo(bug, product, productsConfig)` seam that in v1
   returns the product's own `repoPath`, plus guard logic that resolves `getProductConfig`
   and rejects `unknown-product` / `not-repo-backed` / `not-single-product` with

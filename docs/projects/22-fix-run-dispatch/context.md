@@ -170,7 +170,10 @@ _None yet._
 
 ## Next Task Handoff
 
-- tech-lead repaired test intent: src/jobs/fix-attempt-store.test.ts, src/jobs/fix-attempt-store.ts, src/server/backlog-actions.ts, src/server/fix-action-states.test.ts
-- Validation: dynamic-localhost suites could not run in the sandbox because `listen` returned `EPERM`; no protected ports were touched.
-
-Changed implementation: `src/jobs/fix-attempt-store.ts`, `src/server/backlog-actions.ts`.
+- Adds a reusable single-product guard that accepts matching repo-backed products and rejects unknown, projection-only, or divergent-repo products with stable reasons.
+- Avoids deliverable-resolver calls for invalid products.
+- Leaves `startFixRun` dispatch unchanged for the next task.
+- Validation: `npm run build` passed.
+- Validation: `npm test` passed with 329 files, 5,379 tests, and 8 todos.
+- No tests removed or weakened.
+- No commit created.
