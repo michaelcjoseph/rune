@@ -61,6 +61,8 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
   destroyWorktree: vi.fn(),
   getProductConfig: vi.fn(() => ({ product: 'aura', repoPath: '/test/workspace/aura', baseBranch: 'main', egressAllowlist: [] })),
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  verifyWorktreeProvisioning: vi.fn(),
+  worktreeProvisioningTerminalReason: vi.fn(() => 'worktree provisioning failed: setup'),
 }));
 
 const { mockBacklogs } = vi.hoisted(() => {

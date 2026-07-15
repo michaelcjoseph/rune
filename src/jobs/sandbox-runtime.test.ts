@@ -7,10 +7,13 @@ import {
   existsSync,
   lstatSync,
   readlinkSync,
+  realpathSync,
+  readFileSync,
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 /**
  * Test suite for `src/jobs/sandbox-runtime.ts` — the runtime complement to
@@ -31,15 +34,28 @@ import { worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
 import {
   readProductsConfig,
   getProductConfig,
-  createWorktree,
+  createWorktree as createWorktreeProduction,
   linkWorktreeDeps,
   destroyWorktree,
   cleanupOrphanWorktrees,
   vitestCacheDirFor,
   removeVitestCache,
+  verifyWorktreeProvisioning,
+  defaultRunGit,
   type ProductConfig,
   type GitRunner,
+  type CreateWorktreeOpts,
 } from './sandbox-runtime.js';
+
+// Most lifecycle unit tests inject Git and intentionally do not create real
+// directories. Keep their scope on argument/reconciliation behavior; dedicated
+// postcondition and real-repository tests call createWorktreeProduction.
+function createWorktree(opts: CreateWorktreeOpts) {
+  return createWorktreeProduction({
+    ...opts,
+    verifyProvisioning: async () => ({ ok: true }),
+  });
+}
 
 describe('worktree Vitest cache isolation', () => {
   it('derives a stable opaque cache path under the OS temp root', () => {
@@ -534,7 +550,11 @@ describe('getProductConfig', () => {
 // ---------------------------------------------------------------------------
 
 describe('createWorktree', () => {
-  const WORKTREE_ROOT = '/tmp/rune-worktrees-test';
+  let WORKTREE_ROOT: string;
+
+  beforeEach(() => {
+    WORKTREE_ROOT = join(tmpDir, 'worktrees');
+  });
 
   it('happy path: returns a SandboxSpec with worktree matching worktreePathFor', async () => {
     const configPath = writeProductsJson(tmpDir);
@@ -1068,6 +1088,10 @@ describe('createWorktree', () => {
       if (args[0] === 'worktree' && args.includes('--porcelain')) {
         return { stdout: porcelainListing(existingPath), stderr: '' };
       }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        rmSync(existingPath, { recursive: true, force: true });
+        return { stdout: '', stderr: '' };
+      }
       if (args[0] === 'status') return { stdout: '', stderr: '' }; // clean
       return { stdout: '', stderr: '' };
     });
@@ -1121,6 +1145,172 @@ describe('createWorktree', () => {
     const gitSubcommands = runGit.mock.calls.map((call) => call[0]);
     expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
     expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(false);
+  });
+});
+
+describe('createWorktree provisioning integration', () => {
+  function realRepoFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'rune-worktree-provisioning-'));
+    const repo = join(root, 'repo');
+    const worktreeRoot = join(root, 'worktrees');
+    const projectDir = join(repo, 'docs', 'projects', '01-probe');
+    const configPath = join(root, 'products.json');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'spec.md'), '# Spec\n');
+    writeFileSync(join(projectDir, 'tasks.md'), '- [ ] Task\n');
+    execFileSync('git', ['init', '-b', 'main', repo]);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'rune-test@example.com']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Rune Test']);
+    execFileSync('git', ['-C', repo, 'add', '.']);
+    execFileSync('git', ['-C', repo, 'commit', '-m', 'initial']);
+    writeFileSync(configPath, JSON.stringify({
+      assay: {
+        repoPath: repo,
+        baseBranch: 'main',
+        credentialsFile: '',
+        egressAllowlist: [],
+      },
+    }));
+    return { root, repo, worktreeRoot, projectDir, configPath };
+  }
+
+  it('creates a real directory registered at the exact path and intended branch', async () => {
+    const f = realRepoFixture();
+    try {
+      const sandbox = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+      });
+      const verified = await verifyWorktreeProvisioning({
+        repoPath: f.repo,
+        worktree: sandbox.worktree,
+        expectedBranch: 'rune-work/01-probe',
+        project: '01-probe',
+      });
+      expect(verified).toEqual({
+        ok: true,
+        projectDir: join(sandbox.worktree, 'docs', 'projects', '01-probe'),
+        specContent: '# Spec\n',
+        tasksContent: '- [ ] Task\n',
+      });
+      expect(execFileSync('git', ['-C', f.repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }))
+        .toContain(`worktree ${realpathSync(sandbox.worktree)}`);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back a failed postcondition and allows a clean retry', async () => {
+    const f = realRepoFixture();
+    const target = worktreePathFor('assay', '01-probe', f.worktreeRoot);
+    const startPoint = execFileSync('git', ['-C', f.repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    try {
+      await expect(createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        startPoint,
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+        verifyProvisioning: async () => ({
+          ok: false,
+          stage: 'git-registration',
+          cause: new Error('simulated stale registration'),
+        }),
+      })).rejects.toThrow(/worktree provisioning failed: git-registration.*simulated stale registration/);
+      expect(existsSync(target)).toBe(false);
+      expect(execFileSync('git', ['-C', f.repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }))
+        .not.toContain(`worktree ${realpathSync(f.worktreeRoot)}/assay/01-probe`);
+      expect(() => execFileSync('git', ['-C', f.repo, 'show-ref', '--verify', 'refs/heads/rune-work/01-probe']))
+        .toThrow();
+
+      const retry = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        startPoint,
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+      });
+      expect(retry.worktree).toBe(target);
+      expect(existsSync(target)).toBe(true);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a replacement directory when a failed add no longer owns its target', async () => {
+    const f = realRepoFixture();
+    const target = worktreePathFor('assay', '01-probe', f.worktreeRoot);
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        rmSync(target, { recursive: true, force: true });
+        mkdirSync(target, { recursive: true });
+        writeFileSync(join(target, 'foreign-owner.txt'), 'preserve me');
+        throw new Error('simulated add collision');
+      }
+      return { stdout: '', stderr: '' };
+    });
+    try {
+      await expect(createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        startPoint: 'abc1234', worktreeRoot: f.worktreeRoot,
+        productsConfigPath: f.configPath, runGit,
+      })).rejects.toThrow(/worktree provisioning failed: git-add/);
+
+      expect(readFileSync(join(target, 'foreign-owner.txt'), 'utf8')).toBe('preserve me');
+      expect(runGit.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back a partial git-add failure, preserves its cause, and allows retry', async () => {
+    const f = realRepoFixture();
+    const target = worktreePathFor('assay', '01-probe', f.worktreeRoot);
+    let failAdd = true;
+    const runGit: GitRunner = async (args, opts) => {
+      if (args[0] === 'worktree' && args[1] === 'add' && failAdd) {
+        failAdd = false;
+        mkdirSync(target, { recursive: true });
+        throw Object.assign(new Error('simulated git add interruption'), { stderr: 'fatal: interrupted' });
+      }
+      return defaultRunGit(args, opts);
+    };
+    try {
+      await expect(createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath, runGit,
+      })).rejects.toThrow(/worktree provisioning failed: git-add.*simulated git add interruption.*fatal: interrupted/);
+      expect(existsSync(target)).toBe(false);
+
+      const retry = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath, runGit,
+      });
+      expect(retry.worktree).toBe(target);
+      expect(existsSync(target)).toBe(true);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['project-directory', 'project', 'missing-project'],
+    ['spec-readable', 'spec', '01-probe'],
+    ['tasks-readable', 'tasks', '01-probe'],
+  ] as const)('reports %s before dispatch inputs can be read', async (stage, missing, project) => {
+    const f = realRepoFixture();
+    try {
+      const sandbox = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+      });
+      if (missing === 'spec') rmSync(join(sandbox.worktree, 'docs', 'projects', '01-probe', 'spec.md'));
+      if (missing === 'tasks') rmSync(join(sandbox.worktree, 'docs', 'projects', '01-probe', 'tasks.md'));
+      const result = await verifyWorktreeProvisioning({
+        repoPath: f.repo, worktree: sandbox.worktree,
+        expectedBranch: 'rune-work/01-probe', project,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.stage).toBe(stage);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1296,6 +1486,99 @@ describe('destroyWorktree', () => {
 // ---------------------------------------------------------------------------
 
 describe('cleanupOrphanWorktrees', () => {
+  it('preserves a candidate that becomes Git-registered after the initial snapshot', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const candidate = join(worktreeRoot, 'aura', 'new-run');
+    mkdirSync(candidate, { recursive: true });
+    let lists = 0;
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain')) {
+        lists += 1;
+        return {
+          stdout: lists === 1 ? '' : porcelainListing(candidate),
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const removed = await cleanupOrphanWorktrees({ worktreeRoot, productsConfigPath: configPath, runGit });
+
+    expect(removed).not.toContain(candidate);
+    expect(existsSync(candidate)).toBe(true);
+    expect(lists).toBe(2);
+  });
+
+  it('preserves a candidate when a resumable cursor appears after the initial snapshot', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const candidate = worktreePathFor('aura', 'new-run', worktreeRoot);
+    const workRunsDir = join(tmpDir, 'work-runs');
+    mkdirSync(candidate, { recursive: true });
+    mkdirSync(workRunsDir, { recursive: true });
+    let lists = 0;
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain')) {
+        lists += 1;
+        if (lists === 2) {
+          const runDir = join(workRunsDir, 'new-run-id');
+          mkdirSync(runDir, { recursive: true });
+          writeFileSync(join(runDir, 'cursor.json'), JSON.stringify({
+            runId: 'new-run-id', product: 'aura', project: 'new-run',
+            branch: 'rune-work/new-run', baseBranch: 'main', worktreePath: candidate,
+            resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: null, nextTaskId: 'task-one' },
+          }));
+        }
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const removed = await cleanupOrphanWorktrees({ worktreeRoot, productsConfigPath: configPath, workRunsDir, runGit });
+
+    expect(removed).not.toContain(candidate);
+    expect(existsSync(candidate)).toBe(true);
+  });
+
+  it('preserves a candidate when final Git verification fails', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const candidate = join(worktreeRoot, 'aura', 'uncertain');
+    mkdirSync(candidate, { recursive: true });
+    let lists = 0;
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain') && ++lists === 2) throw new Error('registry unavailable');
+      return { stdout: '', stderr: '' };
+    });
+
+    expect(await cleanupOrphanWorktrees({ worktreeRoot, productsConfigPath: configPath, runGit })).toEqual([]);
+    expect(existsSync(candidate)).toBe(true);
+  });
+
+  it('preserves a candidate when final cursor verification fails', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const candidate = join(worktreeRoot, 'aura', 'uncertain-cursor');
+    const workRunsDir = join(tmpDir, 'work-runs');
+    mkdirSync(candidate, { recursive: true });
+    mkdirSync(join(workRunsDir, 'broken'), { recursive: true });
+    let lists = 0;
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain') && ++lists === 2) {
+        writeFileSync(join(workRunsDir, 'broken', 'cursor.json'), '{');
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    expect(await cleanupOrphanWorktrees({ worktreeRoot, productsConfigPath: configPath, workRunsDir, runGit })).toEqual([]);
+    expect(existsSync(candidate)).toBe(true);
+  });
   it('returns [] and makes no runGit calls when worktreeRoot does not exist', async () => {
     const configPath = writeProductsJson(tmpDir);
     const runGit = makeRunGit();

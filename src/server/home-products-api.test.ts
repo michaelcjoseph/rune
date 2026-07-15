@@ -163,6 +163,8 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
     aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   })),
   defaultRunGit: vi.fn(),
+  verifyWorktreeProvisioning: vi.fn(),
+  worktreeProvisioningTerminalReason: vi.fn(() => 'worktree provisioning failed: setup'),
 }));
 vi.mock('../jobs/supervision-store.js', () => ({
   readAllRuns: vi.fn(() => mockRuns as SupervisedRun[]),

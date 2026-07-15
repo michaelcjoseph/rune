@@ -419,9 +419,15 @@ describe('runGenEvalLoop — orchestration', () => {
   });
 
   it('createWorktree failure surfaces as a failed event (no rounds attempted)', async () => {
-    const spawners = fakeSpawners({ createThrows: new Error('worktree blew up') });
+    const spawners = fakeSpawners({
+      createThrows: new Error('worktree provisioning failed: git-add: /Users/private/operator/worktree'),
+    });
     const events = await runLoop(spawners);
     expect(events[events.length - 1]!.kind).toBe('failed');
+    expect(events[events.length - 1]!.data).toMatchObject({
+      reason: 'worktree provisioning failed: git-add',
+    });
+    expect(JSON.stringify(events[events.length - 1])).not.toContain('/Users/private');
     expect(spawners.runWorkAuto).not.toHaveBeenCalled();
     // destroy is not called when createWorktree failed — there is no worktree to destroy
     expect(spawners.destroyWorktree).not.toHaveBeenCalled();

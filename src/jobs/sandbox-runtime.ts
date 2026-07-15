@@ -21,9 +21,9 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   isContainedIn,
@@ -338,6 +338,110 @@ export interface CreateWorktreeOpts {
   worktreeRoot: string;
   productsConfigPath: string;
   runGit?: GitRunner;
+  /** Injectable postcondition seam for unit tests; production uses the real verifier. */
+  verifyProvisioning?: typeof verifyWorktreeProvisioning;
+}
+
+export type WorktreeProvisioningStage =
+  | 'target-directory'
+  | 'git-registration'
+  | 'project-directory'
+  | 'spec-readable'
+  | 'tasks-readable';
+
+export type WorktreeProvisioningVerification =
+  | { ok: true; projectDir?: string; specContent?: string; tasksContent?: string }
+  | { ok: false; stage: WorktreeProvisioningStage; cause: Error };
+
+export interface VerifyWorktreeProvisioningOpts {
+  repoPath: string;
+  worktree: string;
+  expectedBranch: string;
+  project?: string;
+  runGit?: GitRunner;
+}
+
+/** Verify the filesystem and Git postconditions a runner relies on before dispatch. */
+export async function verifyWorktreeProvisioning(
+  opts: VerifyWorktreeProvisioningOpts,
+): Promise<WorktreeProvisioningVerification> {
+  try {
+    if (!existsSync(opts.worktree) || !statSync(opts.worktree).isDirectory()) {
+      throw new Error(`worktree directory is missing: ${opts.worktree}`);
+    }
+  } catch (err) {
+    return { ok: false, stage: 'target-directory', cause: errorFrom(err) };
+  }
+
+  try {
+    const runGit = opts.runGit ?? defaultRunGit;
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: opts.repoPath });
+    const registeredBranch = registeredWorktreeBranches(stdout).get(normalizeWorktreePath(opts.worktree));
+    if (registeredBranch !== opts.expectedBranch) {
+      throw new Error(
+        registeredBranch === undefined
+          ? `worktree is not registered at ${opts.worktree}`
+          : `worktree is registered on ${registeredBranch}, expected ${opts.expectedBranch}`,
+      );
+    }
+  } catch (err) {
+    return { ok: false, stage: 'git-registration', cause: errorFrom(err) };
+  }
+
+  if (!opts.project) return { ok: true };
+  let projectDir: string | undefined;
+  try {
+    const projectsDir = join(opts.worktree, 'docs', 'projects');
+    projectDir = readdirSync(projectsDir)
+      .map((name) => join(projectsDir, name))
+      .find((path) => {
+        const name = path.slice(projectsDir.length + 1);
+        if (name !== opts.project && !name.endsWith(`-${opts.project}`)) return false;
+        try { return statSync(path).isDirectory(); } catch { return false; }
+      });
+    if (!projectDir) throw new Error(`project directory not found: ${opts.project}`);
+  } catch (err) {
+    return { ok: false, stage: 'project-directory', cause: errorFrom(err) };
+  }
+
+  let specContent: string;
+  try {
+    specContent = readFileSync(join(projectDir, 'spec.md'), 'utf8');
+  } catch (err) {
+    return { ok: false, stage: 'spec-readable', cause: errorFrom(err) };
+  }
+  let tasksContent: string;
+  try {
+    tasksContent = readFileSync(join(projectDir, 'tasks.md'), 'utf8');
+  } catch (err) {
+    return { ok: false, stage: 'tasks-readable', cause: errorFrom(err) };
+  }
+  return { ok: true, projectDir, specContent, tasksContent };
+}
+
+export function worktreeProvisioningTerminalReason(detail: string): string {
+  const stage = /worktree provisioning failed:\s*([a-z-]+)/i.exec(detail)?.[1] ?? 'setup';
+  return `worktree provisioning failed: ${stage}`;
+}
+
+function errorFrom(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+function registeredWorktreeBranches(porcelain: string): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  for (const record of porcelain.split(/\n\s*\n/)) {
+    const lines = record.split('\n');
+    const path = lines[0]?.match(/^worktree\s+(.+)$/)?.[1];
+    if (!path) continue;
+    const branchLine = lines.find((line) => line.startsWith('branch refs/heads/'));
+    out.set(normalizeWorktreePath(path.trim()), branchLine?.slice('branch refs/heads/'.length) ?? null);
+  }
+  return out;
+}
+
+function normalizeWorktreePath(path: string): string {
+  try { return realpathSync(path); } catch { return resolve(path); }
 }
 
 /**
@@ -471,13 +575,48 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     args = ['worktree', 'add', worktree, product.baseBranch];
   }
 
+  // Atomically claim the target as an empty directory and retain its inode as
+  // the provisioning attempt's ownership token. Git accepts an existing empty
+  // destination. A concurrent actor wins mkdir first or loses with EEXIST;
+  // rollback never infers ownership from a stale absence snapshot.
+  const ownership = claimProvisioningDirectory(worktree);
+
   try {
     await runGit(args, { cwd: product.repoPath });
   } catch (err) {
     const stderr = (err as { stderr?: string })?.stderr ?? '';
+    await rollbackProvisioningAttempt(runGit, product.repoPath, worktree, ownership, false);
     throw new Error(
-      `createWorktree: git worktree add failed for ${worktree}: ` +
+      `createWorktree: worktree provisioning failed: git-add for ${worktree}: ` +
         `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+      { cause: err },
+    );
+  }
+
+  const postcondition = await (opts.verifyProvisioning ?? verifyWorktreeProvisioning)({
+    repoPath: product.repoPath,
+    worktree,
+    expectedBranch: opts.branch ?? product.baseBranch,
+    runGit,
+  });
+  if (!postcondition.ok) {
+    const createdBranchTip = !resumed && opts.branch
+      ? await resolveBranchTip(runGit, product.repoPath, opts.branch)
+      : null;
+    await rollbackProvisioningAttempt(
+      runGit,
+      product.repoPath,
+      worktree,
+      ownership,
+      true,
+      opts.branch && createdBranchTip
+        ? { name: opts.branch, expectedTip: createdBranchTip }
+        : undefined,
+    );
+    throw new Error(
+      `createWorktree: worktree provisioning failed: ${postcondition.stage} for ${worktree}: ` +
+        postcondition.cause.message,
+      { cause: postcondition.cause },
     );
   }
 
@@ -518,6 +657,98 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     baseReconciled,
     resumed,
   };
+}
+
+interface ProvisioningDirectoryOwnership {
+  dev: number;
+  ino: number;
+}
+
+function claimProvisioningDirectory(worktree: string): ProvisioningDirectoryOwnership {
+  mkdirSync(dirname(worktree), { recursive: true });
+  try {
+    mkdirSync(worktree);
+  } catch (err) {
+    throw new Error(
+      `createWorktree: worktree provisioning failed: target-directory for ${worktree}: ` +
+        'target appeared during provisioning; preserving unknown directory',
+      { cause: err },
+    );
+  }
+  const stat = statSync(worktree);
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function ownsProvisioningDirectory(
+  worktree: string,
+  ownership: ProvisioningDirectoryOwnership,
+): boolean {
+  try {
+    const stat = statSync(worktree);
+    return stat.isDirectory() && stat.dev === ownership.dev && stat.ino === ownership.ino;
+  } catch {
+    return false;
+  }
+}
+
+async function rollbackProvisioningAttempt(
+  runGit: GitRunner,
+  repoPath: string,
+  worktree: string,
+  ownership: ProvisioningDirectoryOwnership,
+  removeRegisteredWorktree: boolean,
+  createdBranch?: { name: string; expectedTip: string },
+): Promise<void> {
+  if (existsSync(worktree) && !ownsProvisioningDirectory(worktree, ownership)) {
+    log.warn('createWorktree: rollback ownership changed; preserving target', { worktree });
+    return;
+  }
+  if (removeRegisteredWorktree) {
+    try {
+      await runGit(['worktree', 'remove', '--force', worktree], { cwd: repoPath });
+    } catch {
+      // The postcondition may have failed because registration was incomplete.
+      // The inode token below still proves whether the directory is ours.
+    }
+  }
+  try {
+    if (ownsProvisioningDirectory(worktree, ownership)) {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  } catch (err) {
+    log.warn('createWorktree: failed to remove partial provisioning directory', {
+      worktree,
+      error: errorFrom(err).message,
+    });
+  }
+  try {
+    await runGit(['worktree', 'prune'], { cwd: repoPath });
+  } catch (err) {
+    log.warn('createWorktree: failed to prune partial provisioning metadata', {
+      worktree,
+      error: errorFrom(err).message,
+    });
+  }
+  if (createdBranch) {
+    const tip = await resolveBranchTip(runGit, repoPath, createdBranch.name);
+    if (tip === createdBranch.expectedTip) {
+      try {
+        await runGit(['branch', '-D', createdBranch.name], { cwd: repoPath });
+      } catch (err) {
+        log.warn('createWorktree: failed to remove attempt-created branch', {
+          branch: createdBranch.name,
+          error: errorFrom(err).message,
+        });
+      }
+    } else if (tip !== null) {
+      log.warn('createWorktree: attempt-created branch moved; preserving it', {
+        branch: createdBranch.name,
+        expectedTip: createdBranch.expectedTip,
+        actualTip: tip,
+      });
+    }
+  }
+  removeVitestCache(worktree);
 }
 
 interface ReconcileResumeOpts {
@@ -774,7 +1005,7 @@ async function reclaimPreservedWorktree(
   let registered = false;
   try {
     const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: repoPath });
-    registered = parseRegisteredWorktrees(stdout).has(worktree);
+    registered = parseRegisteredWorktrees(stdout).has(normalizeWorktreePath(worktree));
   } catch {
     // Probe failure → fail closed to the unregistered throw below.
   }
@@ -963,8 +1194,38 @@ export async function cleanupOrphanWorktrees(opts: CleanupOpts): Promise<string[
     }
 
     for (const dir of onDisk) {
-      if (registered.has(dir)) continue;
+      if (registered.has(normalizeWorktreePath(dir))) continue;
       if (resumableWorktrees.has(dir)) continue;
+      // The initial scan is only candidate discovery. A worktree or resumable
+      // cursor may be created while cleanup is running, so re-read both sources
+      // immediately before the irreversible delete.
+      let finalRegistered: Set<string>;
+      try {
+        const result = await runGit(
+          ['worktree', 'list', '--porcelain'],
+          { cwd: product.repoPath },
+        );
+        finalRegistered = parseRegisteredWorktrees(result.stdout);
+      } catch (err) {
+        log.warn('cleanupOrphanWorktrees: final list verification failed; preserving candidate', {
+          product: slug,
+          path: dir,
+          error: errorFrom(err).message,
+        });
+        continue;
+      }
+      if (finalRegistered.has(normalizeWorktreePath(dir))) continue;
+
+      const finalCursors = readResumableWorktreePathsChecked(opts.workRunsDir, opts.worktreeRoot);
+      if (!finalCursors.ok) {
+        log.warn('cleanupOrphanWorktrees: final cursor verification failed; preserving candidate', {
+          product: slug,
+          path: dir,
+          error: finalCursors.error.message,
+        });
+        continue;
+      }
+      if (finalCursors.paths.has(dir)) continue;
       try {
         rmSync(dir, { recursive: true, force: true });
         removeVitestCache(dir);
@@ -988,7 +1249,7 @@ function parseRegisteredWorktrees(porcelain: string): Set<string> {
   const out = new Set<string>();
   for (const line of porcelain.split('\n')) {
     const m = /^worktree\s+(.+)$/.exec(line);
-    if (m && m[1]) out.add(m[1].trim());
+    if (m && m[1]) out.add(normalizeWorktreePath(m[1].trim()));
   }
   return out;
 }
@@ -1036,6 +1297,28 @@ function readResumableWorktreePaths(
   }
 
   return out;
+}
+
+function readResumableWorktreePathsChecked(
+  workRunsDir: string | undefined,
+  worktreeRoot: string,
+): { ok: true; paths: Set<string> } | { ok: false; error: Error } {
+  if (!workRunsDir || !existsSync(workRunsDir)) return { ok: true, paths: new Set() };
+  try {
+    const paths = new Set<string>();
+    for (const name of readdirSync(workRunsDir)) {
+      const runDir = join(workRunsDir, name);
+      const cursorPath = join(runDir, 'cursor.json');
+      if (!statSync(runDir).isDirectory() || !existsSync(cursorPath)) continue;
+      const parsed = JSON.parse(readFileSync(cursorPath, 'utf8')) as unknown;
+      if (!isOrchestrationRunCursor(parsed)) continue;
+      const expectedPath = worktreePathFor(parsed.product, parsed.project, worktreeRoot);
+      if (parsed.worktreePath === expectedPath) paths.add(parsed.worktreePath);
+    }
+    return { ok: true, paths };
+  } catch (err) {
+    return { ok: false, error: errorFrom(err) };
+  }
 }
 
 function isOrchestrationRunCursor(value: unknown): value is ResumableRunCursor {

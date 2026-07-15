@@ -40,6 +40,8 @@ import {
   destroyWorktree as defaultDestroyWorktree,
   defaultRunGit,
   getProductConfig,
+  verifyWorktreeProvisioning,
+  worktreeProvisioningTerminalReason,
   type CloseoutValidationStrategy,
   type GitRunner,
 } from './sandbox-runtime.js';
@@ -133,7 +135,7 @@ import {
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
-import { findWorkProjectDir, resolveLiveWorkProject } from './work-project.js';
+import { resolveLiveWorkProject } from './work-project.js';
 import {
   invalidateOrchestratedRunCursor,
   readOrchestratedRunCursor,
@@ -714,6 +716,7 @@ export interface OrchestratedRuntimeDeps {
    *  inject a canned result so the loop's deps are never exercised. */
   runOrchestration: (deps: OrchestrationDeps) => Promise<OrchestrationResult>;
   runGit: GitRunner;
+  verifyWorktree: typeof verifyWorktreeProvisioning;
   /** Isolated teardown status seam; avoids coupling classification Git probes to cleanup. */
   inspectWorktreeStatus: (worktreePath: string) => Promise<string>;
   /** Build the per-task workflow runner (Phase 8). Production is the LIVE
@@ -754,6 +757,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     destroyWorktree: defaultDestroyWorktree,
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
+    verifyWorktree: verifyWorktreeProvisioning,
     inspectWorktreeStatus: async (worktreePath) =>
       (await defaultRunGit(['status', '--porcelain'], { cwd: worktreePath })).stdout,
     createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
@@ -1545,8 +1549,15 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           });
         }
       } catch (err) {
+        const detail = (err as Error).message;
+        log.error('orchestrated-work-runner: worktree provisioning failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          error: detail,
+        });
         const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
-          reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
+          reason: scrubAbsolutePaths(worktreeProvisioningTerminalReason(detail)),
           projectSlug,
           product,
         }));
@@ -1555,10 +1566,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         return;
       }
 
-      const projectDir = findWorkProjectDir(projectSlug, sandbox.worktree);
-      if (!projectDir) {
+      let productConfig;
+      try {
+        productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+      } catch (err) {
+        log.error('orchestrated-work-runner: provisioning config verification failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          error: (err as Error).message,
+        });
         const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
-          reason: `project not found in worktree: ${projectSlug}`,
+          reason: 'worktree provisioning failed: product-config',
           projectSlug,
           product,
         }));
@@ -1566,15 +1585,40 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         yield terminal;
         return;
       }
+      const provisioning = await deps.verifyWorktree({
+        repoPath: productConfig.repoPath,
+        worktree: sandbox.worktree,
+        expectedBranch: branch,
+        project: projectSlug,
+        runGit: deps.runGit,
+      });
+      if (!provisioning.ok) {
+        log.error('orchestrated-work-runner: worktree pre-dispatch verification failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          worktree: sandbox.worktree,
+          stage: provisioning.stage,
+          error: provisioning.cause.message,
+        });
+        const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
+          reason: `worktree provisioning failed: ${provisioning.stage}`,
+          projectSlug,
+          product,
+        }));
+        persistTerminalStateOnce(terminal);
+        yield terminal;
+        return;
+      }
+      const projectDir = provisioning.projectDir!;
       const runSandbox = sandbox;
-      const baselineTasks = readFileSafe(join(projectDir, 'tasks.md'));
+      const baselineTasks = provisioning.tasksContent!;
 
       let baseBranch = 'main';
       let repoPath = runSandbox.worktree;
       let validationCommands: string[] = [];
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
-        const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
         baseBranch = productConfig.baseBranch;
         repoPath = productConfig.repoPath;
         validationCommands = productConfig.validationCommands ?? [];

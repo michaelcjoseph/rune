@@ -9,8 +9,8 @@ import { parseWorkRunReleaseCallback, dispatchTelegramWorkRunRelease } from './w
 
 const log = createLogger('telegram');
 
-export function createBot(): TelegramBot {
-  return new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: true });
+export function createBot(opts: { polling?: boolean } = {}): TelegramBot {
+  return new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: opts.polling ?? true });
 }
 
 /** Wire message handlers to an already-created bot. Called after senders are ready. */

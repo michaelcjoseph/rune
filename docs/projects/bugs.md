@@ -1,6 +1,14 @@
 ## Active
 
-- [ ] Bug: work run fails before execution because its isolated worktree is missing
+(empty)
+
+## Loop-filed
+
+(empty)
+
+## Done
+
+- [x] Bug: work run fails before execution because its isolated worktree is missing _(Fixed 2026-07-15 — verified root cause: asynchronous startup orphan cleanup used stale Git-registration and resumable-cursor snapshots, then removed newly active worktrees after successful initialization. Startup now awaits recovery, stale-mutation reconciliation, and orphan cleanup before HTTP/scheduler dispatch surfaces become reachable. Each deletion candidate is revalidated against fresh Git and cursor state and is preserved on verification failure. Creation verifies the exact directory, registration, and branch postconditions and rolls back attempt-owned partial state with metadata pruning. Legacy and orchestrated runners share a pre-dispatch project/spec/tasks check and return a scrubbed `worktree provisioning failed: <stage>` terminal before model dispatch; full paths and causes remain local-only.)_
   - Project: 01-probe-harness-pilot
   - Failed run: 5fe6989f
   - Error:
@@ -43,12 +51,6 @@
     A normal run proceeds past initialization into task selection and planning.
     A simulated worktree-creation failure produces a provisioning-specific error, not an unhandled ENOENT from scandir.
     Retrying after a failed initialization does not require manual filesystem cleanup and does not reuse an invalid worktree path.
-
-## Loop-filed
-
-(empty)
-
-## Done
 
 - [x] Bug: orchestrated brand work runs fail during sandbox initialization and do not consistently inherit the Rune MCP _(Fixed 2026-07-14 — root cause was the artifact Codex path applying two macOS Seatbelt layers: Rune wrapped the child in the generated artifact profile and still passed Codex `-s workspace-write`, so Codex attempted its own `sandbox-exec` inside an already sandboxed process and failed with `sandbox_apply: Operation not permitted`. The old outer profile also denied vault reads but did not default-deny writes outside the worktree, and Codex needed writable runtime state under `CODEX_HOME`. Fix: `RunCodexOpts` now has a mutually exclusive external-sandbox branch that requires `sandboxProfilePath`, emits Codex's bypass-sandbox flag, rejects `sandboxMode`, and refuses profile paths on non-external calls; artifact QA/coder Codex calls use that branch under one outer Seatbelt profile. `buildArtifactMcpConfig` now validates the worktree and real profile before model spawn, default-denies file writes except the lexical/real worktree, private runtime/temp, and required device paths, denies configured/real vault reads and writes, denies source Codex/Claude/SSH/cloud/config homes plus common secret literals, denies raw `localhost:*` TCP, hides the profile, permits only the Unix-socket relay, and returns scrubbed `rune-kb not registered:` setup errors before a role round is spent. Eligible QA/coder invocations still receive exactly the required three-tool `rune-kb` registration (`vault_search`, `journal_range`, `follow_wikilinks`) through the relay and independently tear down their broker; tech-lead and other roles remain ineligible. Artifact Codex receives a Codex-only private per-invocation `HOME`/`CODEX_HOME` under the runtime dir seeded with only `auth.json`, while Claude-format artifact sessions do not require or receive Codex auth; Codex also pins `shell_environment_policy.inherit="none"` so generated shell commands do not inherit the auth/runtime environment. Verified with focused Codex/execution-agent/artifact-MCP tests, real macOS profile tests for worktree writes/outside-write denial/vault denial/profile hiding/source-secret denial/socket reachability, and build/full-suite verification. Live brand acceptance run `00ecf81a-bc71-4db8-9c44-b0e879e17822` launched QA/coder Codex roles under the outer profile, reached `writing/voice.md` through MCP, produced a WIP commit `7f637e5` adding `docs/rune/voice.md`, and parked with a product-review fidelity rejection rather than sandbox initialization, direct-vault, or missing-MCP retry loops; the parked branch/worktree are preserved for the product workflow.)_
 - [x] Cockpit recovery could target a removed orchestrated worktree, leak raw ENOENT, and discard cursor-protected dirty work. _(Fixed 2026-07-14 — boot, operator, shutdown, and Cockpit projection now share one fail-closed preflight covering mutation/cursor identity, deterministic path and branch, exact Git registration, readable project tasks, and drift-free durable reconstruction. Operator recovery takes an exclusive lifecycle claim, revalidates under preservation, cancels and awaits the old invocation, then reconstructs again from the settled cursor before redispatch; finalizer and outer teardown honor the same claim. Terminal disposition is resolved before the one authoritative terminal is persisted: clean trees invalidate cursors before removal, while every dirty or uncertain tree parks (with a WIP commit when resumability is verified). Live and recovery finalizers share the mandatory invalidate-then-remove transaction. `/recover` maps unavailable state to a path-scrubbed 409, and project cards plus Operations render Recover only from the short-lived, coalesced server `recoverable` projection. Covered by real temporary-repository worktree preflight cases, lifecycle-claim and settled-cursor ordering, finalizer handoff preservation, authoritative parked terminals, teardown fail-closed cases, cursor-before-removal ordering, HTTP projection/scrubbing/coalescing, and client control visibility. `npm run build` passed; full suite passed: 328 files, 5,345 tests, 8 todo.)_

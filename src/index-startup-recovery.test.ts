@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => [] as string[]);
+const cleanupGate = vi.hoisted(() => {
+  let resolve!: (removed: string[]) => void;
+  const promise = new Promise<string[]>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+});
 const recoverOrchestratedWorkRuns = vi.hoisted(() =>
   vi.fn(async () => {
     calls.push('recover-orchestrated-work');
@@ -73,9 +80,12 @@ vi.mock('./jobs/mutations-log.js', () => ({
 }));
 
 vi.mock('./jobs/sandbox-runtime.js', () => ({
-  cleanupOrphanWorktrees: vi.fn(async () => {
-    calls.push('cleanup-worktrees');
-    return [];
+  cleanupOrphanWorktrees: vi.fn(() => {
+    calls.push('cleanup-worktrees:start');
+    return cleanupGate.promise.then((removed) => {
+      calls.push('cleanup-worktrees:settled');
+      return removed;
+    });
   }),
 }));
 
@@ -136,14 +146,16 @@ vi.mock('./reviews/planning.js', () => ({
 vi.mock('./bot/telegram.js', () => ({
   createBot: vi.fn(() => ({
     stopPolling: vi.fn(),
+    startPolling: vi.fn(async () => { calls.push('start-telegram-polling'); }),
   })),
   wireHandlers: vi.fn(() => calls.push('wire-telegram')),
 }));
 
 vi.mock('./server/http.js', () => ({
-  startHttpServer: vi.fn(() => ({
-    close: vi.fn(),
-  })),
+  startHttpServer: vi.fn(() => {
+    calls.push('start-http-server');
+    return { close: vi.fn() };
+  }),
   closeMcpSessions: vi.fn(async () => undefined),
 }));
 
@@ -228,7 +240,15 @@ vi.mock('./transport/sender.js', () => ({
 
 describe('index startup orchestrated-work recovery', () => {
   it('wires boot recovery so a still-running orchestrated mutation can be reconstructed and re-dispatched before worktree cleanup', async () => {
-    await import('./index.js');
+    const startup = import('./index.js');
+    await vi.waitFor(() => expect(calls).toContain('cleanup-worktrees:start'));
+
+    expect(calls).not.toContain('start-http-server');
+    expect(calls).not.toContain('start-scheduler');
+    expect(calls).not.toContain('start-telegram-polling');
+
+    cleanupGate.resolve([]);
+    await startup;
 
     expect(recoverOrchestratedWorkRuns).toHaveBeenCalledOnce();
     expect(recoverOrchestratedWorkRuns).toHaveBeenCalledWith(
@@ -242,9 +262,12 @@ describe('index startup orchestrated-work recovery', () => {
     );
 
     expect(calls.indexOf('register-applier:orchestrated-work')).toBeLessThan(calls.indexOf('recover-orchestrated-work'));
-    expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('cleanup-worktrees'));
+    expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('cleanup-worktrees:start'));
     expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('reconcile-orphans'));
-    expect(calls.indexOf('reconcile-orphans')).toBeLessThan(calls.indexOf('cleanup-worktrees'));
+    expect(calls.indexOf('reconcile-orphans')).toBeLessThan(calls.indexOf('cleanup-worktrees:start'));
+    expect(calls.indexOf('cleanup-worktrees:settled')).toBeLessThan(calls.indexOf('start-http-server'));
+    expect(calls.indexOf('cleanup-worktrees:settled')).toBeLessThan(calls.indexOf('start-scheduler'));
+    expect(calls.indexOf('cleanup-worktrees:settled')).toBeLessThan(calls.indexOf('start-telegram-polling'));
   });
 
   it('starts the terminal work-run reconciler on boot so stranded terminal artifacts self-heal without another restart', async () => {

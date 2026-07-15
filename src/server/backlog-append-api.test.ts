@@ -97,6 +97,8 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
   getProductConfig: vi.fn(() => ({ product: 'aura', repoPath: '/test/workspace/aura', baseBranch: 'main', egressAllowlist: [] })),
   // The audit-log git probe; empty stdout → branch 'unknown', dirty false.
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  verifyWorktreeProvisioning: vi.fn(),
+  worktreeProvisioningTerminalReason: vi.fn(() => 'worktree provisioning failed: setup'),
 }));
 vi.mock('./restart.js', () => ({ restartServer: vi.fn(() => ({ ok: true as const })) }));
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn(async () => ({ text: 'ok', error: null })) }));

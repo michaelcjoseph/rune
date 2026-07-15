@@ -164,7 +164,9 @@ for (const [, session] of getAllPlanningSessions()) {
 }
 
 // Start services
-const bot = createBot();
+// Construct and wire Telegram without polling so no operator dispatch surface
+// is reachable until startup recovery and orphan cleanup have settled.
+const bot = createBot({ polling: false });
 const bus = new NotificationBus();
 setBus(bus);
 setMutationBus(bus);
@@ -224,18 +226,22 @@ reconcileOrphans({ skipIds: redispatchedOrchestratedMutationIds });
 // or a missing worktree root returns []; a per-product failure is logged and
 // skipped inside cleanupOrphanWorktrees. This runs after orchestrated-work
 // recovery has reconstructed and re-dispatched any still-running resumable run.
-void cleanupOrphanWorktrees({
-  worktreeRoot: config.WORKTREE_ROOT,
-  productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-  workRunsDir: config.WORK_RUNS_DIR,
-}).then((removed) => {
+try {
+  const removed = await cleanupOrphanWorktrees({
+    worktreeRoot: config.WORKTREE_ROOT,
+    productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+    workRunsDir: config.WORK_RUNS_DIR,
+  });
   if (removed.length > 0) {
     log.info('Cleaned up orphan worktrees', { count: removed.length, paths: removed });
   }
-}).catch((err) => {
+} catch (err) {
   log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
-});
+}
 
+void bot.startPolling().catch((err: unknown) => {
+  log.error('Telegram polling failed to start', { error: (err as Error).message });
+});
 const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
 startStallCheck(bus);

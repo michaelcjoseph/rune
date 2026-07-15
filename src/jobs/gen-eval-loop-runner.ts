@@ -50,6 +50,7 @@ import {
   destroyWorktree as defaultDestroyWorktree,
   getProductConfig,
   readProductsConfig,
+  worktreeProvisioningTerminalReason,
 } from './sandbox-runtime.js';
 
 const log = createLogger('gen-eval-loop-runner');
@@ -553,7 +554,17 @@ export async function* runGenEvalLoop(
         productsConfigPath: opts.productsConfigPath,
       });
     } catch (err) {
-      yield baseEvent('failed', { ...identity, reason: `worktree create failed: ${(err as Error).message}` });
+      const detail = (err as Error).message;
+      log.error('gen-eval-loop-runner: worktree provisioning failed', {
+        id: opts.mutationId,
+        product: opts.payload.product,
+        project: opts.payload.project,
+        error: detail,
+      });
+      yield baseEvent('failed', {
+        ...identity,
+        reason: worktreeProvisioningTerminalReason(detail),
+      });
       return;
     }
     // TODO(v2): cancel-check between createWorktree and first round — today

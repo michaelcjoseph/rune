@@ -5,7 +5,7 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { runTargetFromDescriptor, type WorkRunTarget } from '../intent/run-target.js';
-import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
+import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, verifyWorktreeProvisioning, vitestCacheDirFor, worktreeProvisioningTerminalReason, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type StreamJsonEnvelope, type TranscriptSink } from './work-run-transcript.js';
 import { parseWorkRunSentinel, type WorkRunSentinel } from './work-run-sentinel.js';
 import { parseAskUserQuestionEnvelope, pendingCheckForQuestion, type ParsedAskUserQuestion, type WorkRunParkedQuestion } from './work-run-question.js';
@@ -24,7 +24,7 @@ import { scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG, worktreePathFor, workBranchName, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
-import { findWorkProjectDir, resolveLiveWorkProject } from './work-project.js';
+import { resolveLiveWorkProject } from './work-project.js';
 
 const log = createLogger('work-runner');
 
@@ -50,6 +50,7 @@ export interface WorkRunRuntimeDeps {
   /** Work-product git (`rev-list`/`diff`/`status`) — the same seam
    *  createWorktree/destroyWorktree take. */
   runGit: GitRunner;
+  verifyWorktree: typeof verifyWorktreeProvisioning;
   /** Base dir for per-run artifacts (`<workRunsDir>/<id>/{transcript,summary}`). */
   workRunsDir: string;
   /** Rolling recent-runs index file (`logs/work-runs/index.jsonl`). */
@@ -82,6 +83,7 @@ export interface WorkRunRuntimeDeps {
 function productionRuntimeDeps(): WorkRunRuntimeDeps {
   return {
     runGit: defaultRunGit,
+    verifyWorktree: verifyWorktreeProvisioning,
     workRunsDir: config.WORK_RUNS_DIR,
     workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
     createSink: (runId, baseDir) => createTranscriptSink({ runId, baseDir }),
@@ -333,8 +335,15 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // (which carries the OS username), and this reason reaches Telegram +
         // mutations.jsonl. `projectSlug` lets the work-run formatter label the
         // run instead of degrading to the mutation-id prefix.
+        const detail = (err as Error).message;
+        log.error('work-runner: worktree provisioning failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          error: detail,
+        });
         yield term(descriptor.id, 'failed', {
-          reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
+          reason: scrubPathsInText(worktreeProvisioningTerminalReason(detail)),
           projectSlug,
         });
         return;
@@ -357,29 +366,42 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         product,
       });
 
-      const dir = findWorkProjectDir(projectSlug, sandbox.worktree);
-      if (!dir) {
-        yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}`, projectSlug });
+      let productConfig;
+      try {
+        productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+      } catch (err) {
+        log.error('work-runner: provisioning config verification failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          error: (err as Error).message,
+        });
+        yield term(descriptor.id, 'failed', { reason: 'worktree provisioning failed: product-config', projectSlug });
         return;
       }
-
-      const specPath = join(dir, 'spec.md');
+      const provisioning = await deps.verifyWorktree({
+        repoPath: productConfig.repoPath,
+        worktree: sandbox.worktree,
+        expectedBranch: branch,
+        project: projectSlug,
+        runGit: deps.runGit,
+      });
+      if (!provisioning.ok) {
+        log.error('work-runner: worktree pre-dispatch verification failed', {
+          id: descriptor.id,
+          product,
+          project: projectSlug,
+          worktree: sandbox.worktree,
+          stage: provisioning.stage,
+          error: provisioning.cause.message,
+        });
+        yield term(descriptor.id, 'failed', { reason: `worktree provisioning failed: ${provisioning.stage}`, projectSlug });
+        return;
+      }
+      const dir = provisioning.projectDir!;
       const tasksPath = join(dir, 'tasks.md');
-
-      let specContent: string;
-      try {
-        specContent = readFileSync(specPath, 'utf8');
-      } catch {
-        yield term(descriptor.id, 'failed', { reason: `could not read spec.md for ${projectSlug}`, projectSlug });
-        return;
-      }
-
-      let tasksContent = '';
-      try {
-        if (existsSync(tasksPath)) tasksContent = readFileSync(tasksPath, 'utf8');
-      } catch {
-        // tasks.md is optional
-      }
+      const specContent = provisioning.specContent!;
+      const tasksContent = provisioning.tasksContent!;
 
       // On a resume the worktree already holds the project's prior commits, so
       // tell the agent not to restart — the core symptom of the re-fork bug was

@@ -125,6 +125,8 @@ vi.mock('./sandbox-runtime.js', () => ({
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
   getProductConfig: mockGetProductConfig,
+  verifyWorktreeProvisioning: vi.fn(),
+  worktreeProvisioningTerminalReason: vi.fn(() => 'worktree provisioning failed: setup'),
   readProductsConfig: mockReadProductsConfig,
   vitestCacheDirFor: (worktree: string) => `/tmp/isolated-vitest/${worktree.split('/').at(-1)}`,
 }));
@@ -390,6 +392,12 @@ describe('workRunApplier', () => {
     refreshRegistrySpy = vi.fn();
     __setWorkRunRuntimeForTest({
       runGit: gitStub.stub as never,
+      verifyWorktree: async (opts: { worktree: string; project?: string }) => ({
+        ok: true,
+        projectDir: join(opts.worktree, 'docs', 'projects', opts.project ?? '06-webview'),
+        specContent: '# Spec\n\nDo something.',
+        tasksContent: '- [ ] Task',
+      }),
       workRunsDir: '/tmp/test-work-runs',
       workRunsIndexFile: '/tmp/test-work-runs/index.jsonl',
       createSink: () => currentSink.sink as never,
@@ -1367,6 +1375,31 @@ describe('workRunApplier', () => {
 
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    });
+
+    it('fails with a scrubbed provisioning stage before spawning the legacy model', async () => {
+      setupValidProject('06-webview');
+      mockCreateWorktree.mockResolvedValue(fakeSandboxSpec());
+      __setWorkRunRuntimeForTest({
+        verifyWorktree: async () => ({
+          ok: false,
+          stage: 'spec-readable',
+          cause: new Error('ENOENT /Users/private/operator/worktree/spec.md'),
+        }),
+      });
+      const descriptor = {
+        id: 'mut-preflight-fail', kind: 'work-run',
+        payload: { projectSlug: '06-webview', product: 'rune' }, status: 'running',
+      } as any;
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find((event) => event.kind === 'failed');
+      expect(terminal?.data?.reason).toBe('worktree provisioning failed: spec-readable');
+      expect(JSON.stringify(terminal)).not.toContain('/Users/private');
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
 
     it('registers and unregisters the child process', async () => {

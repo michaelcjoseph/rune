@@ -419,6 +419,12 @@ describe('orchestratedWorkApplier', () => {
         refreshRegistry: refreshRegistrySpy as () => void,
         inspectWorktreeStatus: async () => '',
         invalidateRunCursor: () => {},
+        verifyWorktree: async (opts) => ({
+          ok: true,
+          projectDir: join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo'),
+          specContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'spec.md'), 'utf8'),
+          tasksContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'tasks.md'), 'utf8'),
+        }),
       });
     });
 
@@ -2413,6 +2419,12 @@ describe('orchestratedWorkApplier', () => {
             destroyed = true;
           },
           runGit,
+          verifyWorktree: async (opts) => ({
+            ok: true,
+            projectDir: join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo'),
+            specContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'spec.md'), 'utf8'),
+            tasksContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'tasks.md'), 'utf8'),
+          }),
           createTaskWorkflowRunner: () => async (task): Promise<TaskEvidence> => {
             if (applierRun === 1 && task.id === 'render-the-streak-card') {
               return {
@@ -3608,6 +3620,25 @@ describe('orchestratedWorkApplier', () => {
       const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal?.kind).toBe('failed');
       expect(destroyed).toBe(false);
+    });
+
+    it('fails with a scrubbed provisioning stage before any orchestration role is spawned', async () => {
+      const runOrchestration = vi.fn(async () => ({ kind: 'finalized', outcome: 'x' } as OrchestrationResult));
+      inject({ kind: 'finalized', outcome: 'unused' });
+      __setOrchestratedRuntimeForTest({
+        runOrchestration,
+        verifyWorktree: async () => ({
+          ok: false,
+          stage: 'tasks-readable',
+          cause: new Error('ENOENT /Users/private/operator/worktree/tasks.md'),
+        }),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((event) => event.kind === 'failed');
+      expect(terminal?.data).toMatchObject({ reason: 'worktree provisioning failed: tasks-readable' });
+      expect(JSON.stringify(terminal)).not.toContain('/Users/private');
+      expect(runOrchestration).not.toHaveBeenCalled();
     });
 
     it('maps user cancellation to failed terminal artifacts and removes the worktree', async () => {
