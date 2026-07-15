@@ -1,49 +1,5 @@
 ## Active
 
-- [ ] Bug: orchestrated brand work runs fail during sandbox initialization and do not consistently inherit the Rune MCP
-  - Issue
-    The voice-guidelines-copy task in project 01-rune-writing-product cannot execute in the michaelcjoseph.com worktree.
-    Worker shell startup fails before any command runs with:
-    sandbox-exec: sandbox_apply: Operation not permitted
-    Patch writes also fail, so the worker cannot create docs/rune/voice.md.
-    The Rune MCP is registered and available in the brand product chat, but worker attempts receive inconsistent MCP inventories. Earlier attempts reached writing/voice.md; the final retry reported no Rune/pkms MCP server.
-    The result is an empty diff, no validation run, and an orchestration retry loop against an infrastructure failure.
-  - Affected run
-    Run: da582875-1929-44a3-8ddb-12af058c80b0
-    Product: brand
-    Project: 01-rune-writing-product
-    Task: voice-guidelines-copy
-  - Expected behavior
-    A worker dispatched for the brand product initializes a sandbox that can read, write, and execute commands inside /Users/jarvis/workspace/michaelcjoseph.com.
-    The worker inherits the same registered rune-kb MCP capabilities available to the product chat.
-    The worker can retrieve pkms/writing/voice.md through MCP, write the owned copy to docs/rune/voice.md, and run npm run build.
-  - Actual behavior
-    The sandbox rejects setup before command execution, including pwd and npm run build.
-    apply_patch cannot write to the declared worktree.
-    MCP availability differs between retries in the same run.
-    The task cannot produce its only required artifact.
-  - Reproduction
-    Start an orchestrated work run for product brand, targeting 01-rune-writing-product.
-    Dispatch voice-guidelines-copy.
-    Have the coder run any shell command in the declared worktree.
-    Observe sandbox initialization fail with sandbox_apply: Operation not permitted.
-    Attempt a patch under docs/rune/.
-    Observe the write fail.
-    Inspect the worker MCP inventory across retries.
-    Observe that Rune MCP availability is not stable, despite being available in the parent product chat.
-  - Required fix
-    Correct the sandbox profile or initialization path used by orchestrated brand workers so it authorizes the declared worktree for shell execution and file writes.
-    Ensure the worker receives the product chat’s registered rune-kb MCP configuration on every retry and every role handoff.
-    Verify this applies to the actual worker process, not only the parent product-chat process.
-    Preserve the existing privacy boundary: the worker must retrieve PKMS content only through Rune MCP, never through direct filesystem access.
-  - Acceptance criteria
-    A fresh brand work run can execute pwd successfully inside /Users/jarvis/workspace/michaelcjoseph.com.
-    The same worker can create, modify, and inspect a temporary file under docs/rune/.
-    The worker’s MCP inventory includes the Rune KB tools, including a content-query path sufficient to retrieve writing/voice.md.
-    MCP availability remains present across coder retries and role transitions in one run.
-    voice-guidelines-copy completes by creating docs/rune/voice.md from MCP-sourced content.
-    npm run build runs successfully after the file is created.
-    The resulting work run records a non-empty diff and completes without retrying because of sandbox initialization or missing MCP tools.
 - [ ] Bug: work run fails before execution because its isolated worktree is missing
   - Project: 01-probe-harness-pilot
   - Failed run: 5fe6989f
@@ -94,6 +50,7 @@
 
 ## Done
 
+- [x] Bug: orchestrated brand work runs fail during sandbox initialization and do not consistently inherit the Rune MCP _(Fixed 2026-07-14 — root cause was the artifact Codex path applying two macOS Seatbelt layers: Rune wrapped the child in the generated artifact profile and still passed Codex `-s workspace-write`, so Codex attempted its own `sandbox-exec` inside an already sandboxed process and failed with `sandbox_apply: Operation not permitted`. The old outer profile also denied vault reads but did not default-deny writes outside the worktree, and Codex needed writable runtime state under `CODEX_HOME`. Fix: `RunCodexOpts` now has a mutually exclusive external-sandbox branch that requires `sandboxProfilePath`, emits Codex's bypass-sandbox flag, rejects `sandboxMode`, and refuses profile paths on non-external calls; artifact QA/coder Codex calls use that branch under one outer Seatbelt profile. `buildArtifactMcpConfig` now validates the worktree and real profile before model spawn, default-denies file writes except the lexical/real worktree, private runtime/temp, and required device paths, denies configured/real vault reads and writes, denies source Codex/Claude/SSH/cloud/config homes plus common secret literals, denies raw `localhost:*` TCP, hides the profile, permits only the Unix-socket relay, and returns scrubbed `rune-kb not registered:` setup errors before a role round is spent. Eligible QA/coder invocations still receive exactly the required three-tool `rune-kb` registration (`vault_search`, `journal_range`, `follow_wikilinks`) through the relay and independently tear down their broker; tech-lead and other roles remain ineligible. Artifact Codex receives a Codex-only private per-invocation `HOME`/`CODEX_HOME` under the runtime dir seeded with only `auth.json`, while Claude-format artifact sessions do not require or receive Codex auth; Codex also pins `shell_environment_policy.inherit="none"` so generated shell commands do not inherit the auth/runtime environment. Verified with focused Codex/execution-agent/artifact-MCP tests, real macOS profile tests for worktree writes/outside-write denial/vault denial/profile hiding/source-secret denial/socket reachability, and build/full-suite verification. Live brand acceptance run `00ecf81a-bc71-4db8-9c44-b0e879e17822` launched QA/coder Codex roles under the outer profile, reached `writing/voice.md` through MCP, produced a WIP commit `7f637e5` adding `docs/rune/voice.md`, and parked with a product-review fidelity rejection rather than sandbox initialization, direct-vault, or missing-MCP retry loops; the parked branch/worktree are preserved for the product workflow.)_
 - [x] Cockpit recovery could target a removed orchestrated worktree, leak raw ENOENT, and discard cursor-protected dirty work. _(Fixed 2026-07-14 — boot, operator, shutdown, and Cockpit projection now share one fail-closed preflight covering mutation/cursor identity, deterministic path and branch, exact Git registration, readable project tasks, and drift-free durable reconstruction. Operator recovery takes an exclusive lifecycle claim, revalidates under preservation, cancels and awaits the old invocation, then reconstructs again from the settled cursor before redispatch; finalizer and outer teardown honor the same claim. Terminal disposition is resolved before the one authoritative terminal is persisted: clean trees invalidate cursors before removal, while every dirty or uncertain tree parks (with a WIP commit when resumability is verified). Live and recovery finalizers share the mandatory invalidate-then-remove transaction. `/recover` maps unavailable state to a path-scrubbed 409, and project cards plus Operations render Recover only from the short-lived, coalesced server `recoverable` projection. Covered by real temporary-repository worktree preflight cases, lifecycle-claim and settled-cursor ordering, finalizer handoff preservation, authoritative parked terminals, teardown fail-closed cases, cursor-before-removal ordering, HTTP projection/scrubbing/coalescing, and client control visibility. `npm run build` passed; full suite passed: 328 files, 5,345 tests, 8 todo.)_
 - [x] **Codex product chats could retain read-only or unknown thread authority instead of receiving full repository access.** **(Fixed 2026-07-14 — the webview conversation boundary now derives one provider-neutral `ChatAuthority` from product scope plus successful workspace resolution. Resolved product chats use `product-full-access`; Home/global and unresolved products use `read-only`. The same decision controls prompt capability, tools, product MCP, Codex `-s danger-full-access`, and persisted executor metadata while Claude retains its existing full-trust product posture. Full access is type-bound to product/cwd/scoped-root metadata, and Codex resumes require a non-empty thread id plus exact authority, effective cwd, and scoped-root matches. Explicit legacy `writeEnabled:true/false` records remain recognized, but metadata-less, threadless, weaker, or differently-bound threads rotate automatically with transcript replay and are cleaned through session replacement. Controlled Claude/Codex CLI fixtures drive the real webview launch path in temporary repositories and prove source plus `.git` writes/commit, matching Codex resume, and legacy read-only rotation. Focused tests, type-check, and the full 327-file suite (5,315 passed, 8 todo) pass.)**
 

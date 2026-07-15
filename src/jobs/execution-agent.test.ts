@@ -481,8 +481,13 @@ describe('runExecutionAgent — structured cancellation', () => {
 describe('runExecutionAgent — artifact MCP boundary', () => {
   const artifactMcp = {
     claudeArgs: ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{"rune-kb":{}}}'],
-    codexConfigOverrides: ['mcp_servers={"rune-kb"={command="/usr/bin/node"}}'],
+    codexConfigOverrides: [
+      'mcp_servers={"rune-kb"={command="/usr/bin/node"}}',
+      'shell_environment_policy.inherit="none"',
+    ],
     sandboxProfilePath: '/tmp/artifact.sb',
+    runtimeEnv: { TMPDIR: '/tmp/rune-artifact-runtime' },
+    codexEnv: { HOME: '/tmp/rune-artifact-runtime', CODEX_HOME: '/tmp/rune-artifact-runtime/codex-home' },
     stop: vi.fn(async () => {}),
   };
 
@@ -492,34 +497,55 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
       capturedPrompt = prompt;
       return { text: 'done', error: null, exitCode: 0 };
     });
+    const buildArtifactMcp = vi.fn(() => artifactMcp);
     const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
-      buildArtifactMcp: () => artifactMcp,
+      buildArtifactMcp,
     });
 
     expect(result.ok).toBe(true);
+    expect(buildArtifactMcp).toHaveBeenCalledWith(expect.any(Object), {
+      productsConfigPath: expect.any(String),
+      executor: 'codex',
+    });
     expect(mockRunCodex.mock.calls[0]![1]).toMatchObject({
       configOverrides: artifactMcp.codexConfigOverrides,
       ignoreUserConfig: true,
       sandboxProfilePath: artifactMcp.sandboxProfilePath,
+      externallySandboxed: true,
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        TMPDIR: artifactMcp.runtimeEnv.TMPDIR,
+        HOME: artifactMcp.codexEnv.HOME,
+        CODEX_HOME: artifactMcp.codexEnv.CODEX_HOME,
+      },
     });
+    expect(mockRunCodex.mock.calls[0]![1]).not.toHaveProperty('sandboxMode');
     expect(capturedPrompt).toBe('implement the selected task');
     expect(capturedPrompt).not.toContain('pkms');
   });
 
   it('replaces Claude project MCP args with the strict artifact config', async () => {
     mockSpawn.mockReturnValue(makeFakeChild());
+    const buildArtifactMcp = vi.fn(() => artifactMcp);
     const result = await runExecutionAgent(makeOpts({ model: claudeModel, role: 'coder' }), {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
-      buildArtifactMcp: () => artifactMcp,
+      buildArtifactMcp,
     });
 
     expect(result.ok).toBe(true);
+    expect(buildArtifactMcp).toHaveBeenCalledWith(expect.any(Object), {
+      productsConfigPath: expect.any(String),
+      executor: 'claude',
+    });
     const [command, args] = mockSpawn.mock.calls[0]! as [string, string[]];
     expect(command).toBe('/usr/bin/sandbox-exec');
     expect(args.slice(0, 3)).toEqual(['-f', artifactMcp.sandboxProfilePath, '/usr/local/bin/claude']);
     expect(args.slice(3, 6)).toEqual(artifactMcp.claudeArgs);
     expect(args).not.toContain('/tmp/test-project/.claude/settings.json');
+    const spawnOpts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+    expect(spawnOpts.env).toMatchObject({ TMPDIR: artifactMcp.runtimeEnv.TMPDIR });
+    expect(spawnOpts.env).not.toHaveProperty('CODEX_HOME');
   });
 
   it('fails before model spawn when required MCP setup fails', async () => {
@@ -587,6 +613,37 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
     expect(result.ok).toBe(true);
     expect(buildArtifactMcp).not.toHaveBeenCalled();
     expect(mockRunCodex.mock.calls[0]![1]).not.toHaveProperty('configOverrides');
+  });
+
+  it('builds and tears down an independent strict registration for consecutive QA and coder invocations', async () => {
+    mockRunCodex.mockResolvedValue({ text: 'done', error: null, exitCode: 0 });
+    const qaStop = vi.fn(async () => {});
+    const coderStop = vi.fn(async () => {});
+    const buildArtifactMcp = vi.fn()
+      .mockReturnValueOnce({ ...artifactMcp, stop: qaStop })
+      .mockReturnValueOnce({ ...artifactMcp, stop: coderStop });
+
+    const qa = await runExecutionAgent(makeOpts({ role: 'qa' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp,
+    });
+    const coder = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp,
+    });
+
+    expect(qa.ok).toBe(true);
+    expect(coder.ok).toBe(true);
+    expect(buildArtifactMcp).toHaveBeenCalledTimes(2);
+    expect(qaStop).toHaveBeenCalledTimes(1);
+    expect(coderStop).toHaveBeenCalledTimes(1);
+    for (const [, options] of mockRunCodex.mock.calls) {
+      expect(options).toMatchObject({
+        configOverrides: artifactMcp.codexConfigOverrides,
+        ignoreUserConfig: true,
+        externallySandboxed: true,
+      });
+    }
   });
 });
 

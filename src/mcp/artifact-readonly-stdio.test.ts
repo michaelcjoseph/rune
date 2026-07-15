@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -42,6 +42,16 @@ describe('artifact read-only stdio MCP', () => {
     writeFileSync(join(vault, 'knowledge', 'voice-target.md'), '# Voice Target\n\nWIKILINK_TARGET_MARKER\n');
     const outside = mkdtempSync(join(tmpdir(), 'artifact-outside-'));
     dirs.push(outside);
+    const worktree = join(outside, 'worktree');
+    mkdirSync(worktree);
+    const codexHome = join(outside, 'codex-home');
+    mkdirSync(codexHome);
+    const sourceCodexAuth = join(codexHome, 'auth.json');
+    writeFileSync(sourceCodexAuth, 'fixture-auth-secret', { mode: 0o600 });
+    const homeDir = join(outside, 'home');
+    mkdirSync(join(homeDir, '.ssh'), { recursive: true });
+    const homeSshSecret = join(homeDir, '.ssh', 'id_ed25519');
+    writeFileSync(homeSshSecret, 'ssh-secret');
     writeFileSync(join(outside, 'secret.md'), '# Outside\n\nOUTSIDE_SYMLINK_MARKER\n');
     symlinkSync(join(outside, 'secret.md'), join(vault, 'writing', 'outside.md'));
     const beforeTree = tree(vault);
@@ -52,12 +62,14 @@ describe('artifact read-only stdio MCP', () => {
       writing: { repoPath: vault, artifactMcp: 'rune-kb-readonly' },
     }));
     const cfg = await buildArtifactMcpConfig({
-      product: 'writing', project: 'fixture', worktree: vault,
+      product: 'writing', project: 'fixture', worktree,
       egressAllowlist: [], resumed: false,
     } as SandboxSpec, {
       productsConfigPath: products,
       projectRoot: root,
       vaultDir: vault,
+      codexHome,
+      homeDir,
     });
     expect(cfg).not.toBeNull();
     const claude = JSON.parse(cfg!.claudeArgs[2]!) as { mcpServers: Record<string, {
@@ -65,6 +77,35 @@ describe('artifact read-only stdio MCP', () => {
     }> };
     const registration = claude.mcpServers['rune-kb']!;
     expect(JSON.stringify(registration)).not.toContain(vault);
+    const pwd = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/bin/pwd',
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(pwd.status).toBe(0);
+    expect(pwd.stdout.trim()).toBe(realpathSync(worktree));
+    const inside = join(worktree, 'inside.txt');
+    const allowedWrite = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/usr/bin/touch', inside,
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(allowedWrite.status).toBe(0);
+    expect(existsSync(inside)).toBe(true);
+    const outsideWrite = join(outside, 'outside.txt');
+    const deniedOutsideWrite = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/usr/bin/touch', outsideWrite,
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(deniedOutsideWrite.status).not.toBe(0);
+    expect(existsSync(outsideWrite)).toBe(false);
+    const hiddenProfile = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/usr/bin/head', '-n', '1', cfg!.sandboxProfilePath,
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(hiddenProfile.status).not.toBe(0);
+    const deniedSourceCodexAuth = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/usr/bin/head', '-n', '1', sourceCodexAuth,
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(deniedSourceCodexAuth.status).not.toBe(0);
+    const deniedHomeSsh = spawnSync('/usr/bin/sandbox-exec', [
+      '-f', cfg!.sandboxProfilePath, '/usr/bin/head', '-n', '1', homeSshSecret,
+    ], { cwd: worktree, encoding: 'utf8' });
+    expect(deniedHomeSsh.status).not.toBe(0);
     const denied = spawnSync('/usr/bin/sandbox-exec', [
       '-f', cfg!.sandboxProfilePath, '/usr/bin/head', '-n', '1', source,
     ], { encoding: 'utf8' });
@@ -77,7 +118,10 @@ describe('artifact read-only stdio MCP', () => {
     expect(readFileSync(source, 'utf8')).toBe(beforeSource);
 
     const transport = new StdioClientTransport({
-      ...registration,
+      command: '/usr/bin/sandbox-exec',
+      args: ['-f', cfg!.sandboxProfilePath, registration.command, ...registration.args],
+      cwd: registration.cwd,
+      env: { ...registration.env, ...cfg!.runtimeEnv },
       stderr: 'pipe',
     });
     const client = new Client({ name: 'artifact-readonly-test', version: '1.0.0' });

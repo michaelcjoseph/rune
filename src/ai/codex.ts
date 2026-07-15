@@ -176,16 +176,12 @@ export async function probeCodexProvider(): Promise<ProviderAvailability> {
  *  `runCodex` callers that don't override. */
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
-export interface RunCodexOpts {
+interface RunCodexBaseOpts {
   /** Working directory for the child process. Defaults to `PROJECT_ROOT`. */
   cwd?: string;
   /** Model alias passed via `-m` (e.g. `o4-mini`). When omitted, the Codex
    *  CLI uses whatever its config.toml resolves. */
   model?: string;
-  /** Sandbox policy passed via `-s`. When omitted, the Codex CLI defaults
-   *  apply. The dispatcher (A5.2) is expected to set this explicitly for
-   *  product-repo runs. */
-  sandboxMode?: CodexSandboxMode;
   /** Overall timeout in ms; defaults to `config.CLAUDE_TIMEOUT_MS` so the
    *  two executors share one operational budget. */
   timeoutMs?: number;
@@ -228,10 +224,26 @@ export interface RunCodexOpts {
   /** Skip `$CODEX_HOME/config.toml` for controlled automation. Project
    * configuration and explicit `-c` overrides still apply. */
   ignoreUserConfig?: boolean;
-  /** Optional macOS Seatbelt profile used by artifact-role callers to deny
-   * direct vault access while their MCP relay remains reachable. */
-  sandboxProfilePath?: string;
 }
+
+/** Sandbox authority is deliberately exclusive: Codex may apply its own
+ * sandbox, or it may bypass sandboxing because the whole process tree is
+ * already externally enclosed, but it may never do both. */
+export type RunCodexOpts = RunCodexBaseOpts & (
+  | {
+      /** Sandbox policy passed via `-s`. */
+      sandboxMode?: CodexSandboxMode;
+      externallySandboxed?: false;
+      sandboxProfilePath?: never;
+    }
+  | {
+      /** Emit Codex's explicit external-sandbox bypass flag. */
+      externallySandboxed: true;
+      /** Required macOS Seatbelt profile that encloses the process tree. */
+      sandboxProfilePath: string;
+      sandboxMode?: never;
+    }
+);
 
 export interface CodexResult {
   /** Standard output collected from the child, or null on spawn error. */
@@ -270,6 +282,15 @@ export async function runCodex(
   prompt: string,
   opts: RunCodexOpts = {},
 ): Promise<CodexResult> {
+  if (opts.externallySandboxed && opts.sandboxMode) {
+    throw new Error('RunCodexOpts externallySandboxed and sandboxMode are mutually exclusive');
+  }
+  if (opts.externallySandboxed && !opts.sandboxProfilePath) {
+    throw new Error('RunCodexOpts externallySandboxed requires sandboxProfilePath');
+  }
+  if (!opts.externallySandboxed && opts.sandboxProfilePath) {
+    throw new Error('RunCodexOpts sandboxProfilePath requires externallySandboxed');
+  }
   const timeout = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const cwd = opts.cwd ?? PROJECT_ROOT;
 
@@ -281,6 +302,9 @@ export async function runCodex(
   // `codex exec resume` restores the original thread's sandbox policy and does
   // not accept `-s`; only initial calls may set it.
   if (opts.sandboxMode && !opts.resumeSessionId) args.push('-s', opts.sandboxMode);
+  if (opts.externallySandboxed) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  }
   if (opts.onEvent) args.push('--json');
   if (opts.ignoreUserConfig) args.push('--ignore-user-config');
   for (const override of opts.configOverrides ?? []) args.push('-c', override);

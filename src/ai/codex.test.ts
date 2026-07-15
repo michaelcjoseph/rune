@@ -473,14 +473,70 @@ describe('ai/codex', () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
 
       const { runCodex } = await import('./codex.js');
-      await runCodex('my prompt', { sandboxProfilePath: '/private/tmp/artifact.sb' });
+      await runCodex('my prompt', {
+        externallySandboxed: true,
+        sandboxProfilePath: '/private/tmp/artifact.sb',
+      });
 
       const [command, args] = spawnMock.mock.calls[0]! as [string, string[]];
       expect(command).toBe('/usr/bin/sandbox-exec');
       expect(args.slice(0, 3)).toEqual([
         '-f', '/private/tmp/artifact.sb', '/opt/homebrew/bin/codex',
       ]);
+      expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(args.at(-1)).toBe('my prompt');
+    });
+
+    it('bypasses Codex sandboxing when the process is already externally sandboxed', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', {
+        externallySandboxed: true,
+        sandboxProfilePath: '/private/tmp/artifact.sb',
+      });
+
+      const [, args] = spawnMock.mock.calls[0]! as [string, string[]];
+      expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(args).not.toContain('-s');
+    });
+
+    it('rejects internal and external sandbox modes before spawning', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { runCodex } = await import('./codex.js');
+
+      const conflicting = {
+        sandboxMode: 'workspace-write',
+        externallySandboxed: true,
+      } as unknown as Parameters<typeof runCodex>[1];
+      await expect(runCodex('my prompt', conflicting))
+        .rejects.toThrow(/externallySandboxed.*sandboxMode.*mutually exclusive/i);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects profile wrapping without external sandbox authority', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { runCodex } = await import('./codex.js');
+
+      const invalid = {
+        sandboxProfilePath: '/private/tmp/artifact.sb',
+      } as unknown as Parameters<typeof runCodex>[1];
+      await expect(runCodex('my prompt', invalid))
+        .rejects.toThrow(/sandboxProfilePath requires externallySandboxed/i);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects external sandbox authority without a profile path', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { runCodex } = await import('./codex.js');
+
+      const invalid = {
+        externallySandboxed: true,
+      } as unknown as Parameters<typeof runCodex>[1];
+      await expect(runCodex('my prompt', invalid))
+        .rejects.toThrow(/externallySandboxed requires sandboxProfilePath/i);
+      expect(spawnMock).not.toHaveBeenCalled();
     });
 
     it('prompt is the final positional arg to codex exec', async () => {

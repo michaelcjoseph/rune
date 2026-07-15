@@ -6,11 +6,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
-const spawnMock = vi.hoisted(() => vi.fn());
+const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  spawnSyncMock: vi.fn(() => ({ status: 0 })),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   spawn: spawnMock,
+  spawnSync: spawnSyncMock,
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -49,6 +53,10 @@ describe('artifact MCP credential omission', () => {
     roots.push(root);
     const vault = join(root, 'vault');
     mkdirSync(vault);
+    const codexHome = join(root, 'codex-home');
+    mkdirSync(codexHome);
+    writeFileSync(join(codexHome, 'auth.json'), 'fixture-auth-secret', { mode: 0o600 });
+    mkdirSync(join(root, 'worktree'));
     const products = join(root, 'products.json');
     writeFileSync(products, JSON.stringify({
       writing: { repoPath: join(root, 'repo'), artifactMcp: 'rune-kb-readonly' },
@@ -64,6 +72,7 @@ describe('artifact MCP credential omission', () => {
       projectRoot,
       vaultDir: vault,
       nodePath: process.execPath,
+      codexHome,
     });
     try {
       const brokerOptions = spawnMock.mock.calls[0]![2] as { env: Record<string, string> };
@@ -76,6 +85,7 @@ describe('artifact MCP credential omission', () => {
       expect(brokerOptions.env).not.toHaveProperty('TELEGRAM_USER_ID');
       expect(relayEnv).not.toHaveProperty('TELEGRAM_BOT_TOKEN');
       expect(relayEnv).not.toHaveProperty('TELEGRAM_USER_ID');
+      expect(JSON.stringify(config)).not.toContain('fixture-auth-secret');
     } finally {
       child.exitCode = 0;
       child.emit('exit', 0, null);

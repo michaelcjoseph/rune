@@ -118,7 +118,7 @@ export interface ExecutionAgentIO {
   buildEnv: (sandbox: SandboxSpec, opts: { productsConfigPath: string }) => NodeJS.ProcessEnv;
   buildArtifactMcp: (
     sandbox: SandboxSpec,
-    opts: { productsConfigPath: string },
+    opts: { productsConfigPath: string; executor?: 'claude' | 'codex' },
   ) => Promise<ArtifactMcpConfig | null> | ArtifactMcpConfig | null;
   onActivity?: (event: ExecutionAgentStreamEvent) => void;
 }
@@ -182,7 +182,10 @@ export async function runExecutionAgent(
     // configured-policy/setup failure uses the structured registration error.
     try {
       artifactMcp = opts.role === 'qa' || opts.role === 'coder'
-        ? await buildArtifactMcp(opts.sandbox, { productsConfigPath: opts.productsConfigPath })
+        ? await buildArtifactMcp(opts.sandbox, {
+            productsConfigPath: opts.productsConfigPath,
+            executor: opts.model.format,
+          })
         : null;
     } catch (err) {
       return {
@@ -272,6 +275,7 @@ async function defaultSpawnAgent(args: {
 }): Promise<SpawnAgentResult> {
   const credentialValues = productCredentialValues(args.env);
   const { format } = args.model;
+  const env = artifactEnvForExecutor(args.env, args.artifactMcp, format);
   if (format === 'codex') {
     // The codex CLI takes a single prompt — no system channel. The SOUL text
     // is prepended so the role charter still leads the context.
@@ -280,36 +284,57 @@ async function defaultSpawnAgent(args: {
       : args.prompt;
     let streamedOutput = '';
     let sawCodexEvent = false;
-    const result = await runCodex(codexPrompt, {
-      cwd: args.cwd,
-      model: args.model.alias,
-      sandboxMode: 'workspace-write',
-      timeoutMs: args.timeoutMs,
-      opLabel: `team:${args.role}`,
-      opKind: 'agent',
-      agentName: args.role,
-      product: args.product,
-      // Scoped credentials only — never the default process.env spread (see
-      // RunCodexOpts.env: sandboxed callers MUST pass a built env).
-      env: args.env,
-      ...(args.artifactMcp
-        ? {
-            configOverrides: args.artifactMcp.codexConfigOverrides,
-            ignoreUserConfig: true,
-            sandboxProfilePath: args.artifactMcp.sandboxProfilePath,
-          }
-        : {}),
-      onEvent: (event) => {
-        sawCodexEvent = true;
-        const line = codexEventToDisplay(event, credentialValues);
-        if (line === null) {
-          args.emit?.({ kind: 'activity' });
-          return;
+    const codexOpts = args.artifactMcp
+      ? {
+          cwd: args.cwd,
+          model: args.model.alias,
+          externallySandboxed: true as const,
+          sandboxProfilePath: args.artifactMcp.sandboxProfilePath,
+          timeoutMs: args.timeoutMs,
+          opLabel: `team:${args.role}`,
+          opKind: 'agent' as const,
+          agentName: args.role,
+          product: args.product,
+          // Scoped credentials only — never the default process.env spread (see
+          // RunCodexOpts.env: sandboxed callers MUST pass a built env).
+          env,
+          configOverrides: args.artifactMcp.codexConfigOverrides,
+          ignoreUserConfig: true,
+          onEvent: (event: Record<string, unknown>) => {
+            sawCodexEvent = true;
+            const line = codexEventToDisplay(event, credentialValues);
+            if (line === null) {
+              args.emit?.({ kind: 'activity' });
+              return;
+            }
+            streamedOutput += `${line}\n`;
+            args.emit?.({ kind: 'output', data: { line } });
+          },
         }
-        streamedOutput += `${line}\n`;
-        args.emit?.({ kind: 'output', data: { line } });
-      },
-    });
+      : {
+          cwd: args.cwd,
+          model: args.model.alias,
+          sandboxMode: 'workspace-write' as const,
+          timeoutMs: args.timeoutMs,
+          opLabel: `team:${args.role}`,
+          opKind: 'agent' as const,
+          agentName: args.role,
+          product: args.product,
+          // Scoped credentials only — never the default process.env spread (see
+          // RunCodexOpts.env: sandboxed callers MUST pass a built env).
+          env,
+          onEvent: (event: Record<string, unknown>) => {
+            sawCodexEvent = true;
+            const line = codexEventToDisplay(event, credentialValues);
+            if (line === null) {
+              args.emit?.({ kind: 'activity' });
+              return;
+            }
+            streamedOutput += `${line}\n`;
+            args.emit?.({ kind: 'output', data: { line } });
+          },
+        };
+    const result = await runCodex(codexPrompt, codexOpts);
     const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues));
     return {
       output,
@@ -318,6 +343,25 @@ async function defaultSpawnAgent(args: {
     };
   }
   return spawnClaudeAgent(args);
+}
+
+function artifactEnvForExecutor(
+  baseEnv: NodeJS.ProcessEnv,
+  artifactMcp: ArtifactMcpConfig | undefined,
+  format: RoleModelBinding['format'],
+): NodeJS.ProcessEnv {
+  if (artifactMcp === undefined) return baseEnv;
+  if (format === 'codex') {
+    return {
+      ...baseEnv,
+      ...artifactMcp.runtimeEnv,
+      ...(artifactMcp.codexEnv ?? {}),
+    };
+  }
+  return {
+    ...baseEnv,
+    ...artifactMcp.runtimeEnv,
+  };
 }
 
 function codexEventToDisplay(event: Record<string, unknown>, exactValues: readonly string[]): string | null {
@@ -391,10 +435,15 @@ function spawnClaudeAgent(args: {
       const commandArgs = args.artifactMcp
         ? ['-f', args.artifactMcp.sandboxProfilePath, CLAUDE_BIN, ...claudeArgs]
         : claudeArgs;
+      const env = artifactEnvForExecutor(args.env, args.artifactMcp, args.model.format);
       child = spawn(
         command,
         commandArgs,
-        { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], env: args.env },
+        {
+          cwd: args.cwd,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env,
+        },
       );
     } catch (err) {
       finish({ output: '', error: (err as Error).message });
