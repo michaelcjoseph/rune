@@ -170,4 +170,7 @@ _None yet._
 
 ## Next Task Handoff
 
-Start with: Extend FixAttemptState in src/jobs/fix-attempt-store.ts with the post-dispatch terminals 'fixed' | 'failed' | 'parked-on-human' (the pre-dispatch 'declined' already exists and is reused for guard policy-declines): add them to the FixAttemptState union, the STATES set, and parseFixAttempt validation (a terminal with runId stays valid; keep torn-line tolerance; do not require runId on the guard-decline path). No transition wiring yet. Update fix-attempt-store.test.ts for parse/round-trip of the new states.
+- tech-lead repaired test intent: src/jobs/fix-attempt-store.test.ts, src/jobs/fix-attempt-store.ts, src/server/backlog-actions.ts, src/server/fix-action-states.test.ts
+- Validation: dynamic-localhost suites could not run in the sandbox because `listen` returned `EPERM`; no protected ports were touched.
+
+Changed implementation: `src/jobs/fix-attempt-store.ts`, `src/server/backlog-actions.ts`.

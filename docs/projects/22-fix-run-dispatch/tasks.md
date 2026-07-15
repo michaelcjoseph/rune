@@ -15,7 +15,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Core state model
 
-- [ ] **fix-attempt-terminal-states** — Extend `FixAttemptState` in
+- [x] **fix-attempt-terminal-states** — Extend `FixAttemptState` in
   `src/jobs/fix-attempt-store.ts` with the post-dispatch terminals `fixed` \| `failed` \|
   `parked-on-human` (the pre-dispatch `declined` already exists and is reused for guard
   policy-declines): add them to the `FixAttemptState` union, the `STATES` set, and

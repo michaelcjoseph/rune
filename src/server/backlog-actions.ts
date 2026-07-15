@@ -104,6 +104,9 @@ export function computeFixAction(item: BacklogItem, attempt?: FixActionAttempt):
         ...(attempt.detail !== undefined ? { detail: attempt.detail } : {}),
       };
     case 'proceeding':
+    case 'fixed':
+    case 'failed':
+    case 'parked-on-human':
       return {
         kind: 'fix',
         state: 'proceeding',

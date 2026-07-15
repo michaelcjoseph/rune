@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FixAttemptState } from '../jobs/fix-attempt-store.js';
 
 async function loadActions(): Promise<any> {
   const mod = await import('./backlog-actions.js');
@@ -86,6 +87,24 @@ describe('computeFixAction - cockpit redesign Phase 3', () => {
     const { computeFixAction } = await loadActions();
     expect(computeFixAction(item(), attempt)).toEqual(expected);
   });
+
+  it.each(['fixed', 'failed', 'parked-on-human'] as const)(
+    'returns a safe non-throwing placeholder fix action for the post-dispatch %s terminal',
+    async (state) => {
+      const { computeFixAction } = await loadActions();
+      const action = computeFixAction(item(), {
+        attemptId: `${state}-attempt`,
+        state: state as FixAttemptState,
+        reason: `${state}-outcome`,
+        runId: `${state}-run`,
+      });
+      expect(action).toEqual({
+        kind: 'fix',
+        state: 'proceeding',
+        runId: `${state}-run`,
+      });
+    },
+  );
 
   it('renders an interrupted attempt as available again with the prior attempt detail', async () => {
     const { computeFixAction } = await loadActions();
