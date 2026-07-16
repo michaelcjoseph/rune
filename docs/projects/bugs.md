@@ -1,5 +1,55 @@
 ## Active
 
+- [ ] **A false quiet-run cancellation remains latched after the active task demonstrates progress, causing reviewed work to skip closeout and park as WIP.**
+
+  - **User impact.** A healthy orchestrated run can receive a false-positive quiet cancellation while an agent is working. The role workflow is allowed to finish, but Rune then treats the stale cancellation as irreversible. A task can pass QA, implementation, reviewer, type-check, and the full test suite, yet never receive its normal closeout commit or task checkbox. The run parks with a terminal-cleanup WIP commit and requires manual recovery.
+
+  - **Observed incident.** Run `e1cd6b62-860e-4b9e-a0e2-bea21c5ba784` for project `22-fix-run-dispatch` received a system cancellation during `fix-decline-terminal-mapping`. The task subsequently completed its workflow: QA contract tests, coder implementation, `npm run build`, the full suite, and reviewer/tech-lead passes. At the post-workflow cancellation boundary, it returned `cancelled` before closeout. Terminal cleanup preserved the uncommitted task work as `c1551d5` rather than creating the normal closeout commit.
+
+  - **Actual behavior.**
+
+    - The quiet-run backstop calls `cancelMutation(run.id, 'system')` after deciding a run is quiet.
+    - `startApply()` records cancellation as a boolean that remains true for the mutation’s lifetime; later output and activity update supervision timestamps but cannot revoke that flag.
+    - `project-orchestrator.ts` checks the flag immediately after `runTaskWorkflow()` and before `performCloseout()`.
+    - If a task returns `ready-for-closeout` after the system cancellation, Rune returns `{ kind: 'cancelled' }` instead of committing, ticking `tasks.md`, persisting the task record, and advancing.
+    - Terminal cleanup correctly fails closed by preserving the dirty worktree as a WIP commit, but it cannot recover the skipped closeout state.
+
+  - **Expected behavior.**
+
+    - A user-initiated cancellation remains terminal and is never overridden by task activity.
+    - A system cancellation from quiet-run or max-runtime supervision is provisional until Rune reaches a safe orchestration boundary.
+    - If the active task reaches `ready-for-closeout` after a system cancellation, that successful workflow result proves the run is not quiet. Rune must invalidate or supersede the stale system cancellation, execute normal closeout, and continue the run.
+    - A system cancellation remains effective when the active task does not reach `ready-for-closeout`, remains blocked, fails, or never returns. It must still stop genuinely wedged runs.
+    - The Cockpit/transcript should show that verified task progress superseded the system cancellation.
+
+  - **Root cause.** Cancellation provenance (`user` versus `system`) is captured, but cancellation state is modeled as a one-way boolean. The orchestrator can inspect the reason, but does not use it to distinguish an irrevocable operator stop from a revocable backstop request. The first cancellation check after task workflow runs before closeout, so the strongest available liveness evidence, a successful ready-for-closeout result, never gets a chance to supersede the stale quiet signal.
+
+  - **Reproduction steps.**
+
+    1. Start an orchestrated work run with a task whose role workflow is long enough for supervision to falsely classify it as quiet.
+    2. Trigger `cancelMutation(runId, 'system')` while `runTaskWorkflow()` is still executing.
+    3. Let the workflow subsequently return `ready-for-closeout` with passing reviewer evidence and successful required validation.
+    4. Observe the post-workflow cancellation check return `{ kind: 'cancelled', reason: 'system' }` before `performCloseout()`.
+    5. Observe no task closeout commit, no checked task, and no durable task record for that task.
+    6. Observe terminal cleanup park the run and create a WIP preservation commit for the otherwise reviewed work.
+
+  - **Fix guidance.**
+
+    1. Model a system cancellation as a cancellable backstop request, not a permanent mutation-level stop. Preserve the existing irrevocable behavior for `user` cancellation.
+    2. At the post-workflow boundary, when `evidence.outcome === 'ready-for-closeout'` and `cancelReason() === 'system'`, explicitly supersede the request before entering `performCloseout()`.
+    3. Clear or generation-scope the cancellation state so the later post-closeout and next-task checks do not immediately re-cancel the recovered run. Do not merely skip one check.
+    4. Preserve cancellation for non-ready evidence and for tasks that are still executing. The quiet/max-runtime backstops must continue to stop a run that remains unproductive.
+    5. Emit a durable, scrubbed activity/transcript event when a system cancellation is superseded by verified task progress. Never expose this behavior for user cancellation.
+
+  - **Acceptance criteria.**
+
+    - A simulated `system` cancellation during a task that subsequently returns `ready-for-closeout` results in normal closeout: required checks run, `context.md` and `tasks.md` updates persist, a closeout commit is created, and the task record is durable.
+    - The same run continues to select and execute the next task rather than parking or immediately re-cancelling at the next boundary.
+    - The run emits one observable event that the system cancellation was superseded by verified task progress.
+    - A system cancellation during a task that returns blocked, failed, cancelled, or never returns still terminates/parks through the existing safe path and does not run closeout.
+    - A user cancellation during a task that returns `ready-for-closeout` still stops the run before closeout; user intent always wins.
+    - Existing quiet-run and max-runtime watchdog behavior remains covered, including cancellation of genuinely silent/wedged work.
+    - Regression coverage reproduces the Project 22 sequence: system cancel arrives during role work, QA/coder/reviewer validation completes, and the task is normally committed rather than preserved only as terminal WIP.
 - [ ] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.**
   - **User impact.** A Codex-backed product chat can begin with full repository authority, then appear read-only or otherwise lose its expected write posture on a later turn. The same product chat works with Claude because Claude receives its permission-bypass flag on every invocation. An unresolved product chat also becomes read-only, even though the intended fallback is constrained write access rather than no write access.
 
@@ -147,7 +197,6 @@
     - The Assay Python scaffold task declares and runs `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and an installed-entry-point check in a provisioned environment.
     - A reviewer receives a deterministic complete diff (tracked and untracked selected-task changes) and fails closed when the supplied review artifact does not match it.
     - Regression tests cover empty validation commands, command-not-found, dependency-install failure, and narrowed reviewer-diff detection.
-
 - [ ] **Context closeout rejects legacy project headings instead of safely migrating or reporting the exact repair, leaving reviewed work dirty and uncommitted.**
   - **What is broken.** The same Assay run stopped with `context update rejected: missing-section` after entering closeout. Its `context.md` used `Canonical Interfaces`; Rune's canonical contract requires `Interfaces & Contracts`. No context change, checkbox tick, or commit was made, so the reviewed implementation remained dirty and unrecorded.
 
@@ -167,7 +216,6 @@
     - A non-migratable context error reports the project context file, exact missing heading, and proposed repair in the terminal reason and Cockpit surface.
     - Context failure cannot discard reviewed work: Rune creates a labeled WIP/recovery checkpoint before terminal preservation when no safe automatic repair exists.
     - Tests cover legacy migration, genuinely missing-section upsert, diagnostic specificity, and a closeout failure that preserves the implementation checkpoint.
-
 - [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
   - **What is broken.** Assay Task 1 required a new `uv`-managed Python package, but the assigned run had no `uv`, `pytest`, `ruff`, or `jsonschema`; outbound installation was blocked. The runtime provisions only the repository worktree and Node dependency link. It does not declare a Python runtime, package-manager availability, offline cache, or dependency-install authorization before the QA/coder workflow starts. The reported `uv.lock` therefore has no demonstrated provenance or resolvability.
 
@@ -207,7 +255,6 @@
     - The Cockpit shows the gate’s unmet runbook prerequisite, operator, expected evidence, and rollback document.
     - Planner → artifact → tasks → selected task → workflow preserves task IDs, dependencies, and manual-gate fields without parsing prose.
     - Tests cover valid pairs, missing runbooks, duplicate IDs, cyclic dependencies, incomplete prerequisites, restart recovery, and human-readable Markdown rendering.
-
 - [ ] **Security-review requirements in plans are informational instead of an enforceable product-team workflow gate.**
   - **What is broken.** Rune has no `security` product-team role in `RoleName`, no `agents/security/` charter, no model-policy binding, and no workflow stage that runs a security review. A task can name “security” in its Roles line or carry a `_(security review)_` marker without the runtime invoking a security reviewer.
   - **User impact.** Security-sensitive work can be planned and presented as security-reviewed while receiving only the ordinary reviewer pass.
@@ -228,7 +275,6 @@
     - A security objection blocks closeout with a durable, actionable finding.
     - Security flags survive planner output, Markdown rendering, selected-task reconstruction, restart recovery, and workflow dispatch.
     - Tests cover loader/model-policy resolution, flag round-trips, workflow ordering, blocking findings, non-invocation for unflagged tasks, and malformed/unknown flag handling.
-
 - [ ] **The planning process does not systematically interrogate existing mechanisms, runner coverage, manual ownership, or platform feasibility before producing a dispatchable plan.**
   - **What is broken.** PM, tech-lead, and critique prompts require a coherent plan, but they do not force an inventory of existing policies/configuration/deferrals, all runtime integration paths, manual operator decisions, or platform-capability risks. The result can be a polished plan that duplicates existing mechanisms, misses a legacy runner, creates impossible environment-gated work, or leaves a manual task with no operator handoff.
   - **User impact.** Critical planning gaps are found only after detailed external review or during execution, when work has already been dispatched.
