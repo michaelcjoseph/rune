@@ -59,6 +59,18 @@ describe('planMaxRuntimeKills — hard ceiling (P2.7)', () => {
     expect(planMaxRuntimeKills([r], MAX_RUNTIME_MS, NOW).toKill).toEqual([]);
   });
 
+  it('uses a renewed watchdog epoch after verified progress supersedes a prior ceiling request', () => {
+    const r = run({
+      startedAt: iso(NOW - 10 * 60 * 60 * 1000),
+      maxRuntimeEpochAt: iso(NOW - 30 * 60 * 1000),
+    });
+    expect(planMaxRuntimeKills([r], MAX_RUNTIME_MS, NOW).toKill).toEqual([]);
+
+    const later = NOW + MAX_RUNTIME_MS + 1;
+    expect(planMaxRuntimeKills([r], MAX_RUNTIME_MS, later).toKill.map((x) => x.id))
+      .toEqual(['mut-mr-1']);
+  });
+
   it('does NOT kill a non-running run even if it started long ago', () => {
     for (const status of ['completed', 'failed', 'blocked-on-human', 'unknown'] as const) {
       const r = run({ status, startedAt: iso(NOW - 5 * 60 * 60 * 1000) });

@@ -374,7 +374,7 @@ describe('project-orchestrator — cancellation boundaries', () => {
     expect(h.state.finalizeCalled).toBe(false);
   });
 
-  it('preserves system cancel reason at orchestration boundaries', async () => {
+  it('preserves an unspecified non-revocable system cancel at orchestration boundaries', async () => {
     let cancelled = false;
     const h = makeHarness({
       cancel: () => cancelled,
@@ -395,6 +395,101 @@ describe('project-orchestrator — cancellation boundaries', () => {
     expect(h.state.commits).toEqual([]);
     expect(h.state.finalizeCalled).toBe(false);
   });
+
+  it('supersedes quiet cancellation after verified workflow progress, closes out, checkpoints, and advances', async () => {
+    let cancelled = false;
+    let source: 'quiet-run' | null = null;
+    let workflowCalls = 0;
+    const supersede = vi.fn(() => {
+      if (!cancelled || source !== 'quiet-run') return null;
+      cancelled = false;
+      source = null;
+      return 'quiet-run' as const;
+    });
+    const records: TaskRunRecord[] = [];
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => cancelled ? 'system' : null,
+      cancelSource: () => source,
+      supersedeSystemCancellation: supersede,
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        if (workflowCalls === 1) {
+          cancelled = true;
+          source = 'quiet-run';
+        }
+        return readyEvidence(task);
+      },
+      appendTaskRunRecord: async (record) => {
+        records.push(record);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(h.state.commits).toEqual([
+      'sha-build-the-streak-core',
+      'sha-render-the-streak-card',
+    ]);
+    expect(h.state.tasksMd).toContain('- [x] Build the streak core');
+    expect(h.state.tasksMd).toContain('- [x] Render the streak card');
+    expect(records.map((record) => record.taskId)).toEqual([
+      'build-the-streak-core',
+      'render-the-streak-card',
+    ]);
+    expect(supersede).toHaveBeenCalledOnce();
+    expect(eventsByName(h.state.events, 'system-cancel-superseded')).toEqual([
+      expect.objectContaining({
+        kind: 'output',
+        data: expect.objectContaining({
+          cancellationSource: 'quiet-run',
+          taskId: 'build-the-streak-core',
+        }),
+      }),
+    ]);
+    expect(eventsByName(h.state.events, 'task-selected').map((event) => eventData(event)?.['taskText']))
+      .toEqual(['Build the streak core', 'Render the streak card']);
+  });
+
+  it.each(['blocked', 'failed', 'cancelled'] as const)(
+    'honors revocable system cancellation when workflow evidence is %s',
+    async (outcome) => {
+      let cancelled = false;
+      const supersede = vi.fn(() => 'quiet-run' as const);
+      const h = makeHarness({
+        cancel: () => cancelled,
+        cancelReason: () => cancelled ? 'system' : null,
+        cancelSource: () => cancelled ? 'quiet-run' : null,
+        supersedeSystemCancellation: supersede,
+        runTaskWorkflow: async (task) => {
+          cancelled = true;
+          return {
+            taskId: task.id,
+            outcome,
+            rolesInvoked: ['qa'],
+            findingsLedger: [],
+            loopExitReason: 'operational',
+            objectionOpen: false,
+            handoffNotes: [],
+            ...(outcome === 'blocked' ? { blockedReason: 'blocked' } : {}),
+            ...(outcome === 'failed' ? { failureReason: 'failed' } : {}),
+          } as TaskEvidence;
+        },
+      });
+
+      const res = await runProjectOrchestration(h.deps);
+
+      expect(res).toMatchObject({
+        kind: 'cancelled',
+        reason: 'system',
+        task: { id: 'build-the-streak-core' },
+      });
+      expect(supersede).not.toHaveBeenCalled();
+      expect(h.state.commits).toEqual([]);
+      expect(h.state.tasksMd).toBe(TWO_TASKS);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -94,7 +94,7 @@ describe('parkInFlightOrchestratedRuns', () => {
     const result = await parkInFlightOrchestratedRuns(deps);
 
     expect(result).toEqual({ parked: ['mut-orch-shutdown'], resumable: [], skipped: [] });
-    expect(handle.cancel).toHaveBeenCalledWith('system');
+    expect(handle.cancel).toHaveBeenCalledWith('system', 'shutdown');
 
     // WIP commit sequence on the dirty worktree, all cwd'd to the worktree.
     const gitCalls = deps.runGit.mock.calls.map((c: unknown[]) => (c[0] as string[]).join(' '));

@@ -115,7 +115,16 @@ import {
   type WorkOutcome,
   type WorkProductFacts,
 } from './work-run-classify.js';
-import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason, RunHandle } from '../transport/mutations.js';
+import type {
+  MutationApplier,
+  MutationDescriptor,
+  MutationEvent,
+  ApplyContext,
+  CancelReason,
+  MutationCancellationSource,
+  RevocableMutationCancellationSource,
+  RunHandle,
+} from '../transport/mutations.js';
 import { buildRunAgentsEventFromTaskRecords } from '../transport/notification-bus.js';
 import {
   markProjectDoneOnBranch,
@@ -398,7 +407,7 @@ export async function requestOrchestratedRunRecovery(
       return { kind: 'not-active', reason: 'run settled while recovery eligibility was being verified' };
     }
 
-    handle.cancel('system');
+    handle.cancel('system', 'recovery');
     await handle.settled;
 
     // The old invocation may have completed a task and advanced its durable
@@ -492,7 +501,7 @@ export async function parkInFlightOrchestratedRuns(
     const descriptor = handle.descriptor;
     if (descriptor.kind !== 'orchestrated-work' || descriptor.status !== 'running') continue;
     try {
-      handle.cancel('system');
+      handle.cancel('system', 'shutdown');
       const preflight = await deps.preflightRecovery(descriptor as MutationDescriptor<OrchestratedWorkPayload>);
       if (preflight.kind === 'recoverable') {
         result.resumable.push(descriptor.id);
@@ -833,6 +842,8 @@ function buildOrchestrationDeps(args: {
   emit?: (event: OrchestrationActivityEvent) => void;
   cancel?: () => boolean;
   cancelReason?: () => CancelReason | null;
+  cancelSource?: () => MutationCancellationSource | null;
+  supersedeSystemCancellation?: () => RevocableMutationCancellationSource | null;
   publishAgents?: (records: TaskRunRecord[]) => void;
   finalize: FinalizerAdapter;
 }): OrchestrationDeps {
@@ -860,6 +871,10 @@ function buildOrchestrationDeps(args: {
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
     ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
     ...(args.cancelReason !== undefined ? { cancelReason: args.cancelReason } : {}),
+    ...(args.cancelSource !== undefined ? { cancelSource: args.cancelSource } : {}),
+    ...(args.supersedeSystemCancellation !== undefined
+      ? { supersedeSystemCancellation: args.supersedeSystemCancellation }
+      : {}),
     appendTaskRunRecord: async (record) => {
       appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record);
       const records = readOrchestratedTaskRunRecords(args.workRunsDir, descriptor.id);
@@ -1678,6 +1693,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         cancel: ctx.cancel,
         cancelReason: ctx.cancelReason,
+        cancelSource: ctx.cancelSource,
+        supersedeSystemCancellation: ctx.supersedeSystemCancellation,
         publishAgents: (records) => {
           ctx.bus.publish(buildRunAgentsEventFromTaskRecords({
             runId: descriptor.id,

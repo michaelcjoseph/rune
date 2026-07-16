@@ -168,7 +168,7 @@ export function startStallCheck(bus: NotificationBus): void {
         try {
           // 'system': a backstop reap, NOT a user cancel — so the classifier
           // reads the run on its work product, not as a cancel the user made.
-          const result = cancelMutation(run.id, 'system');
+          const result = cancelMutation(run.id, 'system', 'quiet-run');
           log.info('quiet→cancel escalation', {
             id: run.id,
             product: run.product,
@@ -184,13 +184,14 @@ export function startStallCheck(bus: NotificationBus): void {
       // Hard max-runtime ceiling (project 15, P2.7): group-kill + finalize ANY
       // running run past WORK_RUN_MAX_RUNTIME_MS, regardless of apparent liveness
       // — a fresh keep-alive ticker cannot defeat it (planMaxRuntimeKills keys on
-      // startedAt). Runs over the full snapshot (the ceiling is the backstop for
-      // every run, including stalled/quiet ones); cancelMutation is idempotent,
-      // so a run also selected above is harmlessly re-cancelled. Per-run isolated.
+      // maxRuntimeEpochAt ?? startedAt). Runs over the full snapshot (the ceiling
+      // is the backstop for every run, including stalled/quiet ones);
+      // cancelMutation is idempotent, so a run also selected above is harmlessly
+      // re-cancelled. Per-run isolated.
       planMaxRuntimeKills(runs, config.WORK_RUN_MAX_RUNTIME_MS, now).toKill.forEach((run) => {
         try {
           // 'system': a backstop reap, NOT a user cancel (see quiet→cancel above).
-          const result = cancelMutation(run.id, 'system');
+          const result = cancelMutation(run.id, 'system', 'max-runtime');
           log.info('max-runtime ceiling kill', {
             id: run.id,
             product: run.product,

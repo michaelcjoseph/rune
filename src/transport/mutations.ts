@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { appendMutationLine } from '../jobs/mutations-log.js';
-import { upsertRun } from '../jobs/supervision-store.js';
+import { recordRunActivity, upsertRun } from '../jobs/supervision-store.js';
 import { applyOutcomeToDescriptor, type WorkOutcome, type WorkProductFacts } from '../jobs/work-run-classify.js';
 import { type SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
@@ -342,6 +342,29 @@ export interface MutationEvent {
  * branch must read branch-complete, never as a cancel the user never made).
  */
 export type CancelReason = 'user' | 'system';
+export type MutationCancellationSource =
+  | 'user'
+  | 'quiet-run'
+  | 'max-runtime'
+  | 'shutdown'
+  | 'recovery';
+export type RevocableMutationCancellationSource = Extract<
+  MutationCancellationSource,
+  'quiet-run' | 'max-runtime'
+>;
+
+export function isRevocableMutationCancellationSource(
+  source: MutationCancellationSource | null,
+): source is RevocableMutationCancellationSource {
+  return source === 'quiet-run' || source === 'max-runtime';
+}
+
+type ActiveMutationCancellation =
+  | { reason: 'user'; source: 'user' }
+  | {
+      reason: 'system';
+      source: Exclude<MutationCancellationSource, 'user'> | null;
+    };
 
 export interface ApplyContext {
   bus: NotificationBus;
@@ -349,15 +372,23 @@ export interface ApplyContext {
   /** Why the run was cancelled, once it has been. `null` until a cancel fires.
    *  Optional for back-compat with appliers/tests that don't consult it. */
   cancelReason?: () => CancelReason | null;
+  /** Specific active cancellation source. A null system source is a legacy or
+   * unspecified system request and is intentionally non-revocable. */
+  cancelSource?: () => MutationCancellationSource | null;
+  /** Atomically clear the active quiet/max-runtime request. Returns the source
+   * cleared, or null when the request is absent or non-revocable. */
+  supersedeSystemCancellation?: () => RevocableMutationCancellationSource | null;
   /** Subscribe to cancellation requests for cooperative appliers that need to
    *  wake a wait loop. Returns an unsubscribe callback. Optional for
    *  back-compat with older applier fixtures. */
-  onCancel?: (listener: (reason: CancelReason) => void) => () => void;
+  onCancel?: (
+    listener: (reason: CancelReason, source: MutationCancellationSource | null) => void,
+  ) => () => void;
 }
 
 export interface RunHandle {
   descriptor: MutationDescriptor;
-  cancel: (reason?: CancelReason) => void;
+  cancel: (reason?: CancelReason, source?: MutationCancellationSource) => void;
   /** Resolves after the applier has fully unwound, including its finally block. */
   settled: Promise<void>;
 }
@@ -565,18 +596,19 @@ export async function createMutation(
   return { ok: true, descriptor };
 }
 
-/** Cancel a running mutation by calling its cancel hook. `reason` records
- *  WHO initiated it (default `user`) so the classifier can tell an explicit
- *  human cancel from a Rune backstop reap — see {@link CancelReason}. */
+/** Cancel a running mutation by calling its cancel hook. `reason` preserves the
+ * terminal `user | system` classification; `source` identifies the actuator so
+ * orchestrated work can revoke only quiet/max-runtime watchdog requests. */
 export function cancelMutation(
   id: string,
   reason: CancelReason = 'user',
+  source?: MutationCancellationSource,
 ): { ok: true } | { ok: false; reason: string } {
   const handle = activeRuns.get(id);
   if (!handle) {
     return { ok: false, reason: 'not found or already terminal' };
   }
-  handle.cancel(reason);
+  handle.cancel(reason, source);
   return { ok: true };
 }
 
@@ -584,21 +616,47 @@ async function startApply(
   applier: MutationApplier<Record<string, unknown>>,
   descriptor: MutationDescriptor,
 ): Promise<void> {
-  let cancelled = false;
-  let cancelReason: CancelReason | null = null;
-  const cancelListeners = new Set<(reason: CancelReason) => void>();
+  let cancellation: ActiveMutationCancellation | null = null;
+  const cancelListeners = new Set<
+    (reason: CancelReason, source: MutationCancellationSource | null) => void
+  >();
 
   let resolveSettled!: () => void;
   const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
   const handle: RunHandle = {
     descriptor,
     settled,
-    cancel: (reason: CancelReason = 'user') => {
-      cancelled = true;
-      cancelReason = reason;
+    cancel: (reason: CancelReason = 'user', source?: MutationCancellationSource) => {
+      const requested: ActiveMutationCancellation =
+        reason === 'user'
+          ? { reason: 'user', source: 'user' }
+          : {
+              reason: 'system',
+              source: source === 'user' ? null : source ?? null,
+            };
+      const activeIsUser = cancellation?.reason === 'user';
+      const activeIsNonRevocableSystem =
+        cancellation?.reason === 'system' &&
+        !isRevocableMutationCancellationSource(cancellation.source);
+      const requestedIsRevocableSystem =
+        requested.reason === 'system' &&
+        isRevocableMutationCancellationSource(requested.source);
+      const wouldDowngradeMaxRuntime =
+        cancellation?.reason === 'system' &&
+        cancellation.source === 'max-runtime' &&
+        requested.reason === 'system' &&
+        requested.source === 'quiet-run';
+
+      // Explicit user intent always wins. Once an irrevocable request is
+      // active, a later watchdog request cannot downgrade it to revocable.
+      if (activeIsUser && requested.reason !== 'user') return;
+      if (activeIsNonRevocableSystem && requestedIsRevocableSystem) return;
+      if (wouldDowngradeMaxRuntime) return;
+
+      cancellation = requested;
       for (const listener of [...cancelListeners]) {
         try {
-          listener(reason);
+          listener(requested.reason, requested.source);
         } catch (err) {
           log.warn('cancel listener failed', {
             id: descriptor.id,
@@ -659,8 +717,47 @@ async function startApply(
   // Use the real bus if available, else a no-op so appliers always receive a valid object
   const ctx: ApplyContext = {
     bus: _bus ?? noopBus,
-    cancel: () => cancelled,
-    cancelReason: () => cancelReason,
+    cancel: () => cancellation !== null,
+    cancelReason: () => cancellation?.reason ?? null,
+    cancelSource: () => cancellation?.source ?? null,
+    supersedeSystemCancellation: () => {
+      if (
+        lifecycleSuppressed() ||
+        cancellation?.reason !== 'system' ||
+        !isRevocableMutationCancellationSource(cancellation.source)
+      ) {
+        return null;
+      }
+      const source = cancellation.source;
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      if (supervise) {
+        try {
+          recordRunActivity(
+            buildSupervisedRun(
+              descriptor,
+              'running',
+              nowIso,
+              currentChildAliveAt,
+              nowIso,
+            ),
+            config.SUPERVISED_RUNS_FILE,
+            { renewMaxRuntimeEpoch: source === 'max-runtime' },
+          );
+        } catch (err) {
+          log.warn('system cancellation supersession persistence failed', {
+            id: descriptor.id,
+            source,
+            error: (err as Error).message,
+          });
+          return null;
+        }
+      }
+      cancellation = null;
+      currentOutputAt = nowIso;
+      lastHeartbeatUpsertAt = now;
+      return source;
+    },
     onCancel: (listener) => {
       cancelListeners.add(listener);
       return () => {
@@ -711,9 +808,23 @@ async function startApply(
           const nowIso = new Date(now).toISOString();
           // An output/activity event is a work signal — advance lastOutputAt too.
           currentOutputAt = nowIso;
-          safeUpsertRun(
-            buildSupervisedRun(descriptor, 'running', nowIso, currentChildAliveAt, currentOutputAt),
-          );
+          try {
+            recordRunActivity(
+              buildSupervisedRun(
+                descriptor,
+                'running',
+                nowIso,
+                currentChildAliveAt,
+                currentOutputAt,
+              ),
+              config.SUPERVISED_RUNS_FILE,
+            );
+          } catch (err) {
+            log.warn('supervision-store recordRunActivity failed', {
+              id: descriptor.id,
+              error: (err as Error).message,
+            });
+          }
           lastHeartbeatUpsertAt = now;
         }
       }

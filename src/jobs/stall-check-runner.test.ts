@@ -173,6 +173,32 @@ describe('startStallCheck — supervised-store source of truth', () => {
     fireTick();
 
     expect(mutations.activeRuns.size).toBe(0);
-    expect(mutations.cancelMutation).toHaveBeenCalledWith('persisted-quiet-cancel-0001', 'system');
+    expect(mutations.cancelMutation).toHaveBeenCalledWith(
+      'persisted-quiet-cancel-0001',
+      'system',
+      'quiet-run',
+    );
+  });
+
+  it('tags max-runtime ceiling requests with their revocable source', () => {
+    const { fireTick } = installIntervalCapture();
+    const bus = collectBusEvents();
+    store.readAllRuns.mockReturnValue([
+      run('persisted-max-runtime-0001', {
+        startedAt: new Date(NOW - 25 * 60 * 60_000).toISOString(),
+        lastHeartbeatAt: new Date(NOW).toISOString(),
+        lastChildAliveAt: new Date(NOW).toISOString(),
+        lastOutputAt: new Date(NOW).toISOString(),
+      }),
+    ]);
+
+    startStallCheck(bus as unknown as NotificationBus);
+    fireTick();
+
+    expect(mutations.cancelMutation).toHaveBeenCalledWith(
+      'persisted-max-runtime-0001',
+      'system',
+      'max-runtime',
+    );
   });
 });

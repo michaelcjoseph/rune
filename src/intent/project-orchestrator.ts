@@ -52,7 +52,13 @@ import {
   type RoleCancellation,
   type TaskEvidence,
 } from './team-task-workflow.js';
-import type { CancelReason } from '../transport/mutations.js';
+import {
+  isRevocableMutationCancellationSource,
+  type CancelReason,
+  type MutationCancellationSource,
+  type RevocableMutationCancellationSource,
+} from '../transport/mutations.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output' | 'progress';
@@ -125,6 +131,8 @@ export interface OrchestrationDeps {
    *  cancellation; default behavior is no cancellation. */
   cancel?: () => boolean;
   cancelReason?: () => CancelReason | null;
+  cancelSource?: () => MutationCancellationSource | null;
+  supersedeSystemCancellation?: () => RevocableMutationCancellationSource | null;
   /** Optional durable run-record sink used by restart reconstruction. */
   appendTaskRunRecord?: (record: TaskRunRecord) => Promise<void>;
   /** Optional durable cursor sink used to resume a still-running mutation. */
@@ -240,7 +248,7 @@ export async function runProjectOrchestration(
     // Sentinel only for definite assignment — every loop path assigns or returns.
     let closeout: CloseoutResult = { kind: 'blocked', reason: 'closeout not attempted' };
     for (let attempt = 1; attempt <= 1 + CLOSEOUT_REPAIR_CAP; attempt++) {
-      const cancelledAfterWorkflow = cancellationResult(deps, task);
+      const cancelledAfterWorkflow = cancellationAfterWorkflow(deps, task, evidence);
       if (cancelledAfterWorkflow) return cancelledAfterWorkflow;
 
       if (evidence.outcome !== 'ready-for-closeout') {
@@ -368,6 +376,34 @@ function cancellationResult(
     reason: deps.cancelReason?.() ?? 'user',
     ...(task !== undefined ? { task } : {}),
   };
+}
+
+function cancellationAfterWorkflow(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  evidence: TaskEvidence,
+): Extract<OrchestrationResult, { kind: 'cancelled' }> | null {
+  const cancellation = cancellationResult(deps, task);
+  if (!cancellation) return null;
+  if (
+    cancellation.reason !== 'system' ||
+    evidence.outcome !== 'ready-for-closeout'
+  ) {
+    return cancellation;
+  }
+
+  const source = deps.cancelSource?.() ?? null;
+  if (!isRevocableMutationCancellationSource(source)) return cancellation;
+  const superseded = deps.supersedeSystemCancellation?.() ?? null;
+  if (superseded === null) {
+    // The request may have become user/shutdown/recovery cancellation between
+    // inspection and the atomic clear. Re-read current state so stronger intent
+    // is honored; if it disappeared, proceed normally.
+    return cancellationResult(deps, task);
+  }
+
+  emitSystemCancellationSuperseded(deps, task, superseded);
+  return null;
 }
 
 /** Run one task through the workflow. The workflow owns the per-task
@@ -603,6 +639,24 @@ function emitCloseoutStart(deps: OrchestrationDeps, task: SelectedTask): void {
       event: 'closeout-start',
       taskId: task.id,
       line: `starting closeout for ${task.text}`,
+    },
+  });
+}
+
+function emitSystemCancellationSuperseded(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  source: RevocableMutationCancellationSource,
+): void {
+  const taskText = scrubAbsolutePaths(task.text);
+  deps.emit?.({
+    kind: 'output',
+    data: {
+      event: 'system-cancel-superseded',
+      cancellationSource: source,
+      taskId: task.id,
+      taskText,
+      line: `verified task progress superseded ${source} cancellation for ${taskText}`,
     },
   });
 }

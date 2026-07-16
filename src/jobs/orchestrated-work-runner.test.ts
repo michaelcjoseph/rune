@@ -15,6 +15,7 @@ import type { FinalizerHandoff } from '../intent/finalizer-handoff.js';
 
 const mockAppendMutationLine = vi.hoisted(() => vi.fn());
 const mockUpsertRun = vi.hoisted(() => vi.fn());
+const mockRecordRunActivity = vi.hoisted(() => vi.fn());
 const mockCreateTranscriptSink = vi.hoisted(() => vi.fn());
 const mockRunFinalizer = vi.hoisted(() =>
   vi.fn(async (
@@ -75,6 +76,10 @@ vi.mock('./mutations-log.js', () => ({
 
 vi.mock('./supervision-store.js', () => ({
   upsertRun: mockUpsertRun,
+  recordRunActivity: (...args: unknown[]) => {
+    mockRecordRunActivity(...args);
+    mockUpsertRun(args[0]);
+  },
 }));
 
 vi.mock('./work-run-transcript.js', async (importOriginal) => {
@@ -3848,6 +3853,91 @@ describe('orchestratedWorkApplier', () => {
         expect(destroyed).toBe(true);
       } finally {
         finishRun?.({ kind: 'cancelled', reason: 'system' });
+      }
+    });
+
+    it('threads cancellation supersession through the runner and publishes it to transcript and live feed', async () => {
+      const projectSlug = '14-product-team-agents';
+      const fake = makeFakeTranscriptSink();
+      const published: Array<Record<string, unknown>> = [];
+      let orchestrationStarted = false;
+      let inspectCancellation!: () => void;
+      const cancellationRequested = new Promise<void>((resolve) => {
+        inspectCancellation = resolve;
+      });
+      mockCreateTranscriptSink.mockReturnValue(fake.sink);
+      setMutationBus({
+        publish: vi.fn((event: Record<string, unknown>) => {
+          published.push(event);
+        }),
+      } as never);
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree(projectSlug);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => {
+          orchestrationStarted = true;
+          await cancellationRequested;
+          expect(deps.cancel?.()).toBe(true);
+          expect(deps.cancelReason?.()).toBe('system');
+          expect(deps.cancelSource?.()).toBe('quiet-run');
+          expect(deps.supersedeSystemCancellation?.()).toBe('quiet-run');
+          deps.emit?.({
+            kind: 'output',
+            data: {
+              event: 'system-cancel-superseded',
+              cancellationSource: 'quiet-run',
+              line: 'verified task progress superseded quiet-run cancellation for task one',
+            },
+          });
+          return { kind: 'finalized', outcome: 'branch-complete' };
+        },
+      });
+
+      try {
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'rune' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        const runId = createdMutation.descriptor.id;
+        await waitForCondition(() => created && orchestrationStarted && activeRuns.has(runId));
+
+        expect(cancelMutation(runId, 'system', 'quiet-run')).toEqual({ ok: true });
+        inspectCancellation();
+        await waitForCondition(() => !activeRuns.has(runId));
+
+        const supersessionTranscriptEvents = fake.appended.filter((event) =>
+          ((event as MutationEvent).data as Record<string, unknown> | undefined)?.['event'] ===
+          'system-cancel-superseded',
+        );
+        expect(supersessionTranscriptEvents).toHaveLength(1);
+        expect(published).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'mutation-event',
+            mutationId: runId,
+            subKind: 'output',
+            data: expect.objectContaining({ event: 'system-cancel-superseded' }),
+          }),
+          expect.objectContaining({
+            kind: 'run-event',
+            runId,
+            subKind: 'log',
+            lines: ['verified task progress superseded quiet-run cancellation for task one'],
+          }),
+        ]));
+        expect(mockRecordRunActivity).toHaveBeenCalled();
+      } finally {
+        inspectCancellation();
+        setMutationBus(null);
       }
     });
 

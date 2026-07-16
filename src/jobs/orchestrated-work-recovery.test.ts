@@ -266,7 +266,7 @@ describe('orchestrated-work active recovery request', () => {
     const result = await requestOrchestratedRunRecovery(mutation.id, deps);
 
     expect(deps.preflightRecovery).toHaveBeenCalledWith(mutation);
-    expect(cancel).toHaveBeenCalledWith('system');
+    expect(cancel).toHaveBeenCalledWith('system', 'recovery');
     expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
       mutation,
       expect.objectContaining({
@@ -444,7 +444,7 @@ describe('orchestrated-work active recovery request', () => {
 
     const result = await requestOrchestratedRunRecovery(mutation.id, deps);
 
-    expect(cancel).toHaveBeenCalledWith('system');
+    expect(cancel).toHaveBeenCalledWith('system', 'recovery');
     expect(deps.redispatchOrchestratedMutation).not.toHaveBeenCalled();
     expect(releaseHandoff).toHaveBeenCalledWith(mutation.id);
     expect(result).toEqual({ kind: 'error', reason: 'teardown failed' });

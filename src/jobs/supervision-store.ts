@@ -165,6 +165,12 @@ function normalizeSupervisedRun(value: unknown): SupervisedRun | null {
     typeof v['lastHeartbeatAt'] === 'string'
   )) return null;
   const run = { ...v } as unknown as SupervisedRun;
+  if (
+    v['maxRuntimeEpochAt'] !== undefined &&
+    typeof v['maxRuntimeEpochAt'] !== 'string'
+  ) {
+    delete run.maxRuntimeEpochAt;
+  }
   if (v['target'] !== undefined) {
     const target = v['target'];
     if (
@@ -277,19 +283,16 @@ export function writeAllRuns(runs: SupervisedRun[], filePath: string): void {
  * the lifecycle fields — never `quietNudgedAt`. A replace-by-id would clobber
  * that once-only quiet-nudge marker on every 30s heartbeat, so the quiet nudge
  * re-fired forever (the d0679453 incident, defect 3). Merging preserves any
- * persisted field the rebuild doesn't know about. The supervision fields are
- * all monotonic-forward (status advances, timestamps advance, the nudge marker
- * is set once and never cleared), so a forward-merge is the correct semantic —
- * no field in this store is ever legitimately cleared by an upsert.
+ * persisted field the rebuild doesn't know about. Most supervision fields are
+ * monotonic-forward, so a forward-merge is the correct default semantic.
  *
  * `buildSupervisedRun` omits absent optional fields entirely (it never writes
  * `key: undefined`), so the spread preserves the stored value rather than
  * overwriting it with `undefined`.
  *
- * Implication: a caller that ever needs to CLEAR a field (set it back to
- * `undefined`/absent) cannot do so through `upsertRun` — the merge would
- * preserve the stored value. Such a caller must use `writeAllRuns` directly.
- * No field in this store needs that today.
+ * A caller that needs to CLEAR a field cannot do so through `upsertRun`.
+ * `recordRunActivity` owns the deliberate exception: verified output clears
+ * `quietNudgedAt` so a later quiet period can begin a new watchdog cycle.
  */
 export function upsertRun(run: SupervisedRun, filePath: string): void {
   const existing = readAllRuns(filePath);
@@ -297,6 +300,34 @@ export function upsertRun(run: SupervisedRun, filePath: string): void {
   const next = idx === -1
     ? [...existing, run]
     : existing.map((r, i) => (i === idx ? { ...r, ...run } : r));
+  writeAllRuns(next, filePath);
+}
+
+/**
+ * Persist verified run activity as one read-modify-write transaction.
+ *
+ * Unlike {@link upsertRun}, this operation intentionally clears
+ * `quietNudgedAt`: output after a quiet nudge proves that specific quiet cycle
+ * ended, so a later genuinely quiet period can start a fresh nudge/cancel
+ * cycle. A superseded max-runtime request may additionally renew the watchdog
+ * epoch used by the hard-ceiling predicate.
+ */
+export function recordRunActivity(
+  run: SupervisedRun,
+  filePath: string,
+  options: { renewMaxRuntimeEpoch?: boolean } = {},
+): void {
+  const existing = readAllRuns(filePath);
+  const idx = existing.findIndex((r) => r.id === run.id);
+  const current = idx === -1 ? undefined : existing[idx];
+  const updated = { ...(current ?? {}), ...run } as SupervisedRun;
+  delete updated.quietNudgedAt;
+  if (options.renewMaxRuntimeEpoch === true) {
+    updated.maxRuntimeEpochAt = run.lastOutputAt ?? run.lastHeartbeatAt;
+  }
+  const next = idx === -1
+    ? [...existing, updated]
+    : existing.map((r, i) => (i === idx ? updated : r));
   writeAllRuns(next, filePath);
 }
 

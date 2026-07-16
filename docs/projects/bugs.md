@@ -1,55 +1,5 @@
 ## Active
 
-- [ ] **A false quiet-run cancellation remains latched after the active task demonstrates progress, causing reviewed work to skip closeout and park as WIP.**
-
-  - **User impact.** A healthy orchestrated run can receive a false-positive quiet cancellation while an agent is working. The role workflow is allowed to finish, but Rune then treats the stale cancellation as irreversible. A task can pass QA, implementation, reviewer, type-check, and the full test suite, yet never receive its normal closeout commit or task checkbox. The run parks with a terminal-cleanup WIP commit and requires manual recovery.
-
-  - **Observed incident.** Run `e1cd6b62-860e-4b9e-a0e2-bea21c5ba784` for project `22-fix-run-dispatch` received a system cancellation during `fix-decline-terminal-mapping`. The task subsequently completed its workflow: QA contract tests, coder implementation, `npm run build`, the full suite, and reviewer/tech-lead passes. At the post-workflow cancellation boundary, it returned `cancelled` before closeout. Terminal cleanup preserved the uncommitted task work as `c1551d5` rather than creating the normal closeout commit.
-
-  - **Actual behavior.**
-
-    - The quiet-run backstop calls `cancelMutation(run.id, 'system')` after deciding a run is quiet.
-    - `startApply()` records cancellation as a boolean that remains true for the mutation’s lifetime; later output and activity update supervision timestamps but cannot revoke that flag.
-    - `project-orchestrator.ts` checks the flag immediately after `runTaskWorkflow()` and before `performCloseout()`.
-    - If a task returns `ready-for-closeout` after the system cancellation, Rune returns `{ kind: 'cancelled' }` instead of committing, ticking `tasks.md`, persisting the task record, and advancing.
-    - Terminal cleanup correctly fails closed by preserving the dirty worktree as a WIP commit, but it cannot recover the skipped closeout state.
-
-  - **Expected behavior.**
-
-    - A user-initiated cancellation remains terminal and is never overridden by task activity.
-    - A system cancellation from quiet-run or max-runtime supervision is provisional until Rune reaches a safe orchestration boundary.
-    - If the active task reaches `ready-for-closeout` after a system cancellation, that successful workflow result proves the run is not quiet. Rune must invalidate or supersede the stale system cancellation, execute normal closeout, and continue the run.
-    - A system cancellation remains effective when the active task does not reach `ready-for-closeout`, remains blocked, fails, or never returns. It must still stop genuinely wedged runs.
-    - The Cockpit/transcript should show that verified task progress superseded the system cancellation.
-
-  - **Root cause.** Cancellation provenance (`user` versus `system`) is captured, but cancellation state is modeled as a one-way boolean. The orchestrator can inspect the reason, but does not use it to distinguish an irrevocable operator stop from a revocable backstop request. The first cancellation check after task workflow runs before closeout, so the strongest available liveness evidence, a successful ready-for-closeout result, never gets a chance to supersede the stale quiet signal.
-
-  - **Reproduction steps.**
-
-    1. Start an orchestrated work run with a task whose role workflow is long enough for supervision to falsely classify it as quiet.
-    2. Trigger `cancelMutation(runId, 'system')` while `runTaskWorkflow()` is still executing.
-    3. Let the workflow subsequently return `ready-for-closeout` with passing reviewer evidence and successful required validation.
-    4. Observe the post-workflow cancellation check return `{ kind: 'cancelled', reason: 'system' }` before `performCloseout()`.
-    5. Observe no task closeout commit, no checked task, and no durable task record for that task.
-    6. Observe terminal cleanup park the run and create a WIP preservation commit for the otherwise reviewed work.
-
-  - **Fix guidance.**
-
-    1. Model a system cancellation as a cancellable backstop request, not a permanent mutation-level stop. Preserve the existing irrevocable behavior for `user` cancellation.
-    2. At the post-workflow boundary, when `evidence.outcome === 'ready-for-closeout'` and `cancelReason() === 'system'`, explicitly supersede the request before entering `performCloseout()`.
-    3. Clear or generation-scope the cancellation state so the later post-closeout and next-task checks do not immediately re-cancel the recovered run. Do not merely skip one check.
-    4. Preserve cancellation for non-ready evidence and for tasks that are still executing. The quiet/max-runtime backstops must continue to stop a run that remains unproductive.
-    5. Emit a durable, scrubbed activity/transcript event when a system cancellation is superseded by verified task progress. Never expose this behavior for user cancellation.
-
-  - **Acceptance criteria.**
-
-    - A simulated `system` cancellation during a task that subsequently returns `ready-for-closeout` results in normal closeout: required checks run, `context.md` and `tasks.md` updates persist, a closeout commit is created, and the task record is durable.
-    - The same run continues to select and execute the next task rather than parking or immediately re-cancelling at the next boundary.
-    - The run emits one observable event that the system cancellation was superseded by verified task progress.
-    - A system cancellation during a task that returns blocked, failed, cancelled, or never returns still terminates/parks through the existing safe path and does not run closeout.
-    - A user cancellation during a task that returns `ready-for-closeout` still stops the run before closeout; user intent always wins.
-    - Existing quiet-run and max-runtime watchdog behavior remains covered, including cancellation of genuinely silent/wedged work.
-    - Regression coverage reproduces the Project 22 sequence: system cancel arrives during role work, QA/coder/reviewer validation completes, and the task is normally committed rather than preserved only as terminal WIP.
 - [ ] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.**
   - **User impact.** A Codex-backed product chat can begin with full repository authority, then appear read-only or otherwise lose its expected write posture on a later turn. The same product chat works with Claude because Claude receives its permission-bypass flag on every invocation. An unresolved product chat also becomes read-only, even though the intended fallback is constrained write access rather than no write access.
 
@@ -298,6 +248,56 @@
 
 ## Done
 
+- [x] **A false quiet-run cancellation remains latched after the active task demonstrates progress, causing reviewed work to skip closeout and park as WIP.** **(Fixed 2026-07-16 — mutation cancellation now carries an actuator source while retaining the terminal `user | system` classification. User, shutdown, recovery, and unspecified system requests are irrevocable; only `quiet-run` and `max-runtime` are revocable. At the post-workflow boundary, non-ready evidence still stops, but `ready-for-closeout` atomically supersedes the still-active watchdog request, immediately records verified supervision activity, clears the old quiet cycle, renews the max-runtime epoch when applicable, emits one scrubbed `system-cancel-superseded` transcript/live-feed output, then performs normal closeout and advances. Stall-check, shutdown, and recovery now tag their sources explicitly. Covered by mutation precedence/supersession tests, the Project 22 two-task orchestration replay, supervision epoch/cycle tests, runner transcript/feed integration, source-wiring tests, type-check, and the full 329-file suite: 5,403 passed, 8 todo.)**
+
+  - **User impact.** A healthy orchestrated run can receive a false-positive quiet cancellation while an agent is working. The role workflow is allowed to finish, but Rune then treats the stale cancellation as irreversible. A task can pass QA, implementation, reviewer, type-check, and the full test suite, yet never receive its normal closeout commit or task checkbox. The run parks with a terminal-cleanup WIP commit and requires manual recovery.
+
+  - **Observed incident.** Run `e1cd6b62-860e-4b9e-a0e2-bea21c5ba784` for project `22-fix-run-dispatch` received a system cancellation during `fix-decline-terminal-mapping`. The task subsequently completed its workflow: QA contract tests, coder implementation, `npm run build`, the full suite, and reviewer/tech-lead passes. At the post-workflow cancellation boundary, it returned `cancelled` before closeout. Terminal cleanup preserved the uncommitted task work as `c1551d5` rather than creating the normal closeout commit.
+
+  - **Actual behavior.**
+
+    - The quiet-run backstop calls `cancelMutation(run.id, 'system')` after deciding a run is quiet.
+    - `startApply()` records cancellation as a boolean that remains true for the mutation’s lifetime; later output and activity update supervision timestamps but cannot revoke that flag.
+    - `project-orchestrator.ts` checks the flag immediately after `runTaskWorkflow()` and before `performCloseout()`.
+    - If a task returns `ready-for-closeout` after the system cancellation, Rune returns `{ kind: 'cancelled' }` instead of committing, ticking `tasks.md`, persisting the task record, and advancing.
+    - Terminal cleanup correctly fails closed by preserving the dirty worktree as a WIP commit, but it cannot recover the skipped closeout state.
+
+  - **Expected behavior.**
+
+    - A user-initiated cancellation remains terminal and is never overridden by task activity.
+    - A system cancellation from quiet-run or max-runtime supervision is provisional until Rune reaches a safe orchestration boundary.
+    - If the active task reaches `ready-for-closeout` after a system cancellation, that successful workflow result proves the run is not quiet. Rune must invalidate or supersede the stale system cancellation, execute normal closeout, and continue the run.
+    - A system cancellation remains effective when the active task does not reach `ready-for-closeout`, remains blocked, fails, or never returns. It must still stop genuinely wedged runs.
+    - The Cockpit/transcript should show that verified task progress superseded the system cancellation.
+
+  - **Root cause.** Cancellation provenance (`user` versus `system`) is captured, but cancellation state is modeled as a one-way boolean. The orchestrator can inspect the reason, but does not use it to distinguish an irrevocable operator stop from a revocable backstop request. The first cancellation check after task workflow runs before closeout, so the strongest available liveness evidence, a successful ready-for-closeout result, never gets a chance to supersede the stale quiet signal.
+
+  - **Reproduction steps.**
+
+    1. Start an orchestrated work run with a task whose role workflow is long enough for supervision to falsely classify it as quiet.
+    2. Trigger `cancelMutation(runId, 'system')` while `runTaskWorkflow()` is still executing.
+    3. Let the workflow subsequently return `ready-for-closeout` with passing reviewer evidence and successful required validation.
+    4. Observe the post-workflow cancellation check return `{ kind: 'cancelled', reason: 'system' }` before `performCloseout()`.
+    5. Observe no task closeout commit, no checked task, and no durable task record for that task.
+    6. Observe terminal cleanup park the run and create a WIP preservation commit for the otherwise reviewed work.
+
+  - **Fix guidance.**
+
+    1. Model a system cancellation as a cancellable backstop request, not a permanent mutation-level stop. Preserve the existing irrevocable behavior for `user` cancellation.
+    2. At the post-workflow boundary, when `evidence.outcome === 'ready-for-closeout'` and `cancelReason() === 'system'`, explicitly supersede the request before entering `performCloseout()`.
+    3. Clear or generation-scope the cancellation state so the later post-closeout and next-task checks do not immediately re-cancel the recovered run. Do not merely skip one check.
+    4. Preserve cancellation for non-ready evidence and for tasks that are still executing. The quiet/max-runtime backstops must continue to stop a run that remains unproductive.
+    5. Emit a durable, scrubbed activity/transcript event when a system cancellation is superseded by verified task progress. Never expose this behavior for user cancellation.
+
+  - **Acceptance criteria.**
+
+    - A simulated `system` cancellation during a task that subsequently returns `ready-for-closeout` results in normal closeout: required checks run, `context.md` and `tasks.md` updates persist, a closeout commit is created, and the task record is durable.
+    - The same run continues to select and execute the next task rather than parking or immediately re-cancelling at the next boundary.
+    - The run emits one observable event that the system cancellation was superseded by verified task progress.
+    - A system cancellation during a task that returns blocked, failed, cancelled, or never returns still terminates/parks through the existing safe path and does not run closeout.
+    - A user cancellation during a task that returns `ready-for-closeout` still stops the run before closeout; user intent always wins.
+    - Existing quiet-run and max-runtime watchdog behavior remains covered, including cancellation of genuinely silent/wedged work.
+    - Regression coverage reproduces the Project 22 sequence: system cancel arrives during role work, QA/coder/reviewer validation completes, and the task is normally committed rather than preserved only as terminal WIP.
 - [x] Bug: work run fails before execution because its isolated worktree is missing _(Fixed 2026-07-15 — verified root cause: asynchronous startup orphan cleanup used stale Git-registration and resumable-cursor snapshots, then removed newly active worktrees after successful initialization. Startup now awaits recovery, stale-mutation reconciliation, and orphan cleanup before HTTP/scheduler dispatch surfaces become reachable. Each deletion candidate is revalidated against fresh Git and cursor state and is preserved on verification failure. Creation verifies the exact directory, registration, and branch postconditions and rolls back attempt-owned partial state with metadata pruning. Legacy and orchestrated runners share a pre-dispatch project/spec/tasks check and return a scrubbed `worktree provisioning failed: <stage>` terminal before model dispatch; full paths and causes remain local-only.)_
   - Project: 01-probe-harness-pilot
   - Failed run: 5fe6989f

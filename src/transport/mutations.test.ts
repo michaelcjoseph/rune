@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SupervisedRun } from '../intent/supervision.js';
+import type { ApplyContext, MutationKind } from './mutations.js';
 
 // --- Mocks before any dynamic imports ---
 
@@ -29,8 +30,13 @@ vi.mock('../config.js', () => ({
 // Mock supervision-store so the hook tests can assert call shape without
 // touching the filesystem.
 const mockUpsertRun = vi.fn();
+const mockRecordRunActivity = vi.fn();
 vi.mock('../jobs/supervision-store.js', () => ({
   upsertRun: mockUpsertRun,
+  recordRunActivity: (...args: unknown[]) => {
+    mockRecordRunActivity(...args);
+    mockUpsertRun(args[0]);
+  },
 }));
 
 // --- Dynamic imports after mocks ---
@@ -257,6 +263,48 @@ describe('mutations', () => {
       expect(condition()).toBe(true);
     }
 
+    async function startCancellableMutation(
+      kind: MutationKind = 'work-run',
+    ): Promise<{
+      id: string;
+      ctx: ApplyContext;
+      finish: () => Promise<void>;
+    }> {
+      let capturedCtx: ApplyContext | undefined;
+      let resolveFinished!: () => void;
+      const finished = new Promise<void>((resolve) => {
+        resolveFinished = resolve;
+      });
+      registerApplier({
+        kind,
+        autoApprove: true,
+        validate: () => ({ ok: true }),
+        apply: async function* (descriptor: any, ctx: ApplyContext) {
+          capturedCtx = ctx;
+          await finished;
+          yield {
+            mutationId: descriptor.id,
+            ts: new Date().toISOString(),
+            kind: 'completed',
+            data: {},
+          };
+        },
+      } as any);
+
+      const created = await createMutation(kind, { projectSlug: 'demo' }, 'webview');
+      expect(created.ok).toBe(true);
+      const id = (created as { ok: true; descriptor: { id: string } }).descriptor.id;
+      await waitFor(() => capturedCtx !== undefined && activeRuns.has(id));
+      return {
+        id,
+        ctx: capturedCtx!,
+        finish: async () => {
+          resolveFinished();
+          await waitFor(() => !activeRuns.has(id));
+        },
+      };
+    }
+
     it('returns ok: false when mutation is not in activeRuns', () => {
       const result = cancelMutation('nonexistent-id');
       expect(result.ok).toBe(false);
@@ -319,15 +367,133 @@ describe('mutations', () => {
 
       expect(cancelMutation(id, 'system')).toEqual({ ok: true });
       expect(listener).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenLastCalledWith('system');
+      expect(listener).toHaveBeenLastCalledWith('system', null);
 
       expect(cancelMutation(id, 'user')).toEqual({ ok: true });
       expect(listener).toHaveBeenCalledTimes(2);
-      expect(listener).toHaveBeenLastCalledWith('user');
+      expect(listener).toHaveBeenLastCalledWith('user', 'user');
 
       finish();
       await waitFor(() => !activeRuns.has(id));
     });
+
+    it.each([
+      ['quiet-run', false],
+      ['max-runtime', true],
+    ] as const)(
+      'atomically supersedes a revocable %s request and records verified progress',
+      async (source, renewMaxRuntimeEpoch) => {
+        const { id, ctx, finish } = await startCancellableMutation();
+
+        expect(cancelMutation(id, 'system', source)).toEqual({ ok: true });
+        expect(ctx.cancel()).toBe(true);
+        expect(ctx.cancelReason?.()).toBe('system');
+        expect(ctx.cancelSource?.()).toBe(source);
+
+        expect(ctx.supersedeSystemCancellation?.()).toBe(source);
+        expect(ctx.cancel()).toBe(false);
+        expect(ctx.cancelReason?.()).toBeNull();
+        expect(ctx.cancelSource?.()).toBeNull();
+        expect(mockRecordRunActivity).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id,
+            status: 'running',
+            lastOutputAt: expect.any(String),
+          }),
+          '/test/logs/supervised-runs.json',
+          { renewMaxRuntimeEpoch },
+        );
+
+        await finish();
+      },
+    );
+
+    it('fails closed and leaves a revocable request active when progress persistence fails', async () => {
+      const { id, ctx, finish } = await startCancellableMutation();
+
+      expect(cancelMutation(id, 'system', 'quiet-run')).toEqual({ ok: true });
+      mockRecordRunActivity.mockImplementationOnce(() => {
+        throw new Error('disk full');
+      });
+
+      expect(ctx.supersedeSystemCancellation?.()).toBeNull();
+      expect(ctx.cancel()).toBe(true);
+      expect(ctx.cancelReason?.()).toBe('system');
+      expect(ctx.cancelSource?.()).toBe('quiet-run');
+
+      await finish();
+    });
+
+    it.each(['recovery', 'shutdown'] as const)(
+      'fails closed when %s lifecycle ownership begins before supersession',
+      async (lifecycle) => {
+        const { id, ctx, finish } = await startCancellableMutation('orchestrated-work');
+        expect(cancelMutation(id, 'system', 'quiet-run')).toEqual({ ok: true });
+
+        if (lifecycle === 'recovery') {
+          expect(preserveMutationForRecoveryHandoff(id)).toBe(true);
+        } else {
+          setMutationShutdownInProgress(true);
+        }
+        try {
+          expect(ctx.supersedeSystemCancellation?.()).toBeNull();
+          expect(ctx.cancel()).toBe(true);
+          expect(ctx.cancelReason?.()).toBe('system');
+          expect(ctx.cancelSource?.()).toBe('quiet-run');
+        } finally {
+          if (lifecycle === 'recovery') releaseMutationRecoveryHandoff(id);
+          else setMutationShutdownInProgress(false);
+          await finish();
+        }
+      },
+    );
+
+    it('user cancellation cannot be superseded or downgraded by a later system request', async () => {
+      const { id, ctx, finish } = await startCancellableMutation();
+
+      expect(cancelMutation(id, 'system', 'quiet-run')).toEqual({ ok: true });
+      expect(cancelMutation(id, 'user')).toEqual({ ok: true });
+      expect(cancelMutation(id, 'system', 'max-runtime')).toEqual({ ok: true });
+      expect(ctx.cancelReason?.()).toBe('user');
+      expect(ctx.cancelSource?.()).toBe('user');
+      expect(ctx.supersedeSystemCancellation?.()).toBeNull();
+
+      await finish();
+    });
+
+    it('does not downgrade an active max-runtime request to quiet-run', async () => {
+      const { id, ctx, finish } = await startCancellableMutation();
+
+      expect(cancelMutation(id, 'system', 'max-runtime')).toEqual({ ok: true });
+      expect(cancelMutation(id, 'system', 'quiet-run')).toEqual({ ok: true });
+      expect(ctx.cancelSource?.()).toBe('max-runtime');
+      expect(ctx.supersedeSystemCancellation?.()).toBe('max-runtime');
+      expect(mockRecordRunActivity).toHaveBeenLastCalledWith(
+        expect.any(Object),
+        '/test/logs/supervised-runs.json',
+        { renewMaxRuntimeEpoch: true },
+      );
+
+      await finish();
+    });
+
+    it.each([
+      ['unspecified', undefined],
+      ['shutdown', 'shutdown'],
+      ['recovery', 'recovery'],
+    ] as const)(
+      'keeps %s system cancellation non-revocable',
+      async (_label, source) => {
+        const { id, ctx, finish } = await startCancellableMutation();
+
+        expect(cancelMutation(id, 'system', source)).toEqual({ ok: true });
+        expect(ctx.cancelReason?.()).toBe('system');
+        expect(ctx.cancelSource?.()).toBe(source ?? null);
+        expect(ctx.supersedeSystemCancellation?.()).toBeNull();
+
+        await finish();
+      },
+    );
 
     it('does not call unsubscribed cancel listeners', async () => {
       const listener = vi.fn();

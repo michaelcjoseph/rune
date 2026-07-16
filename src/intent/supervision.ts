@@ -73,6 +73,12 @@ export interface SupervisedRun {
    */
   lastOutputAt?: string;
   /**
+   * ISO-8601 timestamp from which the hard max-runtime watchdog measures after
+   * verified task progress supersedes an earlier max-runtime request. Older
+   * persisted rows omit it and continue to use {@link startedAt}.
+   */
+  maxRuntimeEpochAt?: string;
+  /**
    * ISO-8601 timestamp the quiet-run nudge was sent, or absent if never. Bounds
    * the nudge to at most once per run (project 11, requirement 23).
    */
@@ -304,14 +310,15 @@ export interface MaxRuntimeKillPlan {
 
 /**
  * Plan the max-runtime-ceiling kills (project 15, P2.7): select the `running`
- * runs whose total wall-clock age (now − {@link SupervisedRun.startedAt})
- * exceeds `maxRuntimeMs`. This is the HARD backstop — it keys on `startedAt`,
- * NOT on any liveness signal, so a run with a fresh keep-alive ticker
+ * runs whose watchdog age (now − {@link SupervisedRun.maxRuntimeEpochAt}, or
+ * {@link SupervisedRun.startedAt} for rows without a renewed epoch) exceeds
+ * `maxRuntimeMs`. This is the HARD backstop — it does NOT key on liveness, so a
+ * run with a fresh keep-alive ticker
  * (`lastChildAliveAt` kept current) cannot defeat the ceiling. The actuator
  * group-kills and finalizes the selected runs. Pure — never mutates inputs.
  *
  * Unlike the quiet→cancel predicate (which soft-fails), this FAILS TOWARD KILL
- * on an unparseable `startedAt`: the ceiling is the LAST backstop against a
+ * on an unparseable watchdog epoch: the ceiling is the LAST backstop against a
  * run that keeps its keep-alive ticker fresh, so a corrupt-timestamp record
  * must not be allowed to evade it forever. The finalizer classifies on work
  * product, so a killed run's committed branch is preserved (branch-complete /
@@ -324,8 +331,8 @@ export function planMaxRuntimeKills(
 ): MaxRuntimeKillPlan {
   const toKill = runs.filter((r) => {
     if (r.status !== 'running') return false;
-    const parsed = Date.parse(r.startedAt);
-    // Fail-toward-kill on a corrupt startedAt: the ceiling is the last backstop
+    const parsed = Date.parse(r.maxRuntimeEpochAt ?? r.startedAt);
+    // Fail-toward-kill on a corrupt epoch: the ceiling is the last backstop
     // against a fresh-keep-alive run, so a record we can't age must not evade it
     // (the finalizer preserves the branch's committed work).
     if (Number.isNaN(parsed)) return true;

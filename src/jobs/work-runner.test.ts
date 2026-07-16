@@ -96,6 +96,7 @@ const mockUpsertRun = vi.fn();
 const mockReadAllRuns = vi.fn<() => any[]>(() => []);
 vi.mock('./supervision-store.js', () => ({
   upsertRun: mockUpsertRun,
+  recordRunActivity: vi.fn(),
   readAllRuns: mockReadAllRuns,
 }));
 

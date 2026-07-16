@@ -10,12 +10,17 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { SupervisedRun } from '../intent/supervision.js';
-import { isQuietRun, planQuietNudges } from '../intent/supervision.js';
+import {
+  isQuietRun,
+  planMaxRuntimeKills,
+  planQuietNudges,
+} from '../intent/supervision.js';
 import {
   compactSupervisedRuns,
   readAllRuns,
   writeAllRuns,
   upsertRun,
+  recordRunActivity,
   removeRun,
 } from './supervision-store.js';
 
@@ -251,6 +256,49 @@ describe('upsertRun', () => {
   });
 });
 
+describe('recordRunActivity', () => {
+  it('clears the prior quiet cycle and permits a later fresh nudge cycle', () => {
+    const activityAt = Date.parse('2026-01-01T01:00:00.000Z');
+    writeAllRuns([
+      makeRun('run-quiet-cycle', {
+        lastOutputAt: '2026-01-01T00:00:00.000Z',
+        quietNudgedAt: '2026-01-01T00:10:00.000Z',
+      }),
+    ], filePath);
+
+    recordRunActivity(
+      makeRun('run-quiet-cycle', {
+        lastHeartbeatAt: new Date(activityAt).toISOString(),
+        lastOutputAt: new Date(activityAt).toISOString(),
+      }),
+      filePath,
+    );
+
+    const active = readAllRuns(filePath)[0]!;
+    expect(active.quietNudgedAt).toBeUndefined();
+    expect(active.lastOutputAt).toBe(new Date(activityAt).toISOString());
+    expect(planQuietNudges([active], 5 * 60_000, activityAt + 60_000).toNudge).toEqual([]);
+    expect(planQuietNudges([active], 5 * 60_000, activityAt + 5 * 60_000 + 1).toNudge)
+      .toHaveLength(1);
+  });
+
+  it('renews the max-runtime watchdog epoch only when requested', () => {
+    writeAllRuns([makeRun('run-max-runtime')], filePath);
+    const verifiedAt = '2026-01-01T08:00:00.000Z';
+
+    recordRunActivity(
+      makeRun('run-max-runtime', {
+        lastHeartbeatAt: verifiedAt,
+        lastOutputAt: verifiedAt,
+      }),
+      filePath,
+      { renewMaxRuntimeEpoch: true },
+    );
+
+    expect(readAllRuns(filePath)[0]!.maxRuntimeEpochAt).toBe(verifiedAt);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // removeRun
 // ---------------------------------------------------------------------------
@@ -288,6 +336,22 @@ describe('readAllRuns / writeAllRuns — lastChildAliveAt back-compat', () => {
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe('run-legacy');
     expect(result[0]!.lastChildAliveAt).toBeUndefined();
+  });
+
+  it('drops a non-string maxRuntimeEpochAt so the watchdog falls back to startedAt', () => {
+    const now = Date.parse('2026-01-02T00:00:00.000Z');
+    writeFileSync(filePath, JSON.stringify([{
+      ...makeRun('run-corrupt-max-epoch', {
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lastHeartbeatAt: new Date(now).toISOString(),
+      }),
+      maxRuntimeEpochAt: 9999,
+    }]), 'utf8');
+
+    const [normalized] = readAllRuns(filePath);
+    expect(normalized!.maxRuntimeEpochAt).toBeUndefined();
+    expect(planMaxRuntimeKills([normalized!], 60 * 60_000, now).toKill)
+      .toEqual([normalized]);
   });
 
   it('upsertRun preserves lastChildAliveAt when present', () => {
