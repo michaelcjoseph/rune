@@ -1,6 +1,250 @@
 ## Active
 
-(empty)
+- [ ] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.**
+  - **User impact.** A Codex-backed product chat can begin with full repository authority, then appear read-only or otherwise lose its expected write posture on a later turn. The same product chat works with Claude because Claude receives its permission-bypass flag on every invocation. An unresolved product chat also becomes read-only, even though the intended fallback is constrained write access rather than no write access.
+
+  - **Expected behavior.**
+    - A resolved product chat has consistent authority for its entire conversation:
+      - initial Codex turn: `danger-full-access`;
+      - resumed Codex turns: the same `danger-full-access` authority is explicitly reasserted;
+      - Claude turns: retain their current full-trust product-chat posture on initial and resumed calls.
+    - Rune must not rely on a persisted Codex thread’s historical sandbox selection as its only authority guarantee.
+    - A product scope whose configured repository cannot be resolved must fall back to `workspace-write`, rooted in the configured workspace, not `read-only`.
+    - Global/Home chat remains read-only.
+    - The system prompt, persisted executor metadata, CLI sandbox selection, working directory, and tool availability must describe the same authority.
+
+  - **Actual behavior.**
+    - Rune starts a new resolved Codex product thread with `codex exec -s danger-full-access`.
+    - On the next turn, Rune uses `codex exec resume <thread-id>` and deliberately omits `-s`, because that subcommand does not expose the `--sandbox` flag.
+    - Rune’s persisted executor metadata says `product-full-access`, but it does not verify or reassert Codex’s effective sandbox policy on resume.
+    - A test fixture proves Rune omits the sandbox argument on resume, but does not exercise the real Codex CLI or prove resumed write capability.
+    - When `resolveProductChatWorkspace(product)` returns null, Rune assigns the chat `read-only` authority and a vault cwd. That makes a product chat unable to edit anything instead of granting constrained workspace access.
+    - Claude does not share the resume gap: Rune includes `--dangerously-skip-permissions` in every Claude invocation, including resumed sessions.
+
+  - **Root cause.**
+    - Rune models product-chat authority as a binary `read-only | product-full-access` decision.
+    - The Codex launch wrapper applies `sandboxMode` only when creating a new thread:
+      `threadId ? { resumeSessionId: threadId } : { sandboxMode: ... }`.
+    - `runCodex()` intentionally suppresses `-s` for `codex exec resume`, but does not replace it with a supported `-c sandbox_mode="..."` override.
+    - The code assumes Codex resume restores and retains the initial sandbox policy. That assumption is not enforced or covered by a real-Codex acceptance test.
+    - The unresolved-product fallback has no intermediate `workspace-write` authority, so it collapses to the global read-only posture.
+
+  - **Reproduction steps.**
+    1. Configure a repo-backed product and select a Codex model in its cockpit chat.
+    2. Send a first message that edits and commits a harmless file.
+    3. Send a second message in the same product chat that makes another harmless edit.
+    4. Inspect the spawned Codex argv:
+       - first turn includes `-s danger-full-access`;
+       - resumed turn contains `exec resume` but no sandbox selection or `sandbox_mode` configuration override.
+    5. Run the same sequence against Claude and observe that both invocations include `--dangerously-skip-permissions`.
+    6. Configure or simulate a product scope whose repository cannot be resolved.
+    7. Open that product chat and observe that Rune assigns read-only authority instead of constrained workspace write access.
+
+  - **Fix guidance.**
+    1. Extend `ChatAuthority` to model three distinct postures:
+       - `read-only` for global/Home chat;
+       - `product-workspace-write` for a product scope without a resolvable dedicated repo;
+       - `product-full-access` for a resolved dedicated product repository.
+    2. Map `product-workspace-write` to Codex `workspace-write` and a workspace-root cwd. Keep the prompt and tool surface honest about the constrained boundary.
+    3. Preserve `product-full-access` for resolved product chats and keep `danger-full-access` for the initial Codex spawn.
+    4. Change resumed Codex execution to pass the supported configuration override:
+       `-c 'sandbox_mode="danger-full-access"'`.
+       The wrapper should serialize:
+       - new thread: `-s <sandboxMode>`;
+       - resumed thread: `-c sandbox_mode="<sandboxMode>"`.
+    5. Do not use `--dangerously-bypass-approvals-and-sandbox` as the solution. Rune product chats are not externally sandboxed, so that flag would weaken the intended security model.
+    6. Reassert `workspace-write` through the same resume-time configuration path for fallback product chats.
+    7. Keep authority binding strict: a Codex thread may resume only when its authority, cwd, and writable-root binding exactly match the current request. Rotate and replay Rune’s transcript when they differ.
+    8. Add a real-Codex integration/acceptance test. Fixture argv assertions are necessary but insufficient because they cannot prove Codex’s effective resumed sandbox.
+
+  - **Acceptance criteria.**
+    - A new resolved Codex product chat launches with `-s danger-full-access`.
+    - Every resumed resolved Codex product-chat turn includes `-c sandbox_mode="danger-full-access"`.
+    - A real-Codex test proves that both the initial and resumed product-chat turns can create, modify, stage, and commit files in the product repository.
+    - The same test proves a global/Home Codex chat remains read-only.
+    - A product scope without a resolvable dedicated repository receives `workspace-write`, not `read-only`.
+    - A fallback product chat can write inside the configured workspace root and cannot write outside the Codex workspace-write sandbox.
+    - A fallback product chat does not receive the resolved-product full-access prompt, `danger-full-access`, or unrestricted filesystem authority.
+    - Switching a Codex thread between global, fallback-product, and resolved-product authority rotates the thread rather than resuming it under a mismatched binding.
+    - Claude product-chat behavior remains unchanged: full-trust product launches and resumes continue to work.
+    - Unit tests cover argv/config serialization for initial and resumed Codex threads in all three authority modes.
+    - The full product-chat launch suite and type-check pass.
+- [ ] **Product-chat responses and operation state are lost when navigating away from a product view.**
+  - **User impact.** Send a message in product A, navigate to Home or product B, then return to product A. The product chat can show a frozen “Asking Claude” pill whose elapsed counter no longer advances, and the model’s completed response may never appear. Sending another message can make the chat appear to resume, but the original answer has already been dropped from the browser transcript.
+
+  - **Expected behavior.**
+    - A product-chat turn continues while the operator navigates anywhere else in the cockpit.
+    - All streamed chunks, final messages, status frames, and terminal operation frames for that product are retained while its view is inactive.
+    - Returning to a product chat shows its complete accumulated transcript and the correct current operation state.
+    - If an operation remains active, its elapsed timer resumes immediately from its original `startedAt`.
+    - If the operation completed while the product was inactive, the working pill is gone and the final response is visible without requiring another user message.
+
+  - **Actual behavior.**
+    - Route changes call `productView.close()`, which removes the product view’s `rune-webview-frame` listener.
+    - Product-chat frames are delivered over the shared WebSocket and dispatched as browser events, but no route-independent receiver records them after the product view has closed.
+    - Chunks, final messages, status updates, and `op-event:end` frames emitted during that gap are discarded from the client’s retained product session.
+    - Returning to the product restores the stale `activeOp` saved before navigation.
+    - The view’s elapsed timer is cleared on `close()` and is only restarted on a new `op-event:start`; loading an already-active retained op does not start it.
+    - Sending a new message starts a new turn after the server’s per-chat dispatch queue clears. Its fresh `op-event:start` restarts the visual timer, creating the impression that the earlier model turn was “kicked” into action.
+
+  - **Root cause.**
+    - Product chat state is module-scoped, but frame handling is view-scoped. `productSessions` survives route changes, while the only code that writes incoming WebSocket frames into those sessions is the `onWebviewFrame` listener created by `createProductDeepView()`.
+    - The router disposes that view on navigation, which removes the listener. The shared WebSocket remains connected, but its frames have no product-session consumer while Home or another product is active.
+    - Product-page load fetches `/api/state`, but uses its `inFlight` list only for the Operations panel. It does not reconcile the product session’s `activeOp` against the scoped in-flight operation.
+    - The final chat response has no durable server-side transcript/replay source, so `/api/state` cannot restore messages that were dropped while the product view was inactive.
+
+  - **Reproduction steps.**
+    1. Open a product chat, such as Rune.
+    2. Send a request that takes long enough to receive at least one `op-event:start`.
+    3. Before the response completes, navigate to Home.
+    4. Navigate to another product, or wait on Home until the original request completes.
+    5. Return to the original product chat.
+    6. Observe either:
+       - a stale working pill whose elapsed time is frozen; or
+       - no final response despite the model having completed.
+    7. Send another message and observe that a new operation start restores the visible timer, while the original missing response is not recovered.
+
+  - **Fix guidance.**
+    1. Install one route-independent browser-level consumer for scoped product-chat frames. It must remain active for the lifetime of the cockpit page, not the lifetime of one product deep view.
+    2. Buffer `chunk`, `message`, `status`, and scoped `op-event` frames into `productSessions` by product slug, whether or not that product is currently visible.
+    3. Let the active product view subscribe to or render from the shared product-session store. It should not be the owner of WebSocket-frame durability.
+    4. On product-view load, reconcile the retained `activeOp` with `/api/state.inFlight` by both `kind: "chat"` and matching product `scope`:
+       - hydrate an active matching operation when one exists;
+       - clear a stale retained operation when none exists;
+       - start the elapsed ticker whenever the reconciled operation is active.
+    5. Preserve ordering of streamed chunks and final messages across route changes. A final message should finalize the streaming entry rather than create duplicate assistant content.
+    6. Consider a bounded server-side transcript or replay protocol for reload/reconnect resilience. Browser-local buffering fixes navigation within one page lifetime, but cannot recover output after a page refresh or WebSocket disconnect.
+
+  - **Acceptance criteria.**
+    - Sending a product-chat request, navigating Home → another product → back before completion, and then returning shows a ticking elapsed counter based on the original operation start time.
+    - The counter continues increasing without sending another message.
+    - A final response received while the product view is inactive appears in that product’s transcript on return.
+    - The terminal `op-event:end` received while inactive clears the working pill on return.
+    - The original response is not duplicated, truncated, or reordered relative to streamed chunks.
+    - Product A’s frames never appear in product B’s transcript or operation pill.
+    - Navigating away and back repeatedly does not register duplicate global listeners or duplicate messages.
+    - On entry, `/api/state` clears a stale cached product operation that has already completed and hydrates an operation that is still active.
+    - Regression tests cover the full route sequence, inactive completion, inactive streaming, stale-op reconciliation, timer restart, and cross-product isolation.
+
+- [ ] **Orchestrated work can enter closeout without executable required validation, and reviewer evidence can be narrower than the task diff.**
+  - **What is broken.** Assay run `7bd0d9ba-30c5-45a0-b175-3991d4a2d8fb` advanced to `ready-for-closeout` although Task 1 required an installable `uv` Python 3.12 package, a committed lockfile, `pytest`, `ruff`, and an installed `assay` entry point. The agents reported that `uv`, `pytest`, `ruff`, and dependency installation were unavailable, then substituted parsing, compilation, and direct CLI checks. The reviewer also reported seeing only `harness/README.md` directly and accepted the substantive work from handoff notes.
+
+  - **Root cause.** `policies/products.json` configures Assay with no `validationCommands`. `readProductsConfig()` converts that absence to `[]`; the coder prompt explicitly tells the agent to skip validation when no commands are listed; and `runValidationCommands([])` returns `{ ok: true }` for task closeout. The hard merge gate would reject the empty command list later, but no per-task gate prevents a workflow from calling closeout. The reviewer contract accepts a caller-provided diff and has no independent completeness check against the worktree, so a narrowed review surface can still yield an all-low verdict.
+
+  - **Expected behavior.** A task whose declared acceptance requires a toolchain must not enter closeout until every required command has executed successfully in the worktree. Missing commands, missing executables, unavailable dependencies, and provisioning failures are explicit `blocked` or `needs-validation` outcomes that name the prerequisite and commands. Reviewers receive the complete selected-task diff and can reject an incomplete review surface.
+
+  - **Reproduction steps.**
+    1. Configure an orchestrated product with no `validationCommands`.
+    2. Start a task that requires a dependency manager and test/lint commands not present in the worktree.
+    3. Have the coder report that the commands cannot run while leaving a nonempty implementation diff.
+    4. Return passing role verdicts.
+    5. Observe `runCloseoutChecks()` invoke `runValidationCommands([])` and return success, allowing closeout to begin.
+
+  - **Acceptance criteria.**
+    - A product cannot start an orchestrated task without nonempty, executable validation commands, unless the task carries an explicit reviewed no-validation policy.
+    - Required validation commands run at the per-task gate and exit zero before context mutation, task ticking, or closeout commit.
+    - A missing command/tool/dependency produces a durable blocked or needs-validation state with the exact failed command and prerequisite, never `ready-for-closeout`.
+    - The Assay Python scaffold task declares and runs `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and an installed-entry-point check in a provisioned environment.
+    - A reviewer receives a deterministic complete diff (tracked and untracked selected-task changes) and fails closed when the supplied review artifact does not match it.
+    - Regression tests cover empty validation commands, command-not-found, dependency-install failure, and narrowed reviewer-diff detection.
+
+- [ ] **Context closeout rejects legacy project headings instead of safely migrating or reporting the exact repair, leaving reviewed work dirty and uncommitted.**
+  - **What is broken.** The same Assay run stopped with `context update rejected: missing-section` after entering closeout. Its `context.md` used `Canonical Interfaces`; Rune's canonical contract requires `Interfaces & Contracts`. No context change, checkbox tick, or commit was made, so the reviewed implementation remained dirty and unrecorded.
+
+  - **Root cause.** `CONTEXT_SECTIONS` in `src/intent/project-context.ts` requires an exact `## Interfaces & Contracts` heading. `applyContextUpdate()` only appends a missing section when that section itself is updated; the neutral closeout update touched no sections and then failed its global required-section predicate. `performCloseout()` computes this document transform before validation and commit, and maps the typed reason to the opaque terminal string `context update rejected: missing-section`. There is no migration for known legacy headings, no error metadata naming the missing heading/file, and no recoverable checkpoint before optional bookkeeping.
+
+  - **Expected behavior.** Context update is an upsert: known legacy headings migrate to the canonical heading, and genuinely absent managed sections are created with a safe placeholder or structured update. If policy requires a human repair, the run blocks before closeout with the file path, missing heading, and proposed repair. Reviewed work is preserved with a WIP checkpoint when a non-code closeout mutation prevents completion.
+
+  - **Reproduction steps.**
+    1. Create a project `context.md` with `Current State`, `Key Decisions`, `Canonical Interfaces`, `Known Risks`, and `Next Task Handoff`.
+    2. Run a task whose evidence produces the current neutral context update.
+    3. Reach `performCloseout()`.
+    4. Observe `applyContextUpdate()` reject the document as `missing-section` and the run finish dirty-uncommitted.
+
+  - **Acceptance criteria.**
+    - A legacy `## Canonical Interfaces` heading is migrated or treated as the canonical `## Interfaces & Contracts` section without losing its body.
+    - Any absent managed section is safely created by the upsert path, and all five canonical sections exist afterward exactly once.
+    - A non-migratable context error reports the project context file, exact missing heading, and proposed repair in the terminal reason and Cockpit surface.
+    - Context failure cannot discard reviewed work: Rune creates a labeled WIP/recovery checkpoint before terminal preservation when no safe automatic repair exists.
+    - Tests cover legacy migration, genuinely missing-section upsert, diagnostic specificity, and a closeout failure that preserves the implementation checkpoint.
+
+- [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
+  - **What is broken.** Assay Task 1 required a new `uv`-managed Python package, but the assigned run had no `uv`, `pytest`, `ruff`, or `jsonschema`; outbound installation was blocked. The runtime provisions only the repository worktree and Node dependency link. It does not declare a Python runtime, package-manager availability, offline cache, or dependency-install authorization before the QA/coder workflow starts. The reported `uv.lock` therefore has no demonstrated provenance or resolvability.
+
+  - **Root cause.** Product configuration exposes Node-oriented `validationCommands` and an egress allowlist, but no toolchain/provisioning requirements. `createWorktree()` calls `linkWorktreeDeps()` only. The sandbox/agent environment carries a basic toolchain `PATH`, while validation networking is deliberately denied; there is no preflight that proves a declared package manager and dependency cache can satisfy the task before implementation starts.
+
+  - **Expected behavior.** A product can declare its required toolchain and provisioning path. Before task selection, Rune verifies the supported Python version, `uv`, and either an approved offline cache/prebuilt environment or authorized auditable dependency installation. If requirements are absent, the run is blocked before QA writes tests or the coder changes files.
+
+  - **Reproduction steps.**
+    1. Configure a product that has a Python scaffold task but no Python toolchain/provisioning declaration.
+    2. Run it in an environment without `uv`, `pytest`, and `ruff`, with external package downloads blocked.
+    3. Observe QA and coder reach the task and substitute partial local checks because `uv sync` and the declared suite cannot run.
+
+  - **Acceptance criteria.**
+    - Product config supports an explicit, validated Python toolchain requirement, including Python version, `uv`, required dependency groups, and an approved provisioning source.
+    - Preflight runs before QA/coder dispatch and either proves the declared commands are usable or blocks with `required tool missing`, `required packages unavailable`, or `installation blocked by environment policy`.
+    - The provisioning strategy is auditable: preinstalled toolchain, approved offline cache, prebuilt image, or explicitly authorized network install.
+    - In a provisioned Assay environment, `uv.lock` is generated or verified against `pyproject.toml`; `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and `uv run assay --help` succeed.
+    - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
+
+- [ ] **Planning tasks lose dependencies, role gates, and manual-runbook relationships between planning and runtime dispatch.**
+  - **What is broken.** The planning model can describe roles and `manual-live-gate` tasks, but it has no structured dependency or runbook relationship. The rendered `tasks.md` is treated as the runtime source, and `src/jobs/team-task-deps.ts` reconstructs selected tasks with conservative fixed defaults. A runbook task can therefore be separated from its manual gate by task order alone, and role metadata can disappear before workflow dispatch.
+  - **User impact.** A plan can promise a security review, a manual runbook prerequisite, or a task dependency that Rune never enforces. The operator receives no durable handoff for manual work, and an automated workflow can attempt work whose prerequisite was not completed.
+  - **Root cause.**
+    - `SizedTask` has no first-class `dependsOn`, `manualGate`, `runbookTaskId`, or evidence-contract fields.
+    - `planning-artifact.ts` renders human-readable task prose, but critical runtime behavior is not preserved as structured metadata.
+    - `team-task-deps.ts` rebuilds selected tasks from Markdown and currently recognizes only the manual-live marker, assigning fixed roles for ordinary tasks.
+    - Task ordering is used as a proxy for dependency ordering.
+  - **Required fix.**
+    1. Extend the planned-task schema with stable IDs, `dependsOn`, and an optional manual-gate contract containing `runbookTaskId`, operator, environment, required evidence, and rollback-document path.
+    2. Require every `manual-live-gate` task to reference an earlier automatable runbook task. Reject invalid plans before scaffolding.
+    3. Preserve this metadata through planner output, artifact serialization, scaffolded project files, task selection, durable run state, and workflow dispatch.
+    4. Prevent dispatch of a manual gate until its runbook task has landed. Surface the unmet prerequisite and required evidence in Cockpit.
+    5. Render the relationship clearly in `tasks.md` and `test-plan.md`, but do not rely on Markdown markers or list order as the authoritative contract.
+  - **Acceptance criteria.**
+    - A plan containing a manual-live gate without a runbook task fails validation before it reaches a work run.
+    - A manual gate cannot dispatch until its referenced runbook task is complete.
+    - The Cockpit shows the gate’s unmet runbook prerequisite, operator, expected evidence, and rollback document.
+    - Planner → artifact → tasks → selected task → workflow preserves task IDs, dependencies, and manual-gate fields without parsing prose.
+    - Tests cover valid pairs, missing runbooks, duplicate IDs, cyclic dependencies, incomplete prerequisites, restart recovery, and human-readable Markdown rendering.
+
+- [ ] **Security-review requirements in plans are informational instead of an enforceable product-team workflow gate.**
+  - **What is broken.** Rune has no `security` product-team role in `RoleName`, no `agents/security/` charter, no model-policy binding, and no workflow stage that runs a security review. A task can name “security” in its Roles line or carry a `_(security review)_` marker without the runtime invoking a security reviewer.
+  - **User impact.** Security-sensitive work can be planned and presented as security-reviewed while receiving only the ordinary reviewer pass.
+  - **Root cause.**
+    - `src/roles/loader.ts` has a closed six-role union without `security`.
+    - `SizedTask` has `designerNeeded` but no structured `securityNeeded`.
+    - `planning-artifact.ts` and `team-task-deps.ts` do not preserve a security flag through task selection.
+    - `team-task-deps.ts` does not resolve or invoke a security role.
+  - **Required fix.**
+    1. Add `security` as a product-team role with `agents/security/SOUL.md`, append-only memory, baseline examples, loader coverage, and a model-policy entry.
+    2. Add a first-class `securityNeeded` field to `SizedTask`; preserve it across planner prompts, parsing, artifacts, task files, selected tasks, and workflow state.
+    3. Add a security-review stage for flagged tasks after implementation and before task closeout. It must emit structured objection-class findings and block on unresolved security findings.
+    4. Keep unflagged tasks free of the extra review stage.
+    5. Treat any human-readable `_(security review)_` marker as a rendering detail, not the only runtime signal.
+  - **Acceptance criteria.**
+    - A flagged task invokes the security role and waits for its structured verdict before closeout.
+    - An unflagged task does not invoke the security role.
+    - A security objection blocks closeout with a durable, actionable finding.
+    - Security flags survive planner output, Markdown rendering, selected-task reconstruction, restart recovery, and workflow dispatch.
+    - Tests cover loader/model-policy resolution, flag round-trips, workflow ordering, blocking findings, non-invocation for unflagged tasks, and malformed/unknown flag handling.
+
+- [ ] **The planning process does not systematically interrogate existing mechanisms, runner coverage, manual ownership, or platform feasibility before producing a dispatchable plan.**
+  - **What is broken.** PM, tech-lead, and critique prompts require a coherent plan, but they do not force an inventory of existing policies/configuration/deferrals, all runtime integration paths, manual operator decisions, or platform-capability risks. The result can be a polished plan that duplicates existing mechanisms, misses a legacy runner, creates impossible environment-gated work, or leaves a manual task with no operator handoff.
+  - **User impact.** Critical planning gaps are found only after detailed external review or during execution, when work has already been dispatched.
+  - **Required fix.**
+    1. Extend PM assessment prompts with conditional interview questions for manual work: release coverage, operator, target environment, evidence, rollback, and whether the gate blocks release.
+    2. Extend tech-lead prompts with an explicit implementation audit: existing mechanism and deferral inventory, producer/consumer map, legacy plus orchestrated runner coverage, task metadata survivability, external-repository boundaries, and host-prerequisite/capability-probe requirements.
+    3. Extend the neutral planning critique to reject plans that lack those answers or lack a concrete task/ADR/probe for each unresolved risk.
+    4. Add deterministic plan-validation checks where possible, including: manual gates require runbooks; named roles must exist; required manual-only checks are rejected; selector inputs have an owning creation surface; and affected runner paths are named.
+    5. Update planning-role tests with representative failures and repairs.
+  - **Acceptance criteria.**
+    - A plan involving manual work produces either resolved operator/evidence/rollback decisions or an explicit interview-needed result.
+    - A plan adding policy/configuration must name the existing mechanism it extends or include a justified replacement/deferral.
+    - A plan affecting work execution names every supported runner path or explicitly scopes out unsupported paths.
+    - A platform-enforcement claim without a proved capability produces a fail-closed probe task rather than an unsupported guarantee.
+    - A selector depending on task tags includes an owning task and user surface for creating/persisting those tags.
+    - Prompt and parser tests prove the PM, tech lead, and critique reject or repair representative incomplete plans.
 
 ## Loop-filed
 

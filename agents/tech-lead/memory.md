@@ -24,3 +24,8 @@ rules; the SOUL charter governs on any conflict.
 ## Scoping a task so it can actually compile
 
 - [2026-07-10 · source: 22-fix-run-dispatch-union-exhaustive-consumers] Extending a union / discriminated-union type is never "type-layer only." Under strict typecheck, every exhaustive `switch` (or mapper with no `default`) that consumes the type must handle the new members or the build fails, so the task implicitly owns those consumer sites. When shaping such a task or reviewing its test intent, require the SAME task to make each exhaustive consumer total — with a test pinning safe, non-throwing handling of the new members — or re-scope. A task worded "add to the union, no downstream changes" is self-contradictory; catch it at test-intent, not when the coder hits a red typecheck mid-implementation and improvises an out-of-scope patch to compile.
+
+## Dispatchable planning
+
+- [2026-07-16 · source: execution-profiles-planning-review] Before introducing a policy, config field, or enforcement layer, inventory the existing mechanism and its deferrals, then name every producer, consumer, runner path, persistence boundary, and operator surface it must reconcile with. A plan that adds a parallel allowlist, scope control, or lifecycle path without that map is incomplete.
+- [2026-07-16 · source: execution-profiles-planning-review] Task prose is not a runtime contract. For every planned role, dependency, manual gate, selector input, or review flag, prove the metadata survives planner output, artifact serialization, task selection, and workflow dispatch. If a manual step is needed, size an automatable runbook task before the manual-live gate and encode their dependency rather than relying on task order alone.

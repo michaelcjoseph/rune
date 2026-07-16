@@ -14,3 +14,8 @@ rules; the SOUL charter governs on any conflict.
 ## Protected local service ownership
 
 - [2026-06-29 · source: agent-protected-service-invariant] Never kill, stop, interrupt, or reuse protected listeners without explicit human approval: Rune web / cockpit at `127.0.0.1:3847` (`com.jarvis.daemon`) and Rune MCP daemon at `127.0.0.1:3848` (`com.jarvis.rune-mcp`). If a test collides, use a dynamic/task-local port, and before killing any process verify the PID was spawned by the current task/worktree/test command.
+
+## Planning acceptance boundaries
+
+- [2026-07-16 · source: execution-profiles-planning-review] Treat selection, environment capability, and evidence lifecycle as test-plan surfaces in their own right: test selector inputs and persisted facts, busy-versus-blocked classification, unavailable host prerequisites, required-versus-manual-only contradictions, evidence retention/GC, and the real runner path that dispatches the work.
+- [2026-07-16 · source: execution-profiles-planning-review] For a manual-live gate, QA must verify the runbook dependency and required retained evidence, while refusing to treat a fixture, configured profile, skipped native test, or written procedure as acceptance evidence.

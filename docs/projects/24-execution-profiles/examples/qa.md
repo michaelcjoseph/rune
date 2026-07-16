@@ -1,0 +1,7 @@
+### Good test intent for this project (harness infrastructure)
+
+- Assert on structured records, never narration: preflight failure is `{ ok: false, blocked: { kind: 'environment', missing: [{ kind: 'toolchain', name: 'uv', wanted: '>=0.5', found: null, remediation: ... }] } }` — pin the shape and provenance fields (argv, exitCode, toolVersions present), not exact stdout text.
+- Force environment failures safely: point PATH at an empty directory in the test env, or pass a products.json with an impossible toolchain version via PRODUCTS_CONFIG_FILE. Never kill, stop, or bind the protected listeners on 127.0.0.1:3847 or 127.0.0.1:3848.
+- Any server a test starts uses the repo's `server.listen(0, '127.0.0.1')` ephemeral-port idiom; fixture repos materialize under a temp dir via scripts/fixtures/materialize.ts (net-new — created by the fixture-nextjs-roundtrip task; it does not exist yet, so don't search for it before that task lands), never into the live workspace.
+- Union-extension tasks need a test per new member per exhaustive consumer proving non-throwing, meaningful handling (e.g. `supervisedRunState` maps 'blocked-on-environment' to a defined UI state).
+- For lease tests, assert queue ORDER and observability (introspection shows the waiter), not just eventual success — the spec's promise is 'queue instead of collide', and a test that only checks completion would pass under collision too.

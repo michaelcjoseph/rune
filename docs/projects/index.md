@@ -28,6 +28,7 @@ its `spec.md`.
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Done | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 | [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Done | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
 | [22-fix-run-dispatch](22-fix-run-dispatch/spec.md) | Not Started | Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff, reconciling to a readable terminal in the cockpit. |
+| [24-execution-profiles](24-execution-profiles/spec.md) | Not Started | Every product declares an executable build-and-acceptance contract, and Rune proves it with durable, contained evidence before development and at closeout. |
 ---
 
 ## 01-mvp — Done
@@ -452,3 +453,18 @@ A new "Note triage" nightly step (position 7, after Registry rebuild) extracts f
 
 - **Trust boundary:** tool-less agent, delimited untrusted journal, 20-item cap, allowlist write guards (new `assertScopedTopicWriteAllowed` for the scoped topic files), title-based dedupe, no product-repo commits.
 - **Task breakdown & test plan:** see [tasks.md](23-note-triage/tasks.md) and [test-plan.md](23-note-triage/test-plan.md). Built, green, and live-gate-verified 2026-07-08 (real journal → relay ideas + rune bug + research topics, cockpit-surfaced, audited, uncommitted; re-run dedupe hardened in-gate with a prompt do-not-re-emit list).
+
+## 24-execution-profiles — Not Started
+
+[Spec](24-execution-profiles/spec.md)
+
+Every product declares the environment and checks that constitute acceptance, and Rune proves that contract with durable, contained evidence before development and at closeout.
+
+Cockpit's acceptance harness is Node-shaped today: provisioning assumes `node_modules`, legacy commands are shell strings, the base-branch lock keys on product rather than repository, and non-Node closeout can fall back to reviewer interpretation — so mobile builds can close without compiling and Python work can stop at an ambiguous missing-tool judgment. This project makes each product declare a versioned `executionProfile` and makes Rune prove it, with the guarantees that keep a green result trustworthy.
+
+- **Profile + preflight:** a versioned `executionProfile` (toolchains, managed provisioning, argv-only commands, network policy, resources, artifacts, declarative tier selectors), snapshotted with a stable hash per run; preflight before the first agent dispatch — in both runner paths — produces durable `blocked-environment` for missing capabilities and queues busy resources.
+- **Repository identity + leases:** canonical repo identity from the git common directory, `rune-work/<product>/<project>` branches, a scope-boundary gate (reconciled with the existing `scopePath`), and a cancellable FIFO lease scheduler for base branches, simulators, emulators, ports, caches, build capacity, and devices — integrated with supervision and restart recovery, with a minimal "waiting on \<resource\>" indicator from Phase 1.
+- **Execution + evidence:** one no-shell argv executor; a pinned loopback network boundary (external denied, per-port denial of 3847/3848) proven by a Seatbelt capability probe; an approved-egress broker reusing the existing per-product `egressAllowlist` and flipping `EGRESS_ENFORCEMENT_MODE`; managed Node / custom-hook / Python-uv / iOS / Android provisioners with mid-run dependency-drift recording; contained redacted evidence with retention GC; and closeout gated on persisted evidence alone (manual-live checks become release items, never evidence).
+- **Operator surface + process:** authenticated, path-safe cockpit access to blocked-environment remediation, per-check evidence, artifacts, lease holders, and ordered waiters; a new **security** product-team role dispatched via a `_(security review)_` task marker; every manual-effort task split into an automatable `manual/` runbook task plus a manual-live gate.
+- **Phasing:** Phase 1 identity/containment/leases + the security role; Phase 2 schema/preflight/provisioning/evidence + Node and Brand (with migration runbook); Phase 3 Python (host-prereqs runbook + uv fixture + Assay); Phase 4 mobile (host-prereqs runbook + flow-tag plumbing + iOS/Android + Aura + Expo fixture); Phase 5 stub-free environment-gated acceptance, the release runbook, and the production release gate across Assay, Brand, Rune/Rune-MCP, and Aura (relay and writing migrate post-release).
+- **Task breakdown & test plan:** see [tasks.md](24-execution-profiles/tasks.md) and [test-plan.md](24-execution-profiles/test-plan.md). Test-first per phase; manual/live gates close only on persisted evidence from real production runs, each preceded by its runbook task.

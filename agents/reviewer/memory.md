@@ -18,3 +18,8 @@ rules; the SOUL charter governs on any conflict.
 ## Protected local service ownership
 
 - [2026-06-29 · source: agent-protected-service-invariant] Never kill, stop, interrupt, or reuse protected listeners without explicit human approval: Rune web / cockpit at `127.0.0.1:3847` (`com.jarvis.daemon`) and Rune MCP daemon at `127.0.0.1:3848` (`com.jarvis.rune-mcp`). If a test collides, require a dynamic/task-local port, and before killing any process verify the PID was spawned by the current task/worktree/test command.
+
+## Planning-artifact review
+
+- [2026-07-16 · source: execution-profiles-planning-review] Review a plan's dispatchability as well as its prose: every named role, review flag, dependency, manual gate, and acceptance artifact must be represented in the structured task model and reach the runtime workflow. A marker in `tasks.md` is not evidence that the orchestrator can enforce it.
+- [2026-07-16 · source: execution-profiles-planning-review] For security-sensitive plans, verify that an existing security policy is reconciled rather than duplicated, that the named security reviewer actually exists and blocks on findings, and that platform-enforcement claims have a fail-closed capability test.
