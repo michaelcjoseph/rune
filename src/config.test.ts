@@ -122,6 +122,33 @@ describe('config', () => {
     expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
   });
 
+  it('PRODUCT_CHAT_FALLBACK_ROOT defaults outside the broad workspace', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_WORKSPACE_DIR'] = '/tmp/workspace';
+    delete process.env['RUNE_PRODUCT_CHAT_FALLBACK_ROOT'];
+    const { default: config } = await import('./config.js');
+    const { homedir } = await import('node:os');
+    expect(config.PRODUCT_CHAT_FALLBACK_ROOT).toBe(
+      join(homedir(), '.rune', 'product-chat-workspaces'),
+    );
+    expect(config.PRODUCT_CHAT_FALLBACK_ROOT.startsWith(config.WORKSPACE_DIR)).toBe(false);
+  });
+
+  it('PRODUCT_CHAT_FALLBACK_ROOT expands a leading ~ override', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_PRODUCT_CHAT_FALLBACK_ROOT'] = '~/.rune/custom-product-chat';
+    const { default: config } = await import('./config.js');
+    const { homedir } = await import('node:os');
+    expect(config.PRODUCT_CHAT_FALLBACK_ROOT).toBe(
+      join(homedir(), '.rune', 'custom-product-chat'),
+    );
+    expect(config.PRODUCT_CHAT_FALLBACK_ROOT).not.toMatch(/^~/);
+  });
+
   it('resolves HTTP auth from RUNE_HTTP_SECRET and ignores the retired env name', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     process.env['TELEGRAM_USER_ID'] = '12345';

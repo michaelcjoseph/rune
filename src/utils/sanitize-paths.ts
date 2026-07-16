@@ -11,8 +11,7 @@
 import config, { PROJECT_ROOT } from '../config.js';
 import { homedir } from 'node:os';
 
-/** Replace VAULT_DIR / PROJECT_ROOT / WORKSPACE_DIR occurrences with `<vault>` / `<project>` /
- *  `<workspace>` placeholders. */
+/** Replace configured host roots with stable user-facing placeholders. */
 export function scrubAbsolutePaths(raw: string): string {
   let s = raw;
   if (config.VAULT_DIR) s = s.split(config.VAULT_DIR).join('<vault>');
@@ -20,6 +19,9 @@ export function scrubAbsolutePaths(raw: string): string {
     s = s.split(projectPath).join('<project>');
   }
   if (config.WORKSPACE_DIR) s = s.split(config.WORKSPACE_DIR).join('<workspace>');
+  if (config.PRODUCT_CHAT_FALLBACK_ROOT) {
+    s = s.split(config.PRODUCT_CHAT_FALLBACK_ROOT).join('<product-chat-workspace>');
+  }
   const home = homedir();
   if (home) s = s.split(home).join('<home>');
   return s;

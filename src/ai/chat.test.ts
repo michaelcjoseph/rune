@@ -10,6 +10,7 @@ vi.mock('../config.js', () => ({
   default: {
     MODEL_POLICY_FILE: '/test/model-policy.json',
     VAULT_DIR: '/test/vault',
+    WORKSPACE_DIR: '/test/workspace',
   },
 }));
 vi.mock('../intent/model-policy.js', () => ({
@@ -114,6 +115,62 @@ describe('provider-aware chat', () => {
     expect(configOverrides[0]).toContain('cockpit_active_runs');
   });
 
+  it('gives an unresolved product constrained workspace-write access without product MCP diagnostics', async () => {
+    const result = await askChatWithContext({
+      ...base,
+      model: 'gpt-5.6-terra',
+      authority: 'product-workspace-write',
+      product: 'unknown',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+    });
+
+    expect(runCodex).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      cwd: '/test/workspace',
+      product: 'unknown',
+      persistentSession: true,
+      sandboxMode: 'workspace-write',
+      strictConfig: true,
+      ignoreUserConfig: true,
+      ignoreRules: true,
+    }));
+    const configOverrides = runCodex.mock.calls[0]![1].configOverrides as string[];
+    expect(configOverrides).toEqual(expect.arrayContaining([
+      'mcp_servers={}',
+      'features.hooks=false',
+      'features.apps=false',
+      'features.remote_plugin=false',
+      'sandbox_workspace_write.network_access=false',
+      'sandbox_workspace_write.writable_roots=[]',
+      'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+      'sandbox_workspace_write.exclude_slash_tmp=true',
+    ]));
+    expect(result.executor).toEqual({
+      format: 'codex',
+      sessionId: 'codex-thread',
+      authority: 'product-workspace-write',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+    });
+  });
+
+  it('gives fallback Claude chat an empty strict MCP surface', async () => {
+    await askChatWithContext({
+      ...base,
+      model: 'opus',
+      authority: 'product-workspace-write',
+      product: 'unknown',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+      allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
+    });
+
+    const options = askClaude.mock.calls[0]![3];
+    expect(options.mcpArgs?.slice(0, 2)).toEqual(['--strict-mcp-config', '--mcp-config']);
+    expect(JSON.parse(options.mcpArgs[2])).toEqual({ mcpServers: {} });
+    expect(options.allowedTools).toEqual(['Read', 'Edit', 'Write', 'Bash']);
+  });
+
   it('scrubs the environment for global and product Codex chats alike', async () => {
     await askChatWithContext({ ...base, model: 'gpt-5.6-terra' });
     await askChatWithContext({ ...base, model: 'gpt-5.6-terra', product: 'writing' });
@@ -132,7 +189,7 @@ describe('provider-aware chat', () => {
     expect(cleanupCodexThread).toHaveBeenCalledWith('failed-thread-1234');
   });
 
-  it('resumes an existing Codex thread without replaying the transcript', async () => {
+  it('resumes an existing Codex thread while reasserting read-only authority', async () => {
     const result = await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
@@ -148,9 +205,8 @@ describe('provider-aware chat', () => {
     expect(runCodex).toHaveBeenCalledWith('current question', expect.objectContaining({
       resumeSessionId: 'codex-thread',
       persistentSession: true,
+      sandboxMode: 'read-only',
     }));
-    const options = runCodex.mock.calls[0]![1];
-    expect(options).not.toHaveProperty('sandboxMode');
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
@@ -159,52 +215,112 @@ describe('provider-aware chat', () => {
     });
   });
 
-  it('starts a read-only thread with replayed context when a product loses its workspace binding', async () => {
+  it.each([
+    {
+      name: 'resolved product to fallback workspace',
+      request: {
+        authority: 'product-workspace-write' as const,
+        product: 'rune',
+        cwd: '/test/workspace',
+        writableRoot: '/test/workspace',
+      },
+      executor: {
+        format: 'codex' as const,
+        sessionId: 'full-access-thread',
+        authority: 'product-full-access' as const,
+        cwd: '/workspace/rune',
+        writableRoot: '/workspace/rune',
+      },
+      sandboxMode: 'workspace-write',
+      expectedCwd: '/test/workspace',
+      expectedProduct: 'rune',
+    },
+    {
+      name: 'fallback workspace to resolved product',
+      request: {
+        authority: 'product-full-access' as const,
+        product: 'rune',
+        cwd: '/workspace/rune',
+        writableRoot: '/workspace/rune',
+      },
+      executor: {
+        format: 'codex' as const,
+        sessionId: 'fallback-thread',
+        authority: 'product-workspace-write' as const,
+        cwd: '/test/workspace',
+        writableRoot: '/test/workspace',
+      },
+      sandboxMode: 'danger-full-access',
+      expectedCwd: '/workspace/rune',
+      expectedProduct: 'rune',
+    },
+    {
+      name: 'fallback workspace to global read-only',
+      request: {
+        authority: 'read-only' as const,
+      },
+      executor: {
+        format: 'codex' as const,
+        sessionId: 'fallback-thread',
+        authority: 'product-workspace-write' as const,
+        cwd: '/test/workspace',
+        writableRoot: '/test/workspace',
+      },
+      sandboxMode: 'read-only',
+      expectedCwd: '/test/vault',
+      expectedProduct: undefined,
+    },
+  ])('rotates and replays context across $name', async ({
+    request,
+    executor,
+    sandboxMode,
+    expectedCwd,
+    expectedProduct,
+  }) => {
     const result = await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
-      product: 'rune',
-      priorMessages: [{ role: 'assistant', text: 'earlier product answer', ts: 'now' }],
-      executor: {
-        format: 'codex',
-        sessionId: 'full-access-thread',
-        authority: 'product-full-access',
-        cwd: '/workspace/rune',
-      },
+      priorMessages: [{ role: 'assistant', text: 'authority boundary context', ts: 'now' }],
+      executor,
+      ...request,
     });
 
     const [prompt, options] = runCodex.mock.calls[0]!;
     expect(prompt).toContain('SYSTEM');
-    expect(prompt).toContain('earlier product answer');
+    expect(prompt).toContain('authority boundary context');
     expect(options).toEqual(expect.objectContaining({
-      cwd: '/test/vault',
-      product: 'rune',
-      sandboxMode: 'read-only',
+      cwd: expectedCwd,
+      sandboxMode,
+      ...(expectedProduct ? { product: expectedProduct } : {}),
     }));
     expect(options).not.toHaveProperty('resumeSessionId');
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'codex-thread',
-      authority: 'read-only',
-      cwd: '/test/vault',
+      authority: request.authority,
+      cwd: expectedCwd,
+      ...('writableRoot' in request ? { writableRoot: request.writableRoot } : {}),
     });
   });
 
-  it('fails closed for a legacy product thread whose workspace cannot be resolved', async () => {
+  it('does not treat a legacy read-only product record as fallback workspace authority', async () => {
     await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
       product: 'rune',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+      authority: 'product-workspace-write',
       priorMessages: [{ role: 'assistant', text: 'legacy product context', ts: 'now' }],
-      executor: { format: 'codex', sessionId: 'legacy-product-thread' },
+      executor: { format: 'codex', sessionId: 'legacy-product-thread', writeEnabled: false },
     });
 
     const [prompt, options] = runCodex.mock.calls[0]!;
     expect(prompt).toContain('legacy product context');
     expect(options).toEqual(expect.objectContaining({
-      cwd: '/test/vault',
+      cwd: '/test/workspace',
       product: 'rune',
-      sandboxMode: 'read-only',
+      sandboxMode: 'workspace-write',
     }));
     expect(options).not.toHaveProperty('resumeSessionId');
   });
@@ -243,7 +359,7 @@ describe('provider-aware chat', () => {
     });
   });
 
-  it('resumes a matching full-access product thread without a sandbox argument', async () => {
+  it('resumes a matching full-access product thread while reasserting its sandbox', async () => {
     const result = await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
@@ -265,9 +381,8 @@ describe('provider-aware chat', () => {
       cwd: '/workspace/rune',
       product: 'rune',
       resumeSessionId: 'full-access-thread',
+      sandboxMode: 'danger-full-access',
     }));
-    const options = runCodex.mock.calls[0]![1];
-    expect(options).not.toHaveProperty('sandboxMode');
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'full-access-thread',
@@ -388,7 +503,7 @@ describe('provider-aware chat', () => {
     expect(options).not.toHaveProperty('resumeSessionId');
   });
 
-  it('resumes a full-access thread whose scoped writable root still matches', async () => {
+  it('resumes a full-access thread whose scoped writable root still matches and reasserts authority', async () => {
     const result = await askChatWithContext({
       ...base,
       model: 'gpt-5.6-terra',
@@ -410,9 +525,8 @@ describe('provider-aware chat', () => {
       cwd: '/workspace/writing',
       product: 'writing',
       resumeSessionId: 'writing-scope-thread',
+      sandboxMode: 'danger-full-access',
     }));
-    const options = runCodex.mock.calls[0]![1];
-    expect(options).not.toHaveProperty('sandboxMode');
     expect(result.executor).toEqual({
       format: 'codex',
       sessionId: 'writing-scope-thread',
@@ -420,6 +534,81 @@ describe('provider-aware chat', () => {
       cwd: '/workspace/writing',
       writableRoot: '/workspace/writing/docs/rune',
     });
+  });
+
+  it('resumes a matching fallback workspace thread and reasserts workspace-write authority', async () => {
+    const result = await askChatWithContext({
+      ...base,
+      model: 'gpt-5.6-terra',
+      product: 'unknown',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+      authority: 'product-workspace-write',
+      priorMessages: [{ role: 'user', text: 'do not replay fallback history', ts: 'now' }],
+      executor: {
+        format: 'codex',
+        sessionId: 'fallback-thread',
+        authority: 'product-workspace-write',
+        cwd: '/test/workspace',
+        writableRoot: '/test/workspace',
+      },
+    });
+
+    expect(runCodex).toHaveBeenCalledWith('current question', expect.objectContaining({
+      cwd: '/test/workspace',
+      product: 'unknown',
+      resumeSessionId: 'fallback-thread',
+      sandboxMode: 'workspace-write',
+    }));
+    expect(result.executor).toEqual({
+      format: 'codex',
+      sessionId: 'fallback-thread',
+      authority: 'product-workspace-write',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+    });
+  });
+
+  it.each([
+    {
+      name: 'fallback cwd',
+      executor: {
+        format: 'codex' as const,
+        sessionId: 'fallback-old-cwd',
+        authority: 'product-workspace-write' as const,
+        cwd: '/old/workspace',
+        writableRoot: '/test/workspace',
+      },
+    },
+    {
+      name: 'fallback writable root',
+      executor: {
+        format: 'codex' as const,
+        sessionId: 'fallback-old-root',
+        authority: 'product-workspace-write' as const,
+        cwd: '/test/workspace',
+        writableRoot: '/old/workspace',
+      },
+    },
+  ])('rotates a fallback thread when its $name changes', async ({ executor }) => {
+    await askChatWithContext({
+      ...base,
+      model: 'gpt-5.6-terra',
+      product: 'unknown',
+      cwd: '/test/workspace',
+      writableRoot: '/test/workspace',
+      authority: 'product-workspace-write',
+      priorMessages: [{ role: 'assistant', text: 'fallback boundary context', ts: 'now' }],
+      executor,
+    });
+
+    const [prompt, options] = runCodex.mock.calls[0]!;
+    expect(prompt).toContain('fallback boundary context');
+    expect(options).toEqual(expect.objectContaining({
+      cwd: '/test/workspace',
+      sandboxMode: 'workspace-write',
+    }));
+    expect(options).not.toHaveProperty('resumeSessionId');
   });
 
   it('rotates a metadata-less legacy product thread and replays its transcript', async () => {

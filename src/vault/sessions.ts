@@ -1,12 +1,13 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cleanupCodexThread } from '../ai/codex-sessions.js';
-import { existsSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import config from '../config.js';
 import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import { getTodayDate, getTimestamp } from '../utils/time.js';
 import { readProductsConfig } from '../jobs/sandbox-runtime.js';
+import { isContainedIn } from '../intent/sandbox.js';
 
 const log = createLogger('sessions');
 
@@ -16,7 +17,10 @@ const PROMPT_FILE_CHAR_LIMIT = 4_000;
 const MAX_PROJECT_CONTEXTS = 5;
 
 export type Transport = 'telegram' | 'webview';
-export type ChatAuthority = 'read-only' | 'product-full-access';
+export type ChatAuthority =
+  | 'read-only'
+  | 'product-workspace-write'
+  | 'product-full-access';
 export type SessionScope =
   | { kind: 'global'; product?: undefined }
   | { kind: 'product'; product: string };
@@ -57,6 +61,11 @@ export interface ProductChatWorkspace {
   repoRoot: string;
   workRoot: string;
   scopePath?: string;
+}
+
+export interface ResolvedProductChat {
+  workspace: ProductChatWorkspace;
+  productContext: ProductPromptContext;
 }
 
 export interface BuildSessionSystemPromptInput {
@@ -133,6 +142,96 @@ function buildGenericSystemPrompt(workspaceDir: string | undefined): string {
   return `${VAULT_SYSTEM_PROMPT_BASE}${workspacePrompt}`;
 }
 
+interface ProductPromptSections {
+  repoSentence: string;
+  actLine: string;
+  capability: string;
+  secondBrain: string;
+  defaultPosture: string;
+  routingGuidance: string;
+}
+
+const KB_SECOND_BRAIN = `SECOND BRAIN (read-only by policy): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it from product chat — it is maintained by dedicated agents and scheduled jobs.`;
+
+function kbRoutingGuidance(canAct: boolean): string {
+  return `KNOWLEDGE BASE (rune-kb MCP) is your first move for any question about the user's world (people, companies, concepts, frameworks, prior decisions). Don't grep the vault — ask the synthesizer.
+
+HOW TO ANSWER:
+- Pick mode by shape: development/lookup → ${canAct ? 'act' : 'answer'} directly; strategy/reflection → probe first.
+- Route by subject: code/this-repo → repo tools; the user's domain (concepts, people, prior thinking) → kb_query first; the outside world → web.`;
+}
+
+function configuredRepoSentence(repoPath: string | undefined, scopePath: string | undefined): string {
+  return repoPath
+    ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
+    : `This product's configured repository could not be resolved.`;
+}
+
+function fullAccessPromptSections(
+  product: string,
+  repoPath: string | undefined,
+  scopePath: string | undefined,
+): ProductPromptSections {
+  const workRoot = repoPath && scopePath ? join(repoPath, scopePath) : repoPath;
+  const workspaceSentence = workRoot
+    ? `Your editable product workspace is ${workRoot}.`
+    : `Your editable product workspace is this product's configured workspace.`;
+  return {
+    repoSentence: configuredRepoSentence(repoPath, scopePath),
+    actLine: `For development questions, small edits, and running builds/tests, act directly: read the repo, make scoped edits, run the check.`,
+    capability: `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Keep edits inside that product workspace; Bash starts at the repo root so you can run builds/tests/git. Use cockpit_list_runs, cockpit_inspect_run, and cockpit_active_runs to diagnose this product's work runs; never read Rune's logs directly. CRITICAL — your tools are NOT OS-confined (they run with the operator's full filesystem access), so these boundaries are yours to honor, not the harness's to enforce: (1) Write ONLY inside this product's repo — never the vault, never another product's repo, never anywhere else. (2) The vault is a separately-managed store, reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If asked to save to the vault/journal/notes/KB, do NOT do it by hand — name the slash command or flow that owns that write. (3) Do NOT read or print Rune's own secrets — its .env / .env.local, credentials directories, logs, or MCP token stores — even though the filesystem would allow it; you have no task that needs them. For larger multi-step or risky work, propose the existing cockpit work-run/Fix flow and ask the user to start it there.`,
+    secondBrain: KB_SECOND_BRAIN,
+    defaultPosture: `DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly and act. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in something specific you found in the repo or the second brain, then give your view.`,
+    routingGuidance: kbRoutingGuidance(true),
+  };
+}
+
+function fallbackPromptSections(product: string, fallbackRoot: string): ProductPromptSections {
+  return {
+    repoSentence: `This product's configured repository could not be resolved. Your working directory is the dedicated fallback workspace ${fallbackRoot}.`,
+    actLine: `For development questions and small edits, work directly inside the fallback workspace while making the unresolved repository boundary explicit.`,
+    capability: `FALLBACK WORKSPACE AUTHORITY: You can read, edit, and run code with Read/Edit/Write/Bash inside ${fallbackRoot}. This is a constrained unresolved-product scratch workspace, not authority over a resolved product repository, the shared workspace, or the rest of the filesystem. Keep every write inside this directory, do not assume a particular repository, and do not use or claim product-scoped Cockpit or rune-kb diagnostics. Never write the vault or read Rune secrets.`,
+    secondBrain: `SECOND BRAIN: This unresolved fallback has no vault or rune-kb tools. Do not inspect or write the vault directly; ask the user to resolve/configure the product repository or use the owning slash-command flow when second-brain access is required.`,
+    defaultPosture: `DEFAULT POSTURE — a capable engineer paired with the user in an unresolved scratch workspace for ${product}. Answer from the files present in this workspace and make the missing repository configuration explicit when it limits the task.`,
+    routingGuidance: `HOW TO ANSWER:
+- Use Read/Glob/Grep for files already present in the fallback workspace and Edit/Write/Bash for scoped changes there.
+- Do not claim access to a configured product repository, the rune-kb knowledge base, Cockpit diagnostics, or files outside the fallback workspace.
+- Use web search for external documentation or facts when needed.`,
+  };
+}
+
+function readOnlyPromptSections(
+  product: string,
+  repoPath: string | undefined,
+  scopePath: string | undefined,
+): ProductPromptSections {
+  return {
+    repoSentence: configuredRepoSentence(repoPath, scopePath),
+    actLine: `For development and factual questions, answer directly from available context.`,
+    capability: `READ-ONLY PRODUCT CHAT: In this chat you read and reason about ${product}. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`,
+    secondBrain: KB_SECOND_BRAIN,
+    defaultPosture: `DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in available repo or second-brain context, then give your view.`,
+    routingGuidance: kbRoutingGuidance(false),
+  };
+}
+
+function productPromptSections(
+  product: string,
+  repoPath: string | undefined,
+  scopePath: string | undefined,
+  authority: ChatAuthority,
+  fallbackRoot: string,
+): ProductPromptSections {
+  switch (authority) {
+    case 'product-full-access':
+      return fullAccessPromptSections(product, repoPath, scopePath);
+    case 'product-workspace-write':
+      return fallbackPromptSections(product, fallbackRoot);
+    case 'read-only':
+      return readOnlyPromptSections(product, repoPath, scopePath);
+  }
+}
+
 /** Identity preamble for a PRODUCT-scoped chat. Unlike the global vault persona,
  *  Rune here is the development agent for one product, working IN that product's
  *  repo; the second brain is reached read-only through the rune-kb MCP, never as
@@ -144,36 +243,23 @@ function buildProductIdentityPreamble(
   repoPath: string | undefined,
   scopePath: string | undefined,
   authority: ChatAuthority,
+  fallbackWorkspace?: string,
 ): string {
-  const writeEnabled = authority === 'product-full-access';
-  const workRoot = repoPath && scopePath ? join(repoPath, scopePath) : repoPath;
-  const repoSentence = repoPath
-    ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
-    : `Your working repo is this product's repository.`;
-  const workspaceSentence = workRoot
-    ? `Your editable product workspace is ${workRoot}.`
-    : `Your editable product workspace is this product's configured workspace.`;
-  const capability = writeEnabled
-    ? `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Keep edits inside that product workspace; Bash starts at the repo root so you can run builds/tests/git. Use cockpit_list_runs, cockpit_inspect_run, and cockpit_active_runs to diagnose this product's work runs; never read Rune's logs directly. CRITICAL — your tools are NOT OS-confined (they run with the operator's full filesystem access), so these boundaries are yours to honor, not the harness's to enforce: (1) Write ONLY inside this product's repo — never the vault, never another product's repo, never anywhere else. (2) The vault is a separately-managed store, reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If asked to save to the vault/journal/notes/KB, do NOT do it by hand — name the slash command or flow that owns that write. (3) Do NOT read or print Rune's own secrets — its .env / .env.local, credentials directories, logs, or MCP token stores — even though the filesystem would allow it; you have no task that needs them. For larger multi-step or risky work, propose the existing cockpit work-run/Fix flow and ask the user to start it there.`
-    : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
-  const actLine = writeEnabled
-    ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make scoped edits, run the check.`
-    : `For development and factual questions, answer directly from the repo.`;
+  const fallbackRoot = fallbackWorkspace ?? config.PRODUCT_CHAT_FALLBACK_ROOT;
+  const sections = productPromptSections(product, repoPath, scopePath, authority, fallbackRoot);
+  const { repoSentence, actLine, capability, secondBrain, defaultPosture, routingGuidance } = sections;
   return `You are Rune, the development agent for the ${product} product. ${repoSentence} ${actLine}
 
 ${capability}
 
-SECOND BRAIN (read-only by policy): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it from product chat — it is maintained by dedicated agents and scheduled jobs.
-
-DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly and act. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in something specific you found in the repo or the second brain, then give your view.
-
-KNOWLEDGE BASE (rune-kb MCP) is your first move for any question about the user's world (people, companies, concepts, frameworks, prior decisions). Don't grep the vault — ask the synthesizer.
+${secondBrain}
 
 WEB SEARCH (WebSearch, WebFetch): use actively for anything outside the repo and the second brain — library/API docs, third-party behavior, current events. Cite sources inline.
 
-HOW TO ANSWER:
-- Pick mode by shape: development/lookup → act directly; strategy/reflection → probe first.
-- Route by subject: code/this-repo → repo tools; the user's domain (concepts, people, prior thinking) → kb_query first; the outside world → web.
+${defaultPosture}
+
+${routingGuidance}
+
 - Responses may render on mobile — be concise; structure over length.
 - The user can end the thread with /fresh.`;
 }
@@ -239,10 +325,26 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
   }
 
   const authority = input.authority ?? 'read-only';
+  if (authority === 'product-workspace-write') {
+    const fallbackWorkspace = input.workspaceDir ?? config.PRODUCT_CHAT_FALLBACK_ROOT;
+    const preamble = buildProductIdentityPreamble(
+      scope.product,
+      undefined,
+      undefined,
+      authority,
+      fallbackWorkspace,
+    );
+    return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be safely resolved. Work only inside the dedicated fallback workspace ${fallbackWorkspace}; do not assume that it is the product's repository, and do not claim product-scoped Cockpit or rune-kb diagnostics.`;
+  }
   const context = input.productContext ?? loadProductPromptContext(scope.product);
   if (!context) {
-    const preamble = buildProductIdentityPreamble(scope.product, undefined, undefined, authority);
-    return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.`;
+    const preamble = buildProductIdentityPreamble(
+      scope.product,
+      undefined,
+      undefined,
+      authority,
+    );
+    return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context.`;
   }
 
   const preamble = buildProductIdentityPreamble(scope.product, context.repoPath, context.scopePath, authority);
@@ -254,25 +356,95 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
   return `${preamble}\n\n${boundedProductPrompt}`;
 }
 
-/** Resolve the repo root and the INTENDED editable workspace for a product
- *  chat, or null when the product is unknown or has no repo configured. Bash
- *  runs from repoRoot; workRoot is the subtree the system prompt asks Rune to
- *  keep edits within (repoPath/scopePath for scoped shared-repo products like
- *  writing, else repoPath).
+/** Resolve and canonicalize a product's repo root, intended editable workspace,
+ *  and prompt context, or return null when configuration is unknown or unsafe.
+ *  Validation happens before repo context is read, binding the authority
+ *  decision and prompt context to the same filesystem snapshot for the turn.
  *
  *  IMPORTANT — workRoot is a PROMPT-LEVEL intent, not an enforced boundary. The
  *  chat spawns with `--dangerously-skip-permissions`, under which the spawn cwd
  *  (repoRoot) is itself writable and `--add-dir` does not restrict writes, so
  *  neither workRoot nor repoRoot is OS-confined. Containment is the prompt +
  *  the vault's git recoverability. See buildProductIdentityPreamble. */
-export function resolveProductChatWorkspace(product: string): ProductChatWorkspace | null {
-  const context = loadProductPromptContext(product);
-  if (!context || !context.repoPath) return null;
-  return {
-    repoRoot: context.repoPath,
-    workRoot: context.scopePath ? join(context.repoPath, context.scopePath) : context.repoPath,
-    ...(context.scopePath ? { scopePath: context.scopePath } : {}),
+export function resolveProductChat(product: string): ResolvedProductChat | null {
+  try {
+    const productConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product];
+    if (!productConfig) return null;
+    const scopePath = normalizeScopePath(productConfig.scopePath);
+    if (scopePath === null) return null;
+    const repoRoot = existingRealDirectory(productConfig.repoPath);
+    if (!repoRoot) return null;
+    const workRoot = existingRealDirectory(scopePath ? join(repoRoot, scopePath) : repoRoot);
+    if (!workRoot || !isContainedIn(repoRoot, workRoot)) return null;
+    return {
+      workspace: {
+        repoRoot,
+        workRoot,
+        ...(scopePath ? { scopePath } : {}),
+      },
+      productContext: {
+        product,
+        repoPath: repoRoot,
+        ...(scopePath ? { scopePath } : {}),
+        repoDocs: loadRepoDocs(workRoot, scopePath),
+        projects: loadProjectContexts(workRoot, scopePath),
+        worldview: loadWorldviewContext(),
+      },
+    };
+  } catch (err) {
+    log.warn('Failed to resolve product chat', { product, error: (err as Error).message });
+    return null;
+  }
+}
+
+function existingRealDirectory(path: string): string | null {
+  try {
+    if (!statSync(path).isDirectory()) return null;
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function pathOverlaps(left: string, right: string): boolean {
+  return isContainedIn(left, right) || isContainedIn(right, left);
+}
+
+/** Provision one dedicated unresolved-product scratch workspace. The real path
+ *  must remain disjoint from the vault and every configured product repo. */
+export function resolveProductFallbackWorkspace(product: string): ProductChatWorkspace {
+  const digest = createHash('sha256').update(product).digest('hex').slice(0, 20);
+  const protectedRoots = [
+    { label: 'vault', path: config.VAULT_DIR },
+    ...Object.entries(readProductsConfig(config.PRODUCTS_CONFIG_FILE)).map(([slug, entry]) => ({
+      label: `product '${slug}'`,
+      path: entry.repoPath,
+    })),
+  ].map(root => ({
+    label: root.label,
+    path: existingRealDirectory(root.path) ?? resolve(root.path),
+  }));
+  const assertDisjoint = (candidate: string): void => {
+    for (const protectedRoot of protectedRoots) {
+      if (pathOverlaps(candidate, protectedRoot.path)) {
+        throw new Error(`Product fallback workspace overlaps protected ${protectedRoot.label} root.`);
+      }
+    }
   };
+
+  const configuredRoot = resolve(config.PRODUCT_CHAT_FALLBACK_ROOT);
+  assertDisjoint(configuredRoot);
+  mkdirSync(configuredRoot, { recursive: true });
+  const root = realpathSync(configuredRoot);
+  assertDisjoint(root);
+  const requested = join(root, digest);
+  mkdirSync(requested, { recursive: true });
+  const workRoot = realpathSync(requested);
+  if (workRoot !== resolve(requested)) {
+    throw new Error('Product fallback workspace resolved through an unexpected symlink.');
+  }
+  assertDisjoint(workRoot);
+  return { repoRoot: workRoot, workRoot };
 }
 
 function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {
@@ -284,10 +456,10 @@ function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null
   }
 }
 
-function normalizeScopePath(scopePath: string | undefined): string | undefined {
+function normalizeScopePath(scopePath: string | undefined): string | null | undefined {
   if (!scopePath) return undefined;
   const normalized = normalize(scopePath);
-  if (isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return undefined;
+  if (isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return null;
   return normalized === '.' ? undefined : normalized;
 }
 
@@ -295,8 +467,7 @@ function pathInProductScope(relPath: string, scopePath: string | undefined): str
   return scopePath ? join(scopePath, relPath) : relPath;
 }
 
-function loadRepoDocs(repoPath: string, scopePath?: string): ProductPromptDoc[] {
-  const root = scopePath ? join(repoPath, scopePath) : repoPath;
+function loadRepoDocs(root: string, scopePath?: string): ProductPromptDoc[] {
   const candidates = [
     'CLAUDE.md',
     'AGENTS.md',
@@ -309,8 +480,7 @@ function loadRepoDocs(repoPath: string, scopePath?: string): ProductPromptDoc[] 
     .filter((doc): doc is ProductPromptDoc => Boolean(doc));
 }
 
-function loadProjectContexts(repoPath: string, scopePath?: string): ProductPromptProject[] {
-  const root = scopePath ? join(repoPath, scopePath) : repoPath;
+function loadProjectContexts(root: string, scopePath?: string): ProductPromptProject[] {
   const projectsRel = scopePath ? 'projects' : join('docs', 'projects');
   const projectsDir = join(root, projectsRel);
   try {
@@ -362,22 +532,7 @@ function loadWorldviewContext(): ProductPromptWorldview[] {
 }
 
 function loadProductPromptContext(product: string): ProductPromptContext | null {
-  try {
-    const productConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product];
-    if (!productConfig) return null;
-    const scopePath = normalizeScopePath(productConfig.scopePath);
-    return {
-      product,
-      repoPath: productConfig.repoPath,
-      ...(scopePath ? { scopePath } : {}),
-      repoDocs: loadRepoDocs(productConfig.repoPath, scopePath),
-      projects: loadProjectContexts(productConfig.repoPath, scopePath),
-      worldview: loadWorldviewContext(),
-    };
-  } catch (err) {
-    log.warn('Failed to load product prompt context', { product, error: (err as Error).message });
-    return null;
-  }
+  return resolveProductChat(product)?.productContext ?? null;
 }
 
 /** Composite key shape: global `${transport}:${userId}`, product

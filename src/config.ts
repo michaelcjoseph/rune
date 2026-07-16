@@ -46,6 +46,9 @@ const config = {
 
   VAULT_DIR: required('VAULT_DIR'),
   WORKSPACE_DIR: optional('RUNE_WORKSPACE_DIR') ?? PROJECT_ROOT,
+  PRODUCT_CHAT_FALLBACK_ROOT:
+    optional('RUNE_PRODUCT_CHAT_FALLBACK_ROOT') ??
+    join(homedir(), '.rune', 'product-chat-workspaces'),
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
   LENNY_MCP_TOKEN: process.env['LENNY_MCP_TOKEN'] || '',

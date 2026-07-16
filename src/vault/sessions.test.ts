@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  realpathSync,
+  existsSync,
+  symlinkSync,
+  unlinkSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { SessionScope } from './sessions.js';
+import type { ProductPromptContext, SessionScope } from './sessions.js';
 
 const tmpDir = join(tmpdir(), `rune-sessions-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
@@ -10,6 +19,7 @@ const sessionsFile = join(tmpDir, 'tg-sessions.json');
 const productsConfigFile = join(tmpDir, 'products.json');
 const workspaceDir = join(tmpDir, 'workspace');
 const vaultDir = join(tmpDir, 'vault');
+const fallbackRoot = join(tmpDir, 'fallback-product-chats');
 
 vi.mock('../config.js', () => ({
   default: {
@@ -18,6 +28,7 @@ vi.mock('../config.js', () => ({
     TIMEZONE: 'America/Chicago',
     PRODUCTS_CONFIG_FILE: productsConfigFile,
     WORKSPACE_DIR: workspaceDir,
+    PRODUCT_CHAT_FALLBACK_ROOT: fallbackRoot,
     VAULT_DIR: vaultDir,
     DEFAULT_CHAT_MODEL: 'gpt-5.6-terra',
   },
@@ -39,43 +50,10 @@ const {
   persistSessions,
   appendMessageToSession,
   getSessionMessages,
+  buildSessionSystemPrompt,
+  resolveProductChat,
+  resolveProductFallbackWorkspace,
 } = sessionsModule;
-
-interface ProductPromptFixture {
-  product: string;
-  repoPath: string;
-  scopePath?: string;
-  repoDocs: Array<{ path: string; content: string }>;
-  projects: Array<{ slug: string; spec: string; tasks: string }>;
-  worldview: Array<{ path: string; anchor?: string; content: string }>;
-}
-
-type BuildSessionSystemPrompt = (input: {
-  scope?: SessionScope;
-  productContext?: ProductPromptFixture;
-  workspaceDir?: string;
-  authority?: 'read-only' | 'product-full-access';
-}) => string;
-
-function requireBuildSessionSystemPrompt(): BuildSessionSystemPrompt {
-  const fn = (sessionsModule as unknown as {
-    buildSessionSystemPrompt?: BuildSessionSystemPrompt;
-  }).buildSessionSystemPrompt;
-  expect(
-    fn,
-    'src/vault/sessions.ts must export buildSessionSystemPrompt for conversation prompt assembly',
-  ).toEqual(expect.any(Function));
-  return fn!;
-}
-
-function buildSessionSystemPrompt(input: {
-  scope?: SessionScope;
-  productContext?: ProductPromptFixture;
-  workspaceDir?: string;
-  authority?: 'read-only' | 'product-full-access';
-}): string {
-  return requireBuildSessionSystemPrompt()(input);
-}
 
 function writeFileEnsuringDir(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -425,7 +403,7 @@ describe('vault/sessions', () => {
 
   describe('buildSessionSystemPrompt — product-tailored context', () => {
     const runeScope: SessionScope = { kind: 'product', product: 'rune' };
-    const runeContext: ProductPromptFixture = {
+    const runeContext: ProductPromptContext = {
       product: 'rune',
       repoPath: '/workspace/rune',
       repoDocs: [
@@ -580,16 +558,43 @@ describe('vault/sessions', () => {
       expect(prompt).not.toContain('Read/Edit/Write');
     });
 
+    it('describes unresolved product workspace authority without claiming a resolved repo or diagnostics', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'unknown' },
+        productContext: {
+          product: 'unknown',
+          repoPath: '/stale/product/repo',
+          repoDocs: [{ path: 'README.md', content: 'stale repo context' }],
+          projects: [],
+          worldview: [],
+        },
+        workspaceDir: '/workspace',
+        authority: 'product-workspace-write',
+      });
+
+      expect(prompt).toContain('dedicated fallback workspace /workspace');
+      expect(prompt).toContain('Read/Edit/Write/Bash');
+      expect(prompt).toMatch(/constrained unresolved-product scratch workspace/i);
+      expect(prompt).toMatch(/not authority over a resolved product repository/i);
+      expect(prompt).toMatch(/do not use or claim product-scoped Cockpit or rune-kb diagnostics/i);
+      expect(prompt).toMatch(/no vault or rune-kb tools/i);
+      expect(prompt).not.toMatch(/full filesystem access|not OS-confined/i);
+      expect(prompt).not.toContain('Your working repo is this product');
+      expect(prompt).not.toContain('/stale/product/repo');
+      expect(prompt).not.toContain('stale repo context');
+      expect(prompt).not.toContain('kb_query first');
+      expect(prompt).not.toContain('code/this-repo → repo tools');
+    });
+
     it('fails closed instead of grounding one product chat with another product context', () => {
-      const buildPrompt = requireBuildSessionSystemPrompt();
-      const auraContext: ProductPromptFixture = {
+      const auraContext: ProductPromptContext = {
         ...runeContext,
         product: 'aura',
         repoPath: '/workspace/aura',
         repoDocs: [{ path: 'README.md', content: 'Aura-only billing dashboard context.' }],
       };
 
-      expect(() => buildPrompt({
+      expect(() => buildSessionSystemPrompt({
         scope: runeScope,
         productContext: auraContext,
         workspaceDir: '/workspace',
@@ -598,13 +603,15 @@ describe('vault/sessions', () => {
 
     it('loads runnable chat context for rune-mcp, writing, and brand from product policy', () => {
       const { runeRepo, siteRepo } = writeProductChatFixture();
+      const realRuneRepo = realpathSync(runeRepo);
+      const realSiteRepo = realpathSync(siteRepo);
 
       const runeMcpPrompt = buildSessionSystemPrompt({
         scope: { kind: 'product', product: 'rune-mcp' },
         workspaceDir,
       });
       expect(runeMcpPrompt).toMatch(/active product:\s*rune-mcp/i);
-      expect(runeMcpPrompt).toContain(`Product repo: ${runeRepo}`);
+      expect(runeMcpPrompt).toContain(`Product repo: ${realRuneRepo}`);
       expect(runeMcpPrompt).toContain('RUNE_MCP_REPO_CONTEXT');
       expect(runeMcpPrompt).toContain('RUNE_MCP_PROJECT_CONTEXT');
       expect(runeMcpPrompt).not.toContain('BRAND_ROOT_CONTEXT');
@@ -615,7 +622,7 @@ describe('vault/sessions', () => {
         workspaceDir,
       });
       expect(writingPrompt).toMatch(/active product:\s*writing/i);
-      expect(writingPrompt).toContain(`Product repo: ${siteRepo}`);
+      expect(writingPrompt).toContain(`Product repo: ${realSiteRepo}`);
       expect(writingPrompt).toContain('WRITING_SCOPED_CONTEXT');
       expect(writingPrompt).toContain('WRITING_PROJECT_CONTEXT');
       expect(writingPrompt).not.toContain('BRAND_ROOT_CONTEXT');
@@ -626,7 +633,7 @@ describe('vault/sessions', () => {
         workspaceDir,
       });
       expect(brandPrompt).toMatch(/active product:\s*brand/i);
-      expect(brandPrompt).toContain(`Product repo: ${siteRepo}`);
+      expect(brandPrompt).toContain(`Product repo: ${realSiteRepo}`);
       expect(brandPrompt).toContain('BRAND_ROOT_CONTEXT');
       expect(brandPrompt).toContain('BRAND_PROJECT_CONTEXT');
       expect(brandPrompt).not.toContain('WRITING_SCOPED_CONTEXT');
@@ -634,31 +641,125 @@ describe('vault/sessions', () => {
     });
   });
 
-  describe('resolveProductChatWorkspace', () => {
-    function resolveProductChatWorkspace(product: string): { repoRoot: string; workRoot: string; scopePath?: string } | null {
-      const fn = (sessionsModule as unknown as {
-        resolveProductChatWorkspace?: (p: string) => { repoRoot: string; workRoot: string; scopePath?: string } | null;
-      }).resolveProductChatWorkspace;
-      expect(
-        fn,
-        'src/vault/sessions.ts must export resolveProductChatWorkspace so the chat handler can set repo-root cwd and scoped writable roots',
-      ).toEqual(expect.any(Function));
-      return fn!(product);
-    }
-
+  describe('resolveProductChat', () => {
     it('returns repoRoot and workRoot for a configured product', () => {
       const { runeRepo, siteRepo } = writeProductChatFixture();
-      expect(resolveProductChatWorkspace('rune-mcp')).toEqual({ repoRoot: runeRepo, workRoot: runeRepo });
-      expect(resolveProductChatWorkspace('writing')).toEqual({
-        repoRoot: siteRepo,
-        workRoot: join(siteRepo, 'docs/rune'),
+      const realRuneRepo = realpathSync(runeRepo);
+      const realSiteRepo = realpathSync(siteRepo);
+      expect(resolveProductChat('rune-mcp')?.workspace).toEqual({ repoRoot: realRuneRepo, workRoot: realRuneRepo });
+      expect(resolveProductChat('writing')?.workspace).toEqual({
+        repoRoot: realSiteRepo,
+        workRoot: realpathSync(join(siteRepo, 'docs/rune')),
         scopePath: 'docs/rune',
       });
     });
 
     it('returns null for an unknown product', () => {
       writeProductChatFixture();
-      expect(resolveProductChatWorkspace('does-not-exist')).toBeNull();
+      expect(resolveProductChat('does-not-exist')).toBeNull();
+    });
+
+    it('returns null for a configured product whose repository is missing', () => {
+      writeProductChatFixture();
+      const productConfig = JSON.parse(readFileSync(productsConfigFile, 'utf8')) as Record<string, unknown>;
+      productConfig['stale'] = {
+        class: 'internal',
+        repoPath: join(tmpDir, 'missing-repo'),
+        baseBranch: 'main',
+        credentialsFile: join(tmpDir, 'creds', 'stale.env'),
+        egressAllowlist: [],
+      };
+      writeFileSync(productsConfigFile, JSON.stringify(productConfig));
+      expect(resolveProductChat('stale')).toBeNull();
+    });
+
+    it('returns null when a configured scope directory is missing', () => {
+      const { siteRepo } = writeProductChatFixture();
+      const productConfig = JSON.parse(readFileSync(productsConfigFile, 'utf8')) as Record<string, unknown>;
+      productConfig['stale-scope'] = {
+        class: 'external',
+        repoPath: siteRepo,
+        scopePath: 'docs/missing',
+        baseBranch: 'main',
+        credentialsFile: join(tmpDir, 'creds', 'stale-scope.env'),
+        egressAllowlist: [],
+      };
+      writeFileSync(productsConfigFile, JSON.stringify(productConfig));
+      expect(resolveProductChat('stale-scope')).toBeNull();
+    });
+
+    it.each(['/absolute/scope', '../outside'])(
+      'rejects a configured scope path that is not repo-relative: %s',
+      (scopePath) => {
+        const { siteRepo } = writeProductChatFixture();
+        const productConfig = JSON.parse(readFileSync(productsConfigFile, 'utf8')) as Record<string, unknown>;
+        productConfig['invalid-scope'] = {
+          class: 'external',
+          repoPath: siteRepo,
+          scopePath,
+          baseBranch: 'main',
+          credentialsFile: join(tmpDir, 'creds', 'invalid-scope.env'),
+          egressAllowlist: [],
+        };
+        writeFileSync(productsConfigFile, JSON.stringify(productConfig));
+        expect(resolveProductChat('invalid-scope')).toBeNull();
+      },
+    );
+
+    it('rejects a configured scope directory that resolves outside the product repo', () => {
+      const { siteRepo } = writeProductChatFixture();
+      const outside = join(tmpDir, 'outside-product-scope');
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(join(outside, 'README.md'), 'OUTSIDE_SCOPE_SECRET');
+      symlinkSync(outside, join(siteRepo, 'linked-scope'), 'dir');
+      const productConfig = JSON.parse(readFileSync(productsConfigFile, 'utf8')) as Record<string, unknown>;
+      productConfig['symlink-scope'] = {
+        class: 'external',
+        repoPath: siteRepo,
+        scopePath: 'linked-scope',
+        baseBranch: 'main',
+        credentialsFile: join(tmpDir, 'creds', 'symlink-scope.env'),
+        egressAllowlist: [],
+      };
+      writeFileSync(productsConfigFile, JSON.stringify(productConfig));
+      expect(resolveProductChat('symlink-scope')).toBeNull();
+      const prompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'symlink-scope' },
+        authority: 'product-full-access',
+      });
+      expect(prompt).not.toContain('OUTSIDE_SCOPE_SECRET');
+    });
+  });
+
+  describe('resolveProductFallbackWorkspace', () => {
+    it('provisions a dedicated real directory outside workspace, vault, and product repos', () => {
+      writeProductChatFixture();
+      const fallback = resolveProductFallbackWorkspace('unknown');
+      expect(fallback.repoRoot).toBe(fallback.workRoot);
+      expect(fallback.repoRoot.startsWith(realpathSync(fallbackRoot))).toBe(true);
+      expect(existsSync(fallback.repoRoot)).toBe(true);
+      expect(fallback.repoRoot.startsWith(workspaceDir)).toBe(false);
+      expect(fallback.repoRoot.startsWith(vaultDir)).toBe(false);
+    });
+
+    it('fails before provisioning when the configured fallback root overlaps a product repo', () => {
+      const { runeRepo } = writeProductChatFixture();
+      const productConfig = JSON.parse(readFileSync(productsConfigFile, 'utf8')) as Record<string, any>;
+      productConfig['fallback-root-collision'] = {
+        class: 'internal',
+        repoPath: fallbackRoot,
+        baseBranch: 'main',
+        credentialsFile: join(tmpDir, 'creds', 'collision.env'),
+        egressAllowlist: [],
+      };
+      writeFileSync(productsConfigFile, JSON.stringify(productConfig));
+      expect(() => resolveProductFallbackWorkspace('collision')).toThrow(/overlaps protected product/i);
+      const collisionWorkspace = join(
+        fallbackRoot,
+        createHash('sha256').update('collision').digest('hex').slice(0, 20),
+      );
+      expect(existsSync(collisionWorkspace)).toBe(false);
+      expect(existsSync(runeRepo)).toBe(true);
     });
   });
 
@@ -760,6 +861,27 @@ describe('vault/sessions', () => {
       writeFileSync(sessionsFile, persisted);
       restoreSessions();
       expect(getSession(123, 'webview', scope)?.executor).toEqual(executor);
+    });
+
+    it('round-trips fallback workspace authority through persistence and restore', () => {
+      const scope = { kind: 'product' as const, product: 'unknown' };
+      createSession(124, 'webview', 'test', undefined, scope);
+      const executor = {
+        format: 'codex' as const,
+        sessionId: 'fallback-thread',
+        authority: 'product-workspace-write' as const,
+        cwd: workspaceDir,
+        writableRoot: workspaceDir,
+      };
+
+      setSessionExecutor(124, 'webview', executor, scope);
+      persistSessions();
+      const persisted = readFileSync(sessionsFile, 'utf8');
+      deleteSession(124, 'webview', scope);
+      writeFileSync(sessionsFile, persisted);
+      restoreSessions();
+
+      expect(getSession(124, 'webview', scope)?.executor).toEqual(executor);
     });
 
     it('writes sessions to disk on create', () => {

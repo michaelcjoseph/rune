@@ -10,7 +10,10 @@ import {
   getSessionMessages,
   appendMessageToSession,
   buildSessionSystemPrompt,
-  resolveProductChatWorkspace,
+  resolveProductFallbackWorkspace,
+  resolveProductChat,
+  type ChatAuthority,
+  type ProductPromptContext,
   type Transport,
   type SessionScope,
 } from '../../vault/sessions.js';
@@ -18,6 +21,7 @@ import { runAgent } from '../../ai/claude.js';
 import { askChatWithContext, resolveChatModel } from '../../ai/chat.js';
 import { withChatTurnLock } from '../../ai/chat-turn-lock.js';
 import { createLogger } from '../../utils/logger.js';
+import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
 import { handleFresh } from '../commands/fresh.js';
 import { handleFreshFull } from '../commands/fresh-full.js';
 import { handleClear } from '../commands/clear.js';
@@ -456,43 +460,87 @@ async function routeToPlanning(
 // modify the vault. The "never write files" instruction in the global system
 // prompt is reinforced here by omitting Write / Edit / Bash / NotebookEdit. For
 // a write capability in global chat, route through a slash command instead.
-const CONVERSATION_TOOLS = [
+const BASE_CHAT_TOOLS = [
   'Read',
   'Glob',
   'Grep',
   'WebSearch',
   'WebFetch',
+];
+
+const KB_CHAT_TOOLS = [
   'mcp__rune-kb__repo_search',
   'mcp__rune-kb__kb_query',
   'mcp__rune-kb__kb_search',
   'mcp__rune-kb__kb_stats',
 ];
 
-// A write-enabled PRODUCT chat: Rune is a development agent for the active
-// product (Edit/Write/Bash). NOTE: none of these are OS-confined — the spawn
-// uses --dangerously-skip-permissions, so `writableRoots`/`--add-dir` do not
-// restrict Edit/Write and Bash has full filesystem access. The narrowed
-// writableRoots and the scrubbed product-chat env are defense-in-depth; the
-// actual vault-write / unrelated-path / Rune-secret boundaries are enforced by
-// the system prompt (buildProductIdentityPreamble) + the vault's git
-// recoverability. This chat is effectively a full-trust local agent.
-const PRODUCT_CHAT_TOOLS = [
-  'Read',
-  'Glob',
-  'Grep',
+const PRODUCT_EDIT_TOOLS = [
   'Edit',
   'Write',
   'Bash',
-  'WebSearch',
-  'WebFetch',
-  'mcp__rune-kb__repo_search',
-  'mcp__rune-kb__kb_query',
-  'mcp__rune-kb__kb_search',
-  'mcp__rune-kb__kb_stats',
+];
+
+const COCKPIT_DIAGNOSTIC_TOOLS = [
   'mcp__rune-kb__cockpit_list_runs',
   'mcp__rune-kb__cockpit_inspect_run',
   'mcp__rune-kb__cockpit_active_runs',
 ];
+
+const CONVERSATION_TOOLS = [...BASE_CHAT_TOOLS, ...KB_CHAT_TOOLS];
+
+// A resolved PRODUCT chat is a full-trust development agent for the active
+// product (Edit/Write/Bash plus KB and Cockpit diagnostics). Claude uses
+// --dangerously-skip-permissions, so the resolved product's narrowed
+// writableRoots are defense-in-depth rather than an OS boundary.
+const PRODUCT_CHAT_TOOLS = [
+  ...BASE_CHAT_TOOLS,
+  ...PRODUCT_EDIT_TOOLS,
+  ...KB_CHAT_TOOLS,
+  ...COCKPIT_DIAGNOSTIC_TOOLS,
+];
+
+const PRODUCT_WORKSPACE_TOOLS = [...BASE_CHAT_TOOLS, ...PRODUCT_EDIT_TOOLS];
+
+type ChatAccess =
+  | {
+      authority: Extract<ChatAuthority, 'read-only'>;
+      allowedTools: string[];
+      productContext?: undefined;
+    }
+  | {
+      authority: Exclude<ChatAuthority, 'read-only'>;
+      cwd: string;
+      writableRoot: string;
+      product: string;
+      allowedTools: string[];
+      productContext?: ProductPromptContext;
+    };
+
+function resolveChatAccess(scope?: SessionScope): ChatAccess {
+  if (scope?.kind !== 'product') {
+    return { authority: 'read-only', allowedTools: CONVERSATION_TOOLS };
+  }
+  const resolved = resolveProductChat(scope.product);
+  if (resolved) {
+    return {
+      authority: 'product-full-access',
+      cwd: resolved.workspace.repoRoot,
+      writableRoot: resolved.workspace.workRoot,
+      product: scope.product,
+      allowedTools: PRODUCT_CHAT_TOOLS,
+      productContext: resolved.productContext,
+    };
+  }
+  const fallback = resolveProductFallbackWorkspace(scope.product);
+  return {
+    authority: 'product-workspace-write',
+    cwd: fallback.repoRoot,
+    writableRoot: fallback.workRoot,
+    product: scope.product,
+    allowedTools: PRODUCT_WORKSPACE_TOOLS,
+  };
+}
 
 async function handleConversation(
   sender: MessageSender,
@@ -531,31 +579,27 @@ async function handleConversationTurn(
 
   sender.startTyping(userId, `Asking ${session.model}`);
   try {
-    // A product chat with a resolvable repo becomes a write-enabled agent. Bash
-    // starts from repoRoot; Edit/Write are limited to workRoot. Global chats —
-    // and product chats whose repo can't be resolved — stay read-only with the
-    // vault cwd.
-    const workspace = scope?.kind === 'product' ? resolveProductChatWorkspace(scope.product) : null;
-    const chatAccess = workspace && scope?.kind === 'product'
-      ? {
-          authority: 'product-full-access' as const,
-          cwd: workspace.repoRoot,
-          writableRoot: workspace.workRoot,
-          product: scope.product,
-        }
-      : {
-          authority: 'read-only' as const,
-          ...(scope?.kind === 'product' ? { product: scope.product } : {}),
-        };
+    // A resolved product chat gets full product authority. An unresolved
+    // product gets constrained write access in its dedicated fallback workspace.
+    // Global/Home remains read-only in the vault.
+    const chatAccess = resolveChatAccess(scope);
+    const { allowedTools, productContext, ...requestAccess } = chatAccess;
     const result = await askChatWithContext({
       ...(session.executor === undefined ? { legacyClaudeSessionId: session.sessionId } : {}),
       message: text,
       model: session.model,
-      systemPrompt: buildSessionSystemPrompt({ scope, authority: chatAccess.authority }),
+      systemPrompt: buildSessionSystemPrompt({
+        scope,
+        authority: chatAccess.authority,
+        ...(productContext ? { productContext } : {}),
+        ...(chatAccess.authority === 'product-workspace-write'
+          ? { workspaceDir: chatAccess.cwd }
+          : {}),
+      }),
       priorMessages,
       executor: session.executor ?? null,
-      ...chatAccess,
-      allowedTools: chatAccess.authority === 'product-full-access' ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
+      ...requestAccess,
+      allowedTools,
     });
 
     if (result.error) {
@@ -577,11 +621,12 @@ async function handleConversationTurn(
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
-    const reply = `${rawReply}\n\n_— chatting · /fresh to end_`;
+    const reply = `${scrubAbsolutePaths(rawReply)}\n\n_— chatting · /fresh to end_`;
     await sender.send(userId, reply);
   } catch (err) {
-    log.error('Conversation exception', { error: (err as Error).message });
-    await sender.send(userId, `Error: ${(err as Error).message}`);
+    const message = (err as Error).message;
+    log.error('Conversation exception', { error: message });
+    await sender.send(userId, `Error: ${scrubAbsolutePaths(message)}`);
   } finally {
     sender.stopTyping(userId);
   }

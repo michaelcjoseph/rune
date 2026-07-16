@@ -389,22 +389,83 @@ describe('ai/codex', () => {
       expect(spawnMock.mock.calls[0]![1]).toContain('--ignore-user-config');
     });
 
-    it('creates and resumes persistent chat threads without changing ephemeral defaults', async () => {
+    it('can ignore user and project exec-policy rules for controlled automation', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { ignoreRules: true });
+      expect(spawnMock.mock.calls[0]![1]).toContain('--ignore-rules');
+    });
+
+    it('can fail closed on unknown configuration for controlled automation', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { strictConfig: true });
+      expect(spawnMock.mock.calls[0]![1]).toContain('--strict-config');
+    });
+
+    it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(
+      'serializes fresh and resumed persistent threads for %s',
+      async (sandboxMode) => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockImplementation(() => createChild({ stdout: 'ok' }));
 
       const { runCodex } = await import('./codex.js');
-      await runCodex('first', { persistentSession: true, sandboxMode: 'read-only' });
+      await runCodex('first', { persistentSession: true, sandboxMode });
       let args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).not.toContain('--ephemeral');
-      expect(args).toContain('-s');
+      expect(args.slice(args.indexOf('-s'), args.indexOf('-s') + 2)).toEqual(['-s', sandboxMode]);
 
-      await runCodex('next', { persistentSession: true, resumeSessionId: 'thread-123', sandboxMode: 'read-only' });
+      await runCodex('next', {
+        persistentSession: true,
+        resumeSessionId: 'thread-123',
+        sandboxMode,
+      });
       args = spawnMock.mock.calls[1]![1] as string[];
       expect(args.slice(0, 2)).toEqual(['exec', 'resume']);
-      expect(args).toContain('thread-123');
       expect(args).not.toContain('-s');
+      const sandboxOverrideIndex = args.indexOf(`sandbox_mode="${sandboxMode}"`);
+      expect(args.slice(sandboxOverrideIndex - 1, sandboxOverrideIndex + 1)).toEqual([
+        '-c',
+        `sandbox_mode="${sandboxMode}"`,
+      ]);
+      expect(args.at(-2)).toBe('thread-123');
       expect(args.at(-1)).toBe('next');
+      },
+    );
+
+    it('places the resume sandbox override before existing config overrides and positional args', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      const mcpOverride = 'mcp_servers={"rune-kb"={command="/usr/bin/node"}}';
+      await runCodex('next', {
+        persistentSession: true,
+        resumeSessionId: 'thread-123',
+        sandboxMode: 'danger-full-access',
+        configOverrides: [mcpOverride],
+        strictConfig: true,
+        ignoreUserConfig: true,
+        ignoreRules: true,
+      });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toEqual([
+        'exec',
+        'resume',
+        '--skip-git-repo-check',
+        '--strict-config',
+        '--ignore-user-config',
+        '--ignore-rules',
+        '-c',
+        'sandbox_mode="danger-full-access"',
+        '-c',
+        mcpOverride,
+        'thread-123',
+        'next',
+      ]);
     });
 
     it('passes -m flag when model option is provided', async () => {

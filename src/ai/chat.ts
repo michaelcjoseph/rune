@@ -31,7 +31,7 @@ export type ChatRequest = ChatRequestBase & (
       product?: string;
     }
   | {
-      authority: Extract<ChatAuthority, 'product-full-access'>;
+      authority: Exclude<ChatAuthority, 'read-only'>;
       cwd: string;
       writableRoot: string;
       product: string;
@@ -118,6 +118,23 @@ function codexExecutorMatchesRequest(
     executor.writableRoot === request.writableRoot;
 }
 
+const EMPTY_CLAUDE_MCP_ARGS = [
+  '--strict-mcp-config',
+  '--mcp-config',
+  JSON.stringify({ mcpServers: {} }),
+];
+
+const FALLBACK_CODEX_CONFIG_OVERRIDES = [
+  'mcp_servers={}',
+  'features.hooks=false',
+  'features.apps=false',
+  'features.remote_plugin=false',
+  'sandbox_workspace_write.network_access=false',
+  'sandbox_workspace_write.writable_roots=[]',
+  'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+  'sandbox_workspace_write.exclude_slash_tmp=true',
+];
+
 export async function askChatWithContext(request: ChatRequest): Promise<ChatResult> {
   const binding = resolveChatModel(request.model);
   const formatMatchedExecutor = request.executor?.format === binding.format ? request.executor : null;
@@ -128,9 +145,15 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
       : null;
   const initialPrompt = bootstrapMessage(request.message, sameExecutor ? [] : request.priorMessages);
   const fullAccess = request.authority === 'product-full-access';
+  const sandboxMode = request.authority === 'product-full-access'
+    ? 'danger-full-access'
+    : request.authority === 'product-workspace-write'
+      ? 'workspace-write'
+      : 'read-only';
   const productMcp = fullAccess && request.product
     ? buildProductChatMcpConfig(request.product)
     : null;
+  const fallbackAccess = request.authority === 'product-workspace-write';
 
   if (binding.format === 'claude') {
     const sessionId = sameExecutor?.sessionId ?? request.legacyClaudeSessionId ?? randomUUID();
@@ -142,7 +165,11 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
       ...(request.cwd ? { cwd: request.cwd } : {}),
       ...(request.writableRoot ? { writableRoots: [request.writableRoot] } : {}),
       ...(request.product ? { product: request.product, envMode: 'product-chat' as const } : {}),
-      ...(productMcp ? { mcpArgs: productMcp.claudeArgs } : {}),
+      ...(productMcp
+        ? { mcpArgs: productMcp.claudeArgs }
+        : fallbackAccess
+          ? { mcpArgs: EMPTY_CLAUDE_MCP_ARGS }
+          : {}),
     });
     return { ...result, error: safeError(result.error), executor: { format: 'claude', sessionId } };
   }
@@ -157,14 +184,24 @@ export async function askChatWithContext(request: ChatRequest): Promise<ChatResu
     model: request.model,
     cwd: request.cwd ?? config.VAULT_DIR,
     persistentSession: true,
-    ...(threadId ? { resumeSessionId: threadId } : { sandboxMode: fullAccess ? 'danger-full-access' : 'read-only' }),
+    sandboxMode,
+    ...(threadId ? { resumeSessionId: threadId } : {}),
     // Codex is shell-capable even in read-only mode. Always use the secret-
     // scrubbed chat environment; global/Home chat must not inherit Rune's env.
     env: buildClaudeChildEnv('product-chat'),
-    ...(productMcp ? {
-      configOverrides: productMcp.codexConfigOverrides,
-      ignoreUserConfig: true,
-    } : {}),
+    ...(productMcp
+      ? {
+          configOverrides: productMcp.codexConfigOverrides,
+          ignoreUserConfig: true,
+        }
+      : fallbackAccess
+        ? {
+            configOverrides: FALLBACK_CODEX_CONFIG_OVERRIDES,
+            strictConfig: true,
+            ignoreUserConfig: true,
+            ignoreRules: true,
+          }
+        : {}),
     ...(request.product ? { product: request.product } : {}),
     opLabel: 'chat',
     onEvent: event => {

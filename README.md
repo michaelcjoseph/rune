@@ -180,8 +180,9 @@ Beyond the personal-assistant core, Rune runs an autonomous product-team orchest
 - **Orchestrated product team.** When enabled (`ORCHESTRATED_WORK_ENABLED`, or per-product `orchestratedMode`), Start routes to the orchestrated applier: a six-role team (PM, tech-lead, QA, coder, reviewer, designer) drives a planned task graph with test-first gates, an independent-provider reviewer, and a Rune-owned closeout. It never self-merges — a completed run holds branch-complete for operator merge. Roles carry a SOUL charter + a learning `memory.md` updated by the nightly learning loop.
 - **Planning → backlog → promotions.** `/plan` (or a cockpit backlog item's Plan button) opens a PM-led scoping conversation. The PM writes the approval spec directly; there is no separate Planner step or planning-brief intermediary. `/approve` is the single planning-flow human gate, and it automatically runs tech-lead breakdown, critique, context seed, and scaffold with streamed progress. The user no longer separately approves tech-spec and tasks. A durable promotion job (`logs/promotions.jsonl`) survives restarts so a half-scaffolded item is re-driven on boot.
 - **Multi-model dispatch.** A model-selection policy (`policies/model-policy.json`) routes each role/agent to a model; cross-model work can dispatch to **Codex** (GPT-5.x) with a fail-closed provider probe. Planning runs the sequential cross-model critique pass (Claude then Codex) after the PM spec is approved, as part of the automated downstream pipeline.
+- **Scoped product chat.** Cockpit product conversations use full repository authority only when the configured repo and optional relative scope canonicalize to real directories inside that repository. Workspace validation happens before repo context is read, and the same validated context is used for prompt assembly. Unknown, stale, malformed, or symlink-escaping products receive a dedicated hashed scratch workspace under `RUNE_PRODUCT_CHAT_FALLBACK_ROOT`, isolated from the vault/configured repos and stripped of KB/Cockpit MCP access. Codex reasserts read-only/workspace-write/full-access authority on every resumed turn; fallback Codex also uses strict config parsing and neutralizes project MCP, hooks, apps, remote plugins, exec-policy rules, network access, and extra/temp writable roots.
 
-Live end-to-end proofs: `npm run acceptance:orchestrated` and `npm run acceptance:cockpit-real` (both make real model calls).
+Live end-to-end proofs: `npm run acceptance:orchestrated`, `npm run acceptance:cockpit-real`, and the explicitly opted-in `RUNE_ACCEPTANCE_LIVE_CODEX_PRODUCT_CHAT=1 npm run acceptance:product-chat-codex` (all make real model calls).
 
 ## Setup
 
@@ -229,6 +230,7 @@ RUNE_ALLOWED_HOSTS=localhost,127.0.0.1   # host-guard allowlist for webview endp
 
 # Optional — autonomous codebase ops
 RUNE_WORKSPACE_DIR=/abs/path/to/workspace  # absolute (no ~) root for /work mutations
+RUNE_PRODUCT_CHAT_FALLBACK_ROOT=~/.rune/product-chat-workspaces  # isolated unresolved-product scratch root
 ORCHESTRATED_WORK_ENABLED=false          # route Start to the orchestrated product-team applier
 WORK_RUN_PER_PROJECT_CAP=1               # max concurrent work runs per project slug
 WORK_RUN_GLOBAL_CAP=2                    # max concurrent work runs across projects
@@ -257,6 +259,7 @@ npm run library-backfill  # bulk-ingest existing library entries into the KB
 npm run dispatch-review   # multi-model dispatch troubleshooting
 npm run acceptance:orchestrated  # LIVE orchestrated-work end-to-end proof
 npm run acceptance:cockpit-real  # LIVE cockpit + real-product acceptance
+RUNE_ACCEPTANCE_LIVE_CODEX_PRODUCT_CHAT=1 npm run acceptance:product-chat-codex  # LIVE Codex product-chat sandbox proof
 ```
 
 The server starts the Telegram bot (polling), the HTTP server on port 3847, the local `rune-kb` MCP server, and the cron scheduler. With `RUNE_HTTP_SECRET` set, the cockpit/webview is reachable at `http://localhost:3847/` and the `/mcp` connector is mounted.

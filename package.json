@@ -16,7 +16,8 @@
     "dispatch-review": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/dispatch-review.ts",
     "acceptance:rebrand": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-rune-rebrand-acceptance.ts",
     "acceptance:orchestrated": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/jobs/__acceptance__/orchestrated-live.acceptance.ts",
-    "acceptance:cockpit-real": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/server/__acceptance__/cockpit-real-product.acceptance.ts"
+    "acceptance:cockpit-real": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/server/__acceptance__/cockpit-real-product.acceptance.ts",
+    "acceptance:product-chat-codex": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-product-chat-codex-acceptance.ts"
   },
   "engines": {
     "node": ">=22.15.0"

@@ -11,6 +11,7 @@ vi.mock('../../config.js', () => ({
     VAULT_DIR: '/test/vault',
     LOGS_DIR: '/test/logs',
     WORKSPACE_DIR: '/test/workspace',
+    PRODUCT_CHAT_FALLBACK_ROOT: '/test/fallback-product-chats',
     TIMEZONE: 'America/Chicago',
     RESOLVER_MIN_WORDS: 5,
     RESOLVER_CONFIDENCE_THRESHOLD: 0.7,
@@ -36,10 +37,23 @@ vi.mock('../../vault/sessions.js', () => ({
       ? `PRODUCT CHAT: Active product: ${scope.product}. Search the product repo and the second brain via the rune-kb MCP.`
       : '',
   ].join('\n')),
-  resolveProductChatWorkspace: vi.fn((product: string) => ({
-    repoRoot: `/workspace/${product}`,
-    workRoot: product === 'writing' ? `/workspace/${product}/docs/rune` : `/workspace/${product}`,
-    ...(product === 'writing' ? { scopePath: 'docs/rune' } : {}),
+  resolveProductChat: vi.fn((product: string) => ({
+    workspace: {
+      repoRoot: `/workspace/${product}`,
+      workRoot: product === 'writing' ? `/workspace/${product}/docs/rune` : `/workspace/${product}`,
+      ...(product === 'writing' ? { scopePath: 'docs/rune' } : {}),
+    },
+    productContext: {
+      product,
+      repoPath: `/workspace/${product}`,
+      repoDocs: [],
+      projects: [],
+      worldview: [],
+    },
+  })),
+  resolveProductFallbackWorkspace: vi.fn((product: string) => ({
+    repoRoot: `/test/fallback-product-chats/${product}`,
+    workRoot: `/test/fallback-product-chats/${product}`,
   })),
 }));
 vi.mock('../../ai/claude.js', () => ({
@@ -148,7 +162,8 @@ const {
   updateSession,
   setSessionModel,
   buildSessionSystemPrompt,
-  resolveProductChatWorkspace,
+  resolveProductFallbackWorkspace,
+  resolveProductChat,
 } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -666,6 +681,55 @@ describe('text handler routing', () => {
     const reply = vi.mocked(sender.send).mock.calls.at(-1)?.[1] as string;
     expect(reply).toContain('hi there!');
     expect(reply).toContain('— chatting · /fresh to end');
+  });
+
+  it('scrubs configured host paths from successful conversation replies', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'test-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'where are you?',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({
+      text: 'Working in /test/fallback-product-chats/example',
+      error: null,
+    });
+
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('where are you?'));
+
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining('Working in <product-chat-workspace>/example'),
+    );
+  });
+
+  it('scrubs fallback workspace paths from conversation exceptions', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'test-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockRejectedValueOnce(new Error('EACCES: /test/fallback-product-chats/secret'));
+
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('hello'));
+
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      'Error: EACCES: <product-chat-workspace>/secret',
+    );
   });
 
   it('ignores empty text', async () => {
@@ -1489,6 +1553,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
       scope: productScope,
       authority: 'product-full-access',
+      productContext: expect.objectContaining({ product: 'rune' }),
     }));
   });
 
@@ -1543,13 +1608,17 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_active_runs');
   });
 
-  it('keeps an unresolved product scope read-only and out of a product cwd', async () => {
+  it('gives an unresolved product constrained workspace editing tools without Cockpit diagnostics', async () => {
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
     const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
 
-    vi.mocked(resolveProductChatWorkspace).mockReturnValueOnce(null);
+    vi.mocked(resolveProductChat).mockReturnValueOnce(null);
+    vi.mocked(resolveProductFallbackWorkspace).mockReturnValueOnce({
+      repoRoot: '/test/fallback-product-chats/rune',
+      workRoot: '/test/fallback-product-chats/rune',
+    });
     getSessionMock.mockReturnValue(null);
     createSessionMock.mockReturnValue({
       sessionId: 'unresolved-product-session',
@@ -1567,14 +1636,17 @@ describe('dispatchText — product-scoped webview sessions', () => {
       cwd?: string;
       writableRoots?: string[];
     };
-    expect(options.cwd).toBeUndefined();
-    expect(options.writableRoots).toBeUndefined();
-    expect(options.allowedTools).not.toContain('Edit');
-    expect(options.allowedTools).not.toContain('Write');
-    expect(options.allowedTools).not.toContain('Bash');
+    expect(options.cwd).toBe('/test/fallback-product-chats/rune');
+    expect(options.writableRoots).toEqual(['/test/fallback-product-chats/rune']);
+    expect(options.allowedTools).toEqual(expect.arrayContaining(['Edit', 'Write', 'Bash']));
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__repo_search');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__kb_query');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_list_runs');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_inspect_run');
+    expect(options.allowedTools).not.toContain('mcp__rune-kb__cockpit_active_runs');
     expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
       scope: productScope,
-      authority: 'read-only',
+      authority: 'product-workspace-write',
     }));
   });
 

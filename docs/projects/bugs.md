@@ -1,74 +1,5 @@
 ## Active
 
-- [ ] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.**
-  - **User impact.** A Codex-backed product chat can begin with full repository authority, then appear read-only or otherwise lose its expected write posture on a later turn. The same product chat works with Claude because Claude receives its permission-bypass flag on every invocation. An unresolved product chat also becomes read-only, even though the intended fallback is constrained write access rather than no write access.
-
-  - **Expected behavior.**
-    - A resolved product chat has consistent authority for its entire conversation:
-      - initial Codex turn: `danger-full-access`;
-      - resumed Codex turns: the same `danger-full-access` authority is explicitly reasserted;
-      - Claude turns: retain their current full-trust product-chat posture on initial and resumed calls.
-    - Rune must not rely on a persisted Codex thread’s historical sandbox selection as its only authority guarantee.
-    - A product scope whose configured repository cannot be resolved must fall back to `workspace-write`, rooted in the configured workspace, not `read-only`.
-    - Global/Home chat remains read-only.
-    - The system prompt, persisted executor metadata, CLI sandbox selection, working directory, and tool availability must describe the same authority.
-
-  - **Actual behavior.**
-    - Rune starts a new resolved Codex product thread with `codex exec -s danger-full-access`.
-    - On the next turn, Rune uses `codex exec resume <thread-id>` and deliberately omits `-s`, because that subcommand does not expose the `--sandbox` flag.
-    - Rune’s persisted executor metadata says `product-full-access`, but it does not verify or reassert Codex’s effective sandbox policy on resume.
-    - A test fixture proves Rune omits the sandbox argument on resume, but does not exercise the real Codex CLI or prove resumed write capability.
-    - When `resolveProductChatWorkspace(product)` returns null, Rune assigns the chat `read-only` authority and a vault cwd. That makes a product chat unable to edit anything instead of granting constrained workspace access.
-    - Claude does not share the resume gap: Rune includes `--dangerously-skip-permissions` in every Claude invocation, including resumed sessions.
-
-  - **Root cause.**
-    - Rune models product-chat authority as a binary `read-only | product-full-access` decision.
-    - The Codex launch wrapper applies `sandboxMode` only when creating a new thread:
-      `threadId ? { resumeSessionId: threadId } : { sandboxMode: ... }`.
-    - `runCodex()` intentionally suppresses `-s` for `codex exec resume`, but does not replace it with a supported `-c sandbox_mode="..."` override.
-    - The code assumes Codex resume restores and retains the initial sandbox policy. That assumption is not enforced or covered by a real-Codex acceptance test.
-    - The unresolved-product fallback has no intermediate `workspace-write` authority, so it collapses to the global read-only posture.
-
-  - **Reproduction steps.**
-    1. Configure a repo-backed product and select a Codex model in its cockpit chat.
-    2. Send a first message that edits and commits a harmless file.
-    3. Send a second message in the same product chat that makes another harmless edit.
-    4. Inspect the spawned Codex argv:
-       - first turn includes `-s danger-full-access`;
-       - resumed turn contains `exec resume` but no sandbox selection or `sandbox_mode` configuration override.
-    5. Run the same sequence against Claude and observe that both invocations include `--dangerously-skip-permissions`.
-    6. Configure or simulate a product scope whose repository cannot be resolved.
-    7. Open that product chat and observe that Rune assigns read-only authority instead of constrained workspace write access.
-
-  - **Fix guidance.**
-    1. Extend `ChatAuthority` to model three distinct postures:
-       - `read-only` for global/Home chat;
-       - `product-workspace-write` for a product scope without a resolvable dedicated repo;
-       - `product-full-access` for a resolved dedicated product repository.
-    2. Map `product-workspace-write` to Codex `workspace-write` and a workspace-root cwd. Keep the prompt and tool surface honest about the constrained boundary.
-    3. Preserve `product-full-access` for resolved product chats and keep `danger-full-access` for the initial Codex spawn.
-    4. Change resumed Codex execution to pass the supported configuration override:
-       `-c 'sandbox_mode="danger-full-access"'`.
-       The wrapper should serialize:
-       - new thread: `-s <sandboxMode>`;
-       - resumed thread: `-c sandbox_mode="<sandboxMode>"`.
-    5. Do not use `--dangerously-bypass-approvals-and-sandbox` as the solution. Rune product chats are not externally sandboxed, so that flag would weaken the intended security model.
-    6. Reassert `workspace-write` through the same resume-time configuration path for fallback product chats.
-    7. Keep authority binding strict: a Codex thread may resume only when its authority, cwd, and writable-root binding exactly match the current request. Rotate and replay Rune’s transcript when they differ.
-    8. Add a real-Codex integration/acceptance test. Fixture argv assertions are necessary but insufficient because they cannot prove Codex’s effective resumed sandbox.
-
-  - **Acceptance criteria.**
-    - A new resolved Codex product chat launches with `-s danger-full-access`.
-    - Every resumed resolved Codex product-chat turn includes `-c sandbox_mode="danger-full-access"`.
-    - A real-Codex test proves that both the initial and resumed product-chat turns can create, modify, stage, and commit files in the product repository.
-    - The same test proves a global/Home Codex chat remains read-only.
-    - A product scope without a resolvable dedicated repository receives `workspace-write`, not `read-only`.
-    - A fallback product chat can write inside the configured workspace root and cannot write outside the Codex workspace-write sandbox.
-    - A fallback product chat does not receive the resolved-product full-access prompt, `danger-full-access`, or unrestricted filesystem authority.
-    - Switching a Codex thread between global, fallback-product, and resolved-product authority rotates the thread rather than resuming it under a mismatched binding.
-    - Claude product-chat behavior remains unchanged: full-trust product launches and resumes continue to work.
-    - Unit tests cover argv/config serialization for initial and resumed Codex threads in all three authority modes.
-    - The full product-chat launch suite and type-check pass.
 - [ ] **Product-chat responses and operation state are lost when navigating away from a product view.**
   - **User impact.** Send a message in product A, navigate to Home or product B, then return to product A. The product chat can show a frozen “Asking Claude” pill whose elapsed counter no longer advances, and the model’s completed response may never appear. Sending another message can make the chat appear to resume, but the original answer has already been dropped from the browser transcript.
 
@@ -247,6 +178,8 @@
 (empty)
 
 ## Done
+
+- [x] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.** _(Fixed 2026-07-16 — product-chat authority is explicit `read-only | product-workspace-write | product-full-access`. Home/global stays vault-cwd read-only. A product receives full access only after its configured repo and optional relative scope canonicalize to real paths inside the repository; validation precedes repo-context reads and the same validated context is reused for prompt assembly. Unknown, missing, stale, malformed, or symlink-escaping paths use a stable hashed scratch directory under `RUNE_PRODUCT_CHAT_FALLBACK_ROOT` (default `~/.rune/product-chat-workspaces`), with overlap/symlink checks keeping it disjoint from the vault and configured repos. Fallback gets editing tools but no KB/Cockpit diagnostics: Claude receives strict empty MCP; Codex reasserts `workspace-write` on resume, uses strict config parsing, ignores user config/rules, empties MCP, disables hooks/apps/remote plugins/network, and removes extra/temp writable roots. Resolved Codex uses `danger-full-access`; global uses `read-only`; fresh threads use `-s <mode>` and resumed threads use `-c sandbox_mode="<mode>"`, never the external-sandbox bypass. Thread reuse remains exact on authority/cwd/writable-root, with bounded transcript replay on any mismatch, and legacy metadata never implies fallback authority. Regression coverage spans argv ordering, all authority/binding transitions, invalid/stale/symlink-escaping repo/scope routing, prompts/tools/MCP isolation, path-scrubbed provisioning failures, persistence, controlled Claude/Codex launch/resume, fallback cleanup, and an opt-in live `handleWebviewMessage` proof with hostile project Codex config attempting MCP/hook/network/extra-root escape.)_
 
 - [x] **A false quiet-run cancellation remains latched after the active task demonstrates progress, causing reviewed work to skip closeout and park as WIP.** **(Fixed 2026-07-16 — mutation cancellation now carries an actuator source while retaining the terminal `user | system` classification. User, shutdown, recovery, and unspecified system requests are irrevocable; only `quiet-run` and `max-runtime` are revocable. At the post-workflow boundary, non-ready evidence still stops, but `ready-for-closeout` atomically supersedes the still-active watchdog request, immediately records verified supervision activity, clears the old quiet cycle, renews the max-runtime epoch when applicable, emits one scrubbed `system-cancel-superseded` transcript/live-feed output, then performs normal closeout and advances. Stall-check, shutdown, and recovery now tag their sources explicitly. Covered by mutation precedence/supersession tests, the Project 22 two-task orchestration replay, supervision epoch/cycle tests, runner transcript/feed integration, source-wiring tests, type-check, and the full 329-file suite: 5,403 passed, 8 todo.)**
 

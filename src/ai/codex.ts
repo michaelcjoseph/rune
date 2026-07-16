@@ -171,9 +171,8 @@ export async function probeCodexProvider(): Promise<ProviderAvailability> {
   return { available: true };
 }
 
-/** Codex sandbox policy — passed via `-s` to `codex exec`. The Codex CLI
- *  accepts these three values; `workspace-write` is the default in
- *  `runCodex` callers that don't override. */
+/** Codex sandbox policy — passed via `-s` to a fresh `codex exec`, or as a
+ *  `sandbox_mode="<mode>"` config override to `codex exec resume`. */
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
 interface RunCodexBaseOpts {
@@ -224,6 +223,13 @@ interface RunCodexBaseOpts {
   /** Skip `$CODEX_HOME/config.toml` for controlled automation. Project
    * configuration and explicit `-c` overrides still apply. */
   ignoreUserConfig?: boolean;
+  /** Skip user and project exec-policy `.rules` files for controlled
+   * automation. */
+  ignoreRules?: boolean;
+  /** Fail when Codex encounters an unknown configuration key. Controlled
+   * automation uses this so security-critical overrides fail closed after CLI
+   * upgrades instead of being silently ignored. */
+  strictConfig?: boolean;
 }
 
 /** Sandbox authority is deliberately exclusive: Codex may apply its own
@@ -231,7 +237,8 @@ interface RunCodexBaseOpts {
  * already externally enclosed, but it may never do both. */
 export type RunCodexOpts = RunCodexBaseOpts & (
   | {
-      /** Sandbox policy passed via `-s`. */
+      /** Sandbox policy passed via `-s` for fresh runs and `-c sandbox_mode=…`
+       *  for resumed runs. */
       sandboxMode?: CodexSandboxMode;
       externallySandboxed?: false;
       sandboxProfilePath?: never;
@@ -299,14 +306,19 @@ export async function runCodex(
   if (!opts.persistentSession) args.push('--ephemeral');
   args.push('--skip-git-repo-check');
   if (opts.model) args.push('-m', opts.model);
-  // `codex exec resume` restores the original thread's sandbox policy and does
-  // not accept `-s`; only initial calls may set it.
+  // `codex exec resume` does not accept `-s`, so explicitly reassert the
+  // selected authority through its TOML config override instead.
   if (opts.sandboxMode && !opts.resumeSessionId) args.push('-s', opts.sandboxMode);
   if (opts.externallySandboxed) {
     args.push('--dangerously-bypass-approvals-and-sandbox');
   }
   if (opts.onEvent) args.push('--json');
+  if (opts.strictConfig) args.push('--strict-config');
   if (opts.ignoreUserConfig) args.push('--ignore-user-config');
+  if (opts.ignoreRules) args.push('--ignore-rules');
+  if (opts.sandboxMode && opts.resumeSessionId) {
+    args.push('-c', `sandbox_mode=${JSON.stringify(opts.sandboxMode)}`);
+  }
   for (const override of opts.configOverrides ?? []) args.push('-c', override);
   if (opts.resumeSessionId) args.push(opts.resumeSessionId);
   // Prompt is the final positional arg — matches the CLI's documented usage.
