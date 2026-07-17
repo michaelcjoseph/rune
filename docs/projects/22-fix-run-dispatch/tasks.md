@@ -104,7 +104,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Observability
 
-- [ ] **fix-run-logs-and-observability** — Make the start, terminal, and failure logs
+- [x] **fix-run-logs-and-observability** — Make the start, terminal, and failure logs
   queryable from the existing work-run/mutation diagnosis logs: `startFixRun` logs
   guard/scaffold/dispatch decisions; the reconciler logs terminal mappings; the webview
   records policy declines vs handoff failures with detail. Prove every new failure path emits a

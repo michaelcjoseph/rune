@@ -1,6 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogItem } from '../intent/backlog-parser.js';
 import type { ProductConfig } from './sandbox-runtime.js';
+
+// startFixRun creates its logger at module load. Capture its structured records
+// so these tests pin the diagnosis contract, not console formatting.
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const bug: BacklogItem = {
   id: 'BUG-save-crash',
@@ -152,6 +163,23 @@ describe('startFixRun dispatch handoff', () => {
       { projectSlug: '22-fix-bug-save-crash', product: 'rune' },
       'webview',
     );
+    expect(mockLog.info).toHaveBeenCalledWith('fix run dispatched', {
+      product: 'rune',
+      projectSlug: '22-fix-bug-save-crash',
+      runId: 'fix-run-123',
+      dispatchKind: 'orchestrated-work',
+    });
+  });
+
+  it('logs an accepted guard with a stable reason before preparing the fix project', async () => {
+    const { startFixRun } = await loadStart();
+
+    await startFixRun(input, startDeps());
+
+    expect(mockLog.info).toHaveBeenCalledWith('fix run guard accepted', {
+      product: 'rune',
+      reason: 'single-product',
+    });
   });
 
   it.each([
@@ -164,6 +192,10 @@ describe('startFixRun dispatch handoff', () => {
     await expect(startFixRun(input, deps)).resolves.toEqual({ accepted: false, reason });
     expect(deps.scaffoldAndCommitFixProject).not.toHaveBeenCalled();
     expect(deps.createMutation).not.toHaveBeenCalled();
+    expect(mockLog.info).toHaveBeenCalledWith('fix run guard rejected', {
+      product: 'rune',
+      reason,
+    });
   });
 
   it.each([
@@ -175,6 +207,11 @@ describe('startFixRun dispatch handoff', () => {
 
     await expect(startFixRun(input, deps)).resolves.toEqual({ accepted: false, reason, detail: scaffoldResult.detail });
     expect(deps.createMutation).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith('fix run scaffold rejected', {
+      product: 'rune',
+      reason,
+      detail: scaffoldResult.detail,
+    });
   });
 
   it.each([
@@ -192,6 +229,12 @@ describe('startFixRun dispatch handoff', () => {
 
     await expect(startFixRun(input, deps)).resolves.toEqual({
       accepted: false,
+      reason: 'dispatch-rejected',
+      detail: 'orchestrated work disabled',
+    });
+    expect(mockLog.warn).toHaveBeenCalledWith('fix run dispatch rejected', {
+      product: 'rune',
+      projectSlug: '22-fix-bug-save-crash',
       reason: 'dispatch-rejected',
       detail: 'orchestrated work disabled',
     });

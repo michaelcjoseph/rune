@@ -107,7 +107,10 @@ export async function startFixRun(
     log.info('fix run guard rejected', { product: input.product, reason: guard.reason });
     return guard;
   }
-  log.info('fix run guard accepted', { product: input.product });
+  log.info('fix run guard accepted', {
+    product: input.product,
+    reason: 'single-product',
+  });
 
   const product = deps.products[input.product]!;
   const scaffold = await deps.scaffoldAndCommitFixProject({
@@ -140,7 +143,8 @@ export async function startFixRun(
     log.warn('fix run dispatch rejected', {
       product: input.product,
       projectSlug: scaffold.projectSlug,
-      reason: dispatch.reason,
+      reason: 'dispatch-rejected',
+      detail: dispatch.reason,
     });
     return { accepted: false, reason: 'dispatch-rejected', detail: dispatch.reason };
   }

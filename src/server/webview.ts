@@ -1633,7 +1633,7 @@ function appendAttemptUpdate(attempt: Omit<FixAttempt, 'updatedAt'> & { updatedA
 
 function appendAttemptUpdateUnlessTerminal(
   attempt: Omit<FixAttempt, 'updatedAt'> & { updatedAt?: string },
-): void {
+): boolean {
   const latest = getLatestFixAttempt(
     readLatestFixAttempts(config.FIX_ATTEMPTS_FILE),
     attempt.product,
@@ -1643,13 +1643,14 @@ function appendAttemptUpdateUnlessTerminal(
     latest.attemptId !== attempt.attemptId
     || (latest.state !== 'gating' && latest.state !== 'proceeding')
   )) {
-    return;
+    return false;
   }
   appendAttemptUpdate(attempt);
+  return true;
 }
 
 function errorDetail(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return scrubAbsolutePaths(err instanceof Error ? err.message : String(err));
 }
 
 async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: string): Promise<void> {
@@ -1698,23 +1699,48 @@ async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: s
         });
         return;
       }
-      appendAttemptUpdateUnlessTerminal({
+      const state = handoff.reason === 'not-single-product' ? 'declined' : 'handoff-failed';
+      const detail = handoff.detail !== undefined
+        ? scrubAbsolutePaths(handoff.detail)
+        : undefined;
+      const recorded = appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
-        state: handoff.reason === 'not-single-product' ? 'declined' : 'handoff-failed',
+        state,
         reason: handoff.reason || 'handoff-unavailable',
-        ...(handoff.detail !== undefined ? { detail: handoff.detail } : {}),
+        ...(detail !== undefined ? { detail } : {}),
       });
+      if (recorded) {
+        const logData = {
+          product,
+          bugId: bug.id,
+          attemptId,
+          reason: handoff.reason || 'handoff-unavailable',
+          ...(detail !== undefined ? { detail } : {}),
+        };
+        if (state === 'declined') log.info('Fix handoff declined by policy', logData);
+        else log.warn('Fix handoff failed', logData);
+      }
     } catch (err) {
-      appendAttemptUpdateUnlessTerminal({
+      const detail = errorDetail(err);
+      const recorded = appendAttemptUpdateUnlessTerminal({
         attemptId,
         product,
         bugId: bug.id,
         state: 'handoff-failed',
         reason: 'handoff-unavailable',
-        detail: errorDetail(err),
+        detail,
       });
+      if (recorded) {
+        log.warn('Fix handoff failed', {
+          product,
+          bugId: bug.id,
+          attemptId,
+          reason: 'handoff-unavailable',
+          detail,
+        });
+      }
     }
   } catch (err) {
     log.error('runFixGateAttempt failed unexpectedly', {

@@ -27,6 +27,20 @@ export type ScaffoldFixProjectResult =
   | { ok: true; projectSlug: string; commitSha: string }
   | { ok: false; reason: 'scaffold-failed' | 'commit-failed'; detail?: string };
 
+function rejectScaffold(
+  input: Pick<ScaffoldFixProjectInput, 'product' | 'bugId'>,
+  reason: 'scaffold-failed' | 'commit-failed',
+  detail: string,
+): ScaffoldFixProjectResult {
+  log.warn('fix project scaffold rejected', {
+    product: input.product,
+    bugId: input.bugId,
+    reason,
+    detail,
+  });
+  return { ok: false, reason, detail };
+}
+
 function git(repoPath: string, args: string[]): string {
   return execFileSync('git', ['-C', repoPath, ...args], {
     encoding: 'utf8',
@@ -108,10 +122,10 @@ export async function scaffoldAndCommitFixProject(
   try {
     branch = git(input.repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   } catch {
-    return { ok: false, reason: 'commit-failed', detail: 'repository branch is unavailable' };
+    return rejectScaffold(input, 'commit-failed', 'repository branch is unavailable');
   }
   if (branch !== input.baseBranch) {
-    return { ok: false, reason: 'commit-failed', detail: 'product base branch is not checked out' };
+    return rejectScaffold(input, 'commit-failed', 'product base branch is not checked out');
   }
 
   const projectSlug = deriveProjectSlug(input.repoPath, input.bugId);
@@ -127,7 +141,7 @@ export async function scaffoldAndCommitFixProject(
   const tasksExists = existsSync(tasksPath);
   if (projectDirExists) {
     if (!specExists || !tasksExists) {
-      return { ok: false, reason: 'scaffold-failed', detail: 'fix project path is incomplete' };
+      return rejectScaffold(input, 'scaffold-failed', 'fix project path is incomplete');
     }
     let existingSpec: string;
     let existingTasks: string;
@@ -135,14 +149,14 @@ export async function scaffoldAndCommitFixProject(
       existingSpec = readFileSync(specPath, 'utf8');
       existingTasks = readFileSync(tasksPath, 'utf8');
     } catch {
-      return { ok: false, reason: 'scaffold-failed', detail: 'fix project path is unreadable' };
+      return rejectScaffold(input, 'scaffold-failed', 'fix project path is unreadable');
     }
     if (existingSpec !== spec || existingTasks !== tasks) {
-      return { ok: false, reason: 'scaffold-failed', detail: 'fix project path conflicts with existing content' };
+      return rejectScaffold(input, 'scaffold-failed', 'fix project path conflicts with existing content');
     }
     const commitSha = committedScaffoldSha(input.repoPath, relativePaths);
     if (!commitSha) {
-      return { ok: false, reason: 'commit-failed', detail: 'existing fix project is not committed together' };
+      return rejectScaffold(input, 'commit-failed', 'existing fix project is not committed together');
     }
     log.info('fix project scaffold reused', { projectSlug, commitSha });
     return { ok: true, projectSlug, commitSha };
@@ -154,7 +168,7 @@ export async function scaffoldAndCommitFixProject(
     writeFileSync(tasksPath, tasks, { flag: 'wx' });
   } catch {
     rmSync(projectDir, { recursive: true, force: true });
-    return { ok: false, reason: 'scaffold-failed', detail: 'unable to write fix project scaffold' };
+    return rejectScaffold(input, 'scaffold-failed', 'unable to write fix project scaffold');
   }
 
   try {
@@ -177,6 +191,6 @@ export async function scaffoldAndCommitFixProject(
       // Cleanup below remains safe even if Git cannot update its index.
     }
     rmSync(projectDir, { recursive: true, force: true });
-    return { ok: false, reason: 'commit-failed', detail: 'unable to commit fix project scaffold' };
+    return rejectScaffold(input, 'commit-failed', 'unable to commit fix project scaffold');
   }
 }

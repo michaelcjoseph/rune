@@ -2,10 +2,15 @@ import { beforeAll, beforeEach, afterEach, afterAll, describe, expect, it, vi } 
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BugScopingFacts } from '../jobs/bug-fix-gate.js';
 import type { StartFixRunResult } from '../jobs/fix-run-handoff.js';
+
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLogger }));
 
 vi.mock('../transport/mutations.js', () => ({ createMutation: vi.fn(), cancelMutation: vi.fn(), activeRuns: new Map() }));
 vi.mock('../transport/in-flight.js', () => ({ cancelOp: vi.fn(), listOps: vi.fn(() => []) }));
@@ -364,6 +369,13 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
         detail: 'Deliverable repo is owned by relay.',
       }),
     ]);
+    expect(mockLogger.info).toHaveBeenCalledWith('Fix handoff declined by policy', {
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason: 'not-single-product',
+      detail: 'Deliverable repo is owned by relay.',
+    });
   });
 
   it.each([
@@ -385,6 +397,38 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
       reason,
       detail: `${reason} detail`,
     });
+    expect(mockLogger.warn).toHaveBeenCalledWith('Fix handoff failed', {
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason,
+      detail: `${reason} detail`,
+    });
+  });
+
+  it('scrubs an unexpected handoff error before persisting it to the cockpit-visible attempt', async () => {
+    const rawHostPath = `${homedir()}/private/fix-worktree`;
+    mockStartFixRun.mockRejectedValue(new Error(`unable to use ${rawHostPath}`));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const terminal = readAttemptLines().at(-1);
+    expect(terminal).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'handoff-failed',
+      reason: 'handoff-unavailable',
+    });
+    expect(terminal.detail).not.toContain(rawHostPath);
+    expect(terminal.detail).toContain('<home>');
+    expect(mockLogger.warn).toHaveBeenCalledWith('Fix handoff failed', expect.objectContaining({
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason: 'handoff-unavailable',
+      detail: terminal.detail,
+    }));
   });
 
   it('does not overwrite a terminal attempt recorded while the handoff is in flight', async () => {

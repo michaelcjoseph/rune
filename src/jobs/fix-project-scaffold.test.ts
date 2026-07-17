@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BacklogItem } from '../intent/backlog-parser.js';
 import type { BugScopingFacts } from './bug-fix-gate.js';
+
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
+
 import { scaffoldAndCommitFixProject } from './fix-project-scaffold.js';
 
 const bug: BacklogItem = {
@@ -49,6 +55,10 @@ afterEach(() => {
   while (tempRoots.length > 0) rmSync(tempRoots.pop()!, { recursive: true, force: true });
 });
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe('scaffoldAndCommitFixProject', () => {
   it('commits one deterministic one-task fix project without touching unrelated staged or dirty operator work', async () => {
     const repo = makeRepo();
@@ -82,6 +92,10 @@ describe('scaffoldAndCommitFixProject', () => {
       `docs/projects/${first.projectSlug}/tasks.md`,
     ]);
     expect(git(repo, ['status', '--porcelain'])).toBe(operatorStatus);
+    expect(mockLog.info).toHaveBeenCalledWith('fix project scaffold committed', {
+      projectSlug: first.projectSlug,
+      commitSha: first.commitSha,
+    });
 
     const retry = await scaffoldAndCommitFixProject({
       repoPath: repo,
@@ -95,5 +109,33 @@ describe('scaffoldAndCommitFixProject', () => {
     expect(retry).toEqual(first);
     expect(existsSync(projectDir)).toBe(true);
     expect(git(repo, ['status', '--porcelain'])).toBe(operatorStatus);
+    expect(mockLog.info).toHaveBeenCalledWith('fix project scaffold reused', {
+      projectSlug: first.projectSlug,
+      commitSha: first.commitSha,
+    });
+  });
+
+  it('logs a typed, reason-bearing failure when the product base branch is not checked out', async () => {
+    const repo = makeRepo();
+
+    await expect(scaffoldAndCommitFixProject({
+      repoPath: repo,
+      baseBranch: 'release',
+      product: 'rune',
+      bugId: bug.id,
+      bug,
+      facts,
+    })).resolves.toEqual({
+      ok: false,
+      reason: 'commit-failed',
+      detail: 'product base branch is not checked out',
+    });
+
+    expect(mockLog.warn).toHaveBeenCalledWith('fix project scaffold rejected', {
+      product: 'rune',
+      bugId: bug.id,
+      reason: 'commit-failed',
+      detail: 'product base branch is not checked out',
+    });
   });
 });

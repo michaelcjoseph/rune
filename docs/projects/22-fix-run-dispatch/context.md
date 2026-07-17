@@ -170,12 +170,15 @@ _None yet._
 
 ## Next Task Handoff
 
-- Preserved the fixed, failed, and parked-on-human post-dispatch terminal states, their diagnostic metadata, and transcript run IDs. Added matching product deep-view labels and distinct success, failure, and parked styles.
+- Implemented structured diagnosis logging across fix-attempt reconciliation, fix-project scaffolding, fix-run handoff, and the cockpit fix endpoint (`src/server/webview.ts`).
+- Scrubbed absolute host paths from unexpected handoff error details before persistence and logging.
+- Preserved terminal idempotency; late outcomes are neither recorded nor misleadingly logged.
 
 Validation:
 
+- Targeted QA: 53 tests passed
 - `npm run build` — passed
-- `npm test` — 333 files passed; 5,486 tests passed, 8 todo
-- `git diff --check` — passed
+- `npm test` — 333 files passed; 5,490 tests passed, 8 todo
+- Diff checks — passed
 
 No tests removed. No commit created.

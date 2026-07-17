@@ -9,6 +9,11 @@ import {
   readLatestFixAttempts,
 } from './fix-attempt-store.js';
 
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
+
 /**
  * The reconciler deliberately consumes recorded run facts. These tests do not
  * start a runner or bind a port: the mutation descriptor / supervision record
@@ -45,6 +50,7 @@ let dir: string;
 let file: string;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   dir = mkdtempSync(join(tmpdir(), 'rune-fix-attempt-reconciler-'));
   file = join(dir, 'fix-attempts.jsonl');
 });
@@ -122,6 +128,25 @@ describe('fix-attempt terminal reconciler', () => {
       terminal: 'fixed',
       outcome: 'branch-complete',
     }));
+  });
+
+  it('emits a terminal mapping with the run id and underlying outcome to the diagnosis log', async () => {
+    const { reconcileFixAttemptForRun } = await loadReconciler();
+    seedProceeding();
+
+    reconcileFixAttemptForRun(file, recordedRun({
+      status: 'failed',
+      outcome: 'failed',
+      merged: undefined,
+      reason: 'reviewer gate rejected the diff',
+    }));
+
+    expect(mockLog.info).toHaveBeenCalledWith('FixAttempt reconciled from terminal run', {
+      runId: 'run-17',
+      terminal: 'failed',
+      status: 'failed',
+      outcome: 'failed',
+    });
   });
 
   it.each([
