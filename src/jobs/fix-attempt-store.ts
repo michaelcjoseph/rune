@@ -6,6 +6,9 @@ export type FixAttemptState =
   | 'declined'
   | 'handoff-failed'
   | 'proceeding'
+  | 'fixed'
+  | 'failed'
+  | 'parked-on-human'
   | 'interrupted';
 
 export interface FixAttempt {
@@ -30,6 +33,9 @@ const STATES = new Set<FixAttemptState>([
   'declined',
   'handoff-failed',
   'proceeding',
+  'fixed',
+  'failed',
+  'parked-on-human',
   'interrupted',
 ]);
 

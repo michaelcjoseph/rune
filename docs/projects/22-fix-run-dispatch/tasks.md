@@ -15,7 +15,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Core state model
 
-- [ ] **fix-attempt-terminal-states** — Extend `FixAttemptState` in
+- [x] **fix-attempt-terminal-states** — Extend `FixAttemptState` in
   `src/jobs/fix-attempt-store.ts` with the post-dispatch terminals `fixed` \| `failed` \|
   `parked-on-human` (the pre-dispatch `declined` already exists and is reused for guard
   policy-declines): add them to the `FixAttemptState` union, the `STATES` set, and
@@ -39,7 +39,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Guard
 
-- [ ] **single-product-guard** — Add the fail-closed single-product guard used by
+- [x] **single-product-guard** — Add the fail-closed single-product guard used by
   `startFixRun`: a `resolveDeliverableRepo(bug, product, productsConfig)` seam that in v1
   returns the product's own `repoPath`, plus guard logic that resolves `getProductConfig`
   and rejects `unknown-product` / `not-repo-backed` / `not-single-product` with
@@ -49,7 +49,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Scaffold
 
-- [ ] **fix-project-scaffold-commit** — Deterministic minimal one-task fix-project
+- [x] **fix-project-scaffold-commit** — Deterministic minimal one-task fix-project
   scaffold-and-commit helper. Derive a stable slug (e.g. `NN-fix-<bugId>`) from `{ bug, facts }`
   and write `docs/projects/<slug>/spec.md` + `tasks.md` (spec states bug/facts/acceptance;
   tasks carries exactly one unchecked implementation task with tests). Commit only those paths
@@ -61,7 +61,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Dispatch
 
-- [ ] **start-fix-run-dispatch** — Implement `startFixRun` in `src/jobs/fix-run-handoff.ts`
+- [x] **start-fix-run-dispatch** — Implement `startFixRun` in `src/jobs/fix-run-handoff.ts`
   replacing the throwing stub: run the guard; scaffold-and-commit; dispatch
   `createMutation('orchestrated-work', { projectSlug, product }, 'webview')`; on
   `createMutation` `!ok` return `{ accepted: false, reason: 'dispatch-rejected', detail }`; on
@@ -72,7 +72,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Call-site mapping
 
-- [ ] **fix-decline-terminal-mapping** — At `webview.ts` `runFixGateAttempt`, refine
+- [x] **fix-decline-terminal-mapping** — At `webview.ts` `runFixGateAttempt`, refine
   `accepted: false` handling: `not-single-product` records a `declined` fix-attempt terminal
   carrying reason + detail, while `unknown-product`, `not-repo-backed`, `dispatch-rejected`,
   scaffold/commit failures, and throws record `handoff-failed`. Do not let `accepted: false`
@@ -84,7 +84,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Reconciler
 
-- [ ] **fix-attempt-terminal-reconciler** — Reconcile each `proceeding` fix-attempt to a
+- [x] **fix-attempt-terminal-reconciler** — Reconcile each `proceeding` fix-attempt to a
   post-dispatch terminal from the run's existing outcome, with no parallel status system. Read
   run terminal data by `runId` from the mutation descriptor / `supervision-store` and map
   `completed + merged:true` => `fixed`, completed-but-unmerged or parked/blocked/held/noop/
@@ -95,7 +95,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Cockpit surface
 
-- [ ] **cockpit-fix-terminal-surface** — Map `fixed` \| `failed` \| `parked-on-human` through
+- [x] **cockpit-fix-terminal-surface** — Map `fixed` \| `failed` \| `parked-on-human` through
   `backlog-actions.ts` `FixActionState`, add readable labels in
   `src/server/static/product-deep-view.js`, add state classes in `src/server/static/app.css`,
   and keep the existing `runId -> /api/work-runs/<runId>` transcript link. Ensure guard
@@ -104,7 +104,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Observability
 
-- [ ] **fix-run-logs-and-observability** — Make the start, terminal, and failure logs
+- [x] **fix-run-logs-and-observability** — Make the start, terminal, and failure logs
   queryable from the existing work-run/mutation diagnosis logs: `startFixRun` logs
   guard/scaffold/dispatch decisions; the reconciler logs terminal mappings; the webview
   records policy declines vs handoff failures with detail. Prove every new failure path emits a
@@ -116,7 +116,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Acceptance
 
-- [ ] **fix-run-e2e-acceptance** — Stub-free acceptance test in `src/server/__acceptance__`
+- [x] **fix-run-e2e-acceptance** — Stub-free acceptance test in `src/server/__acceptance__`
   for the load-bearing path with no stub on `startFixRun` or the reconciler: against a temp git
   repo, real `startFixRun` runs the real guard, real scaffold-and-commit to `baseBranch`, and
   real `createMutation('orchestrated-work')` dispatch, asserting `{ accepted: true, runId }` and
@@ -126,13 +126,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
   records `declined`. The only unexercised seam is model-driven agent execution inside
   orchestrated-work, covered by the live gate. _(tests-as-deliverable)_
 
-- [ ] **docs-sync-for-fix-run** — If implementation adds or substantially changes modules,
+- [x] **docs-sync-for-fix-run** — If implementation adds or substantially changes modules,
   commands, persistent log files, env/config surfaces, or documented lifecycle behavior, run
   the docs-sync agent and update `docs/architecture/module-reference.md` plus any affected
   architecture docs. Docs/config-only unless code structure changed enough to require
   import/type checks. _(docs-or-config-only)_
 
-- [ ] **fix-run-live-gate** — Release gate: an operator clicks Fix on a real, gate-approved
+- [x] **fix-run-live-gate** — Release gate: an operator clicks Fix on a real, gate-approved
   single-product bug in the cockpit; a run dispatches with `accepted: true` and `runId`
   visible; the run produces a change, the team-task reviewer/code-review gate actually runs on
   the diff, the project-15 finalizer gates it, and it merges to `main`, or it reaches a clear

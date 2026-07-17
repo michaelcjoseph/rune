@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { FixAttemptState } from './fix-attempt-store.js';
 
 async function loadStore(): Promise<any> {
   try {
@@ -163,6 +164,32 @@ describe('fix-attempt-store - cockpit redesign Phase 3', () => {
     });
   });
 
+  it.each(['fixed', 'failed', 'parked-on-human'] as const)(
+    'parses and round-trips the post-dispatch %s terminal with its runId',
+    async (state) => {
+      const { appendFixAttempt, readLatestFixAttempts, getLatestFixAttempt } = await loadStore();
+
+      appendFixAttempt(file, attempt({
+        attemptId: `${state}-attempt`,
+        bugId: `${state}-bug`,
+        state: state as FixAttemptState,
+        runId: `${state}-run`,
+        reason: `${state}-outcome`,
+        updatedAt: '2026-07-15T12:00:00.000Z',
+      }));
+
+      expect(getLatestFixAttempt(readLatestFixAttempts(file), 'aura', `${state}-bug`)).toEqual({
+        attemptId: `${state}-attempt`,
+        product: 'aura',
+        bugId: `${state}-bug`,
+        state,
+        runId: `${state}-run`,
+        reason: `${state}-outcome`,
+        updatedAt: '2026-07-15T12:00:00.000Z',
+      });
+    },
+  );
+
   it('reconciles crash-stranded gating attempts to interrupted so a bug is retryable after restart', async () => {
     const { appendFixAttempt, readLatestFixAttempts, getLatestFixAttempt, reconcileInterruptedFixAttempts } = await loadStore();
     appendFixAttempt(file, attempt({
@@ -203,4 +230,34 @@ describe('fix-attempt-store - cockpit redesign Phase 3', () => {
     });
     expect(readFileSync(file, 'utf8')).toContain('"state":"interrupted"');
   });
+
+  it.each(['fixed', 'failed', 'parked-on-human'] as const)(
+    'restart reconcile leaves the post-dispatch %s terminal untouched instead of re-arming it',
+    async (state) => {
+      const { appendFixAttempt, readLatestFixAttempts, getLatestFixAttempt, reconcileInterruptedFixAttempts } = await loadStore();
+
+      appendFixAttempt(file, attempt({
+        attemptId: `${state}-terminal`,
+        bugId: `${state}-bug`,
+        state: state as FixAttemptState,
+        runId: `${state}-run`,
+        reason: `${state}-outcome`,
+        updatedAt: '2026-07-15T12:00:00.000Z',
+      }));
+
+      const changed = reconcileInterruptedFixAttempts(file, { now: () => '2026-07-15T12:05:00.000Z' });
+
+      expect(changed).toEqual([]);
+      expect(getLatestFixAttempt(readLatestFixAttempts(file), 'aura', `${state}-bug`)).toEqual({
+        attemptId: `${state}-terminal`,
+        product: 'aura',
+        bugId: `${state}-bug`,
+        state,
+        runId: `${state}-run`,
+        reason: `${state}-outcome`,
+        updatedAt: '2026-07-15T12:00:00.000Z',
+      });
+      expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(1);
+    },
+  );
 });

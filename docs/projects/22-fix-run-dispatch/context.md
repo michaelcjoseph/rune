@@ -170,4 +170,6 @@ _None yet._
 
 ## Next Task Handoff
 
-Start with: Extend FixAttemptState in src/jobs/fix-attempt-store.ts with the post-dispatch terminals 'fixed' | 'failed' | 'parked-on-human' (the pre-dispatch 'declined' already exists and is reused for guard policy-declines): add them to the FixAttemptState union, the STATES set, and parseFixAttempt validation (a terminal with runId stays valid; keep torn-line tolerance; do not require runId on the guard-decline path). No transition wiring yet. Update fix-attempt-store.test.ts for parse/round-trip of the new states.
+- No protected listener was bound, reused, stopped, or interrupted.
+
+Remaining operator-only gate: click Fix on a real approved bug and record the run ID, reviewer execution, finalizer result, cockpit terminal, and transcript visibility. This cannot be truthfully completed by the coder without the required human cockpit action.

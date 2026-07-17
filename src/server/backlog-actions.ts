@@ -31,6 +31,9 @@ export type FixActionState =
   | 'declined'
   | 'handoff-failed'
   | 'proceeding'
+  | 'fixed'
+  | 'failed'
+  | 'parked-on-human'
   | 'disabled';
 
 export interface FixAction {
@@ -107,6 +110,16 @@ export function computeFixAction(item: BacklogItem, attempt?: FixActionAttempt):
       return {
         kind: 'fix',
         state: 'proceeding',
+        ...(attempt.runId !== undefined ? { runId: attempt.runId } : {}),
+      };
+    case 'fixed':
+    case 'failed':
+    case 'parked-on-human':
+      return {
+        kind: 'fix',
+        state: attempt.state,
+        ...(attempt.reason !== undefined ? { reason: attempt.reason } : {}),
+        ...(attempt.detail !== undefined ? { detail: attempt.detail } : {}),
         ...(attempt.runId !== undefined ? { runId: attempt.runId } : {}),
       };
     case 'interrupted':

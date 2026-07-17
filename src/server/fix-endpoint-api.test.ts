@@ -2,9 +2,15 @@ import { beforeAll, beforeEach, afterEach, afterAll, describe, expect, it, vi } 
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BugScopingFacts } from '../jobs/bug-fix-gate.js';
+import type { StartFixRunResult } from '../jobs/fix-run-handoff.js';
+
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLogger }));
 
 vi.mock('../transport/mutations.js', () => ({ createMutation: vi.fn(), cancelMutation: vi.fn(), activeRuns: new Map() }));
 vi.mock('../transport/in-flight.js', () => ({ cancelOp: vi.fn(), listOps: vi.fn(() => []) }));
@@ -108,7 +114,9 @@ vi.mock('../jobs/pm-techlead-bug-scoping.js', () => ({
   runPmTechLeadBugScoping: mockRunPmTechLeadBugScoping,
 }));
 
-const mockStartFixRun = vi.fn(async () => ({ accepted: true, runId: 'run-fix-accepted' }));
+const mockStartFixRun = vi.fn<() => Promise<StartFixRunResult>>(
+  async () => ({ accepted: true, runId: 'run-fix-accepted' }),
+);
 vi.mock('../jobs/fix-run-handoff.js', () => ({
   startFixRun: mockStartFixRun,
 }));
@@ -339,6 +347,154 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     expect(readAttemptLines()).not.toContainEqual(
       expect.objectContaining({ state: 'proceeding', runId: expect.any(String) }),
     );
+  });
+
+  it('records a single-product policy rejection as declined, retaining the handoff reason and detail', async () => {
+    mockStartFixRun.mockResolvedValue({
+      accepted: false,
+      reason: 'not-single-product',
+      detail: 'Deliverable repo is owned by relay.',
+    });
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    expect(readAttemptLines()).toEqual([
+      expect.objectContaining({ state: 'gating' }),
+      expect.objectContaining({
+        attemptId: res.body.attemptId,
+        state: 'declined',
+        reason: 'not-single-product',
+        detail: 'Deliverable repo is owned by relay.',
+      }),
+    ]);
+    expect(mockLogger.info).toHaveBeenCalledWith('Fix handoff declined by policy', {
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason: 'not-single-product',
+      detail: 'Deliverable repo is owned by relay.',
+    });
+  });
+
+  it.each([
+    'unknown-product',
+    'not-repo-backed',
+    'scaffold-failed',
+    'commit-failed',
+    'dispatch-rejected',
+  ])('records the %s handoff rejection as handoff-failed', async (reason) => {
+    mockStartFixRun.mockResolvedValue({ accepted: false, reason, detail: `${reason} detail` });
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'handoff-failed',
+      reason,
+      detail: `${reason} detail`,
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith('Fix handoff failed', {
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason,
+      detail: `${reason} detail`,
+    });
+  });
+
+  it('scrubs an unexpected handoff error before persisting it to the cockpit-visible attempt', async () => {
+    const rawHostPath = `${homedir()}/private/fix-worktree`;
+    mockStartFixRun.mockRejectedValue(new Error(`unable to use ${rawHostPath}`));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const terminal = readAttemptLines().at(-1);
+    expect(terminal).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'handoff-failed',
+      reason: 'handoff-unavailable',
+    });
+    expect(terminal.detail).not.toContain(rawHostPath);
+    expect(terminal.detail).toContain('<home>');
+    expect(mockLogger.warn).toHaveBeenCalledWith('Fix handoff failed', expect.objectContaining({
+      product: 'aura',
+      bugId: 'bug-open',
+      attemptId: res.body.attemptId,
+      reason: 'handoff-unavailable',
+      detail: terminal.detail,
+    }));
+  });
+
+  it('does not overwrite a terminal attempt recorded while the handoff is in flight', async () => {
+    let resolveHandoff!: (result: StartFixRunResult) => void;
+    mockStartFixRun.mockReturnValueOnce(new Promise<StartFixRunResult>((resolve) => {
+      resolveHandoff = resolve;
+    }));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: res.body.attemptId,
+      product: 'aura',
+      bugId: 'bug-open',
+      state: 'fixed',
+      runId: 'run-already-terminal',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    });
+
+    resolveHandoff({ accepted: false, reason: 'dispatch-rejected' });
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'fixed',
+      runId: 'run-already-terminal',
+    });
+  });
+
+  it.each([
+    ['single-product policy decline', { accepted: false as const, reason: 'not-single-product' }],
+    ['unexpected handoff error', new Error('autorun handoff unavailable')],
+  ])('does not overwrite a terminal attempt when the handoff returns a %s', async (_caseName, outcome) => {
+    let settleHandoff!: () => void;
+    mockStartFixRun.mockImplementationOnce(() => new Promise<StartFixRunResult>((resolve, reject) => {
+      settleHandoff = () => {
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(outcome);
+      };
+    }));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: res.body.attemptId,
+      product: 'aura',
+      bugId: 'bug-open',
+      state: 'fixed',
+      runId: 'run-already-terminal',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    });
+
+    settleHandoff();
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'fixed',
+      runId: 'run-already-terminal',
+    });
   });
 
   it('surfaces declined and handoff-failed Fix attempts in the product deep view', async () => {

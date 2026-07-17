@@ -196,6 +196,27 @@ function productView(overrides: Record<string, unknown> = {}) {
           fix: { kind: 'fix', state: 'proceeding', runId: 'run-fix-accepted' },
         },
         {
+          id: 'BUG-fixed',
+          title: 'Merged fix',
+          status: 'open',
+          plan: { kind: 'plan', state: 'available' },
+          fix: { kind: 'fix', state: 'fixed', reason: 'branch-complete', runId: 'run-fix-fixed' },
+        },
+        {
+          id: 'BUG-failed',
+          title: 'Failed fix run',
+          status: 'open',
+          plan: { kind: 'plan', state: 'available' },
+          fix: { kind: 'fix', state: 'failed', reason: 'failed', detail: 'Reviewer could not validate the change.', runId: 'run-fix-failed' },
+        },
+        {
+          id: 'BUG-parked',
+          title: 'Fix awaiting operator',
+          status: 'open',
+          plan: { kind: 'plan', state: 'available' },
+          fix: { kind: 'fix', state: 'parked-on-human', reason: 'blocked-on-human', runId: 'run-fix-parked' },
+        },
+        {
           id: 'BUG-disabled',
           title: 'Already done',
           status: 'done',
@@ -232,6 +253,27 @@ function productView(overrides: Record<string, unknown> = {}) {
         outcome: 'partial',
         endedAt: '2026-06-23T13:05:00.000Z',
         transcriptUrl: '/api/work-runs/run-fix-accepted/transcript',
+      },
+      {
+        runId: 'run-fix-fixed',
+        target: { kind: 'bug', slug: 'BUG-fixed' },
+        outcome: 'completed',
+        endedAt: '2026-06-23T13:10:00.000Z',
+        transcriptUrl: '/api/work-runs/run-fix-fixed/transcript',
+      },
+      {
+        runId: 'run-fix-failed',
+        target: { kind: 'bug', slug: 'BUG-failed' },
+        outcome: 'failed',
+        endedAt: '2026-06-23T13:15:00.000Z',
+        transcriptUrl: '/api/work-runs/run-fix-failed/transcript',
+      },
+      {
+        runId: 'run-fix-parked',
+        target: { kind: 'bug', slug: 'BUG-parked' },
+        outcome: 'blocked-on-human',
+        endedAt: '2026-06-23T13:20:00.000Z',
+        transcriptUrl: '/api/work-runs/run-fix-parked/transcript',
       },
       {
         runId: 'run-recent-1',
@@ -2211,9 +2253,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('renders every Fix state while retaining Plan for bugs and ideas and never exposing Fix on ideas', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
-    const html = renderProductDeepView(productView());
+    const html = renderProductDeepView(productView(), { activeSidePanel: 'runs' });
 
-    for (const id of ['BUG-available', 'BUG-gating', 'BUG-declined', 'BUG-handoff', 'BUG-proceeding']) {
+    for (const id of ['BUG-available', 'BUG-gating', 'BUG-declined', 'BUG-handoff', 'BUG-proceeding', 'BUG-fixed', 'BUG-failed', 'BUG-parked']) {
       expect(html).toContain(id);
       expect(html).toMatch(new RegExp(`data-plan-item-id=["']${id}["']|${id}[\\s\\S]{0,240}\\bPlan\\b`, 'i'));
       expect(html).toMatch(new RegExp(`data-fix-item-id=["']${id}["']|${id}[\\s\\S]{0,240}\\bFix\\b`, 'i'));
@@ -2225,9 +2267,28 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/BUG-handoff[\s\S]{0,320}handoff-unavailable/i);
     expect(html).toMatch(/BUG-handoff[\s\S]{0,320}startFixRun unavailable/i);
     expect(html).toMatch(/BUG-proceeding[\s\S]{0,320}run-fix-accepted/i);
+    for (const [id, terminal, runId] of [
+      ['BUG-fixed', 'fixed', 'run-fix-fixed'],
+      ['BUG-failed', 'failed', 'run-fix-failed'],
+      ['BUG-parked', 'parked-on-human', 'run-fix-parked'],
+    ]) {
+      const row = html.match(new RegExp(`<article[^>]*data-backlog-item-id=["']${id}["'][\\s\\S]*?<\\/article>`, 'i'))?.[0] ?? '';
+      expect(row).toMatch(new RegExp(`deep-action--${terminal}|deep-fix-notice--${terminal}`, 'i'));
+      expect(row).toMatch(new RegExp(`\\b${terminal}\\b`, 'i'));
+      expect(row).toContain(runId);
+      expect(html).toMatch(new RegExp(`href=["']\\/api\\/work-runs\\/${runId}\\/transcript["']`, 'i'));
+    }
     expect(html).not.toContain('BUG-disabled');
     expect(html).toMatch(/IDEA-1[\s\S]{0,240}\bPlan\b/i);
     expect(html).not.toMatch(/IDEA-1[\s\S]{0,240}\bFix\b/i);
+  });
+
+  it('styles each reconciled Fix terminal as a distinct cockpit state', () => {
+    const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+
+    for (const terminal of ['fixed', 'failed', 'parked-on-human']) {
+      expect(css).toMatch(new RegExp(`\\.deep-action--${terminal}|\\.deep-fix-notice--${terminal}`, 'i'));
+    }
   });
 
   it('honors the real Plan action enabled/disabledReason contract from the API', async () => {

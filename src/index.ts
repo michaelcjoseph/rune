@@ -6,8 +6,12 @@ import { restoreSessions, persistSessions, getAllSessions } from './vault/sessio
 import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge, assertProjectMcpConfig } from './ai/claude.js';
 import { setMutationBus, registerApplier, setMutationShutdownInProgress } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
-import { reconcileOrphans } from './jobs/mutations-log.js';
+import { readRecentMutations, reconcileOrphans } from './jobs/mutations-log.js';
 import { reconcileInterruptedFixAttempts } from './jobs/fix-attempt-store.js';
+import {
+  readRecordedFixRun,
+  startFixAttemptReconciler,
+} from './jobs/fix-attempt-reconciler.js';
 import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
 import { runWorkRunGc } from './jobs/work-run-gc-runner.js';
 import { rebuildRegistry } from './jobs/registry-rebuild.js';
@@ -178,6 +182,7 @@ registerApplier(workRunReleaseApplier);
 registerApplier(workRunAnswerApplier);
 registerApplier(writingRunApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
+let stopFixAttemptReconciler = () => {};
 wireHandlers(bot, tg);
 let ready = false;
 const redispatchedOrchestratedMutationIds = new Set<string>();
@@ -220,6 +225,29 @@ try {
 // can be re-dispatched; those live ids are skipped here and all other running
 // descriptors, including non-resumable orchestrated-work entries, are reconciled.
 reconcileOrphans({ skipIds: redispatchedOrchestratedMutationIds });
+
+try {
+  // Catch-up may inspect several proceeding attempts. Snapshot mutation
+  // history once so it does not re-read the complete JSONL for every runId;
+  // live events still use the fresh reader below.
+  const startupMutations = readRecentMutations(Number.MAX_SAFE_INTEGER);
+  stopFixAttemptReconciler = startFixAttemptReconciler(bus, {
+    filePath: config.FIX_ATTEMPTS_FILE,
+    readRun: (runId) => readRecordedFixRun(runId, {
+      supervisedRunsFile: config.SUPERVISED_RUNS_FILE,
+      workRunsDir: config.WORK_RUNS_DIR,
+    }),
+    readRunForSweep: (runId) => readRecordedFixRun(runId, {
+      supervisedRunsFile: config.SUPERVISED_RUNS_FILE,
+      workRunsDir: config.WORK_RUNS_DIR,
+      readMutations: () => startupMutations,
+    }),
+  });
+} catch (err) {
+  log.warn('FixAttempt terminal reconciler failed to start', {
+    error: (err as Error).message,
+  });
+}
 
 // Sweep orphan project worktrees from a prior interrupted run. Best-effort —
 // a missing products.json (fresh clone, no Regime B products registered yet)
@@ -281,6 +309,7 @@ async function shutdown() {
   stopStallCheck();
   stopMcpWatchdog();
   stopTerminalWorkRunReconciler();
+  stopFixAttemptReconciler();
   stopPlanningExpiry();
   stopWatcher();
   destroy();
