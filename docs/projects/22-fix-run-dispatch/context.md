@@ -170,9 +170,13 @@ _None yet._
 
 ## Next Task Handoff
 
-- Returns stable guard, scaffold, commit, and dispatch rejection results.
-- Preserves unexpected dependency failures as throws.
-- Adds reason-bearing dispatch logs and injectable dependencies.
-- Validation passed: `npm run build`.
-- Validation passed: `npm test` — 330 files, 5,389 passed, 8 todo.
-- No tests removed.
+- - Added regression coverage confirming that policy-declined and rejected handoff outcomes do not overwrite an attempt that has already reached a terminal state.
+
+Validation passed:
+
+- `npx vitest run src/server/fix-endpoint-api.test.ts` — 19 passed
+- `npm run build`
+- `npm test`
+- `git diff --check`
+
+No tests removed.

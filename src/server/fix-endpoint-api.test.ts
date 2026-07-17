@@ -417,6 +417,42 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     });
   });
 
+  it.each([
+    ['single-product policy decline', { accepted: false as const, reason: 'not-single-product' }],
+    ['unexpected handoff error', new Error('autorun handoff unavailable')],
+  ])('does not overwrite a terminal attempt when the handoff returns a %s', async (_caseName, outcome) => {
+    let settleHandoff!: () => void;
+    mockStartFixRun.mockImplementationOnce(() => new Promise<StartFixRunResult>((resolve, reject) => {
+      settleHandoff = () => {
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(outcome);
+      };
+    }));
+
+    const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
+    expect(res.status).toBe(202);
+    await flushAsyncGate();
+
+    const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: res.body.attemptId,
+      product: 'aura',
+      bugId: 'bug-open',
+      state: 'fixed',
+      runId: 'run-already-terminal',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    });
+
+    settleHandoff();
+    await flushAsyncGate();
+
+    expect(readAttemptLines().at(-1)).toMatchObject({
+      attemptId: res.body.attemptId,
+      state: 'fixed',
+      runId: 'run-already-terminal',
+    });
+  });
+
   it('surfaces declined and handoff-failed Fix attempts in the product deep view', async () => {
     const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
     appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {

@@ -72,7 +72,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Call-site mapping
 
-- [ ] **fix-decline-terminal-mapping** — At `webview.ts` `runFixGateAttempt`, refine
+- [x] **fix-decline-terminal-mapping** — At `webview.ts` `runFixGateAttempt`, refine
   `accepted: false` handling: `not-single-product` records a `declined` fix-attempt terminal
   carrying reason + detail, while `unknown-product`, `not-repo-backed`, `dispatch-rejected`,
   scaffold/commit failures, and throws record `handoff-failed`. Do not let `accepted: false`
