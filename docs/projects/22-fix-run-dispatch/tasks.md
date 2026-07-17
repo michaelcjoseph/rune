@@ -132,7 +132,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
   architecture docs. Docs/config-only unless code structure changed enough to require
   import/type checks. _(docs-or-config-only)_
 
-- [ ] **fix-run-live-gate** — Release gate: an operator clicks Fix on a real, gate-approved
+- [x] **fix-run-live-gate** — Release gate: an operator clicks Fix on a real, gate-approved
   single-product bug in the cockpit; a run dispatches with `accepted: true` and `runId`
   visible; the run produces a change, the team-task reviewer/code-review gate actually runs on
   the diff, the project-15 finalizer gates it, and it merges to `main`, or it reaches a clear

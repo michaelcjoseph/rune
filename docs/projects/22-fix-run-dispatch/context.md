@@ -170,12 +170,6 @@ _None yet._
 
 ## Next Task Handoff
 
-- run-dispatch/docs/architecture/module-reference.md:145 accurately documents the new and changed Fix-run modules; no further edits were needed.
+- No protected listener was bound, reused, stopped, or interrupted.
 
-Validation:
-
-- `npm run build` — passed
-- `npm test` — 334 files passed; 5,492 tests passed; 8 todo
-- Worktree clean
-- No tests removed
-- No commit created
+Remaining operator-only gate: click Fix on a real approved bug and record the run ID, reviewer execution, finalizer result, cockpit terminal, and transcript visibility. This cannot be truthfully completed by the coder without the required human cockpit action.
