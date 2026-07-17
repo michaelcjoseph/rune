@@ -27,7 +27,7 @@ its `spec.md`.
 | [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Done | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 | [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Done | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
-| [22-fix-run-dispatch](22-fix-run-dispatch/spec.md) | Not Started | Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff, reconciling to a readable terminal in the cockpit. |
+| [22-fix-run-dispatch](22-fix-run-dispatch/spec.md) | Done | Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff, reconciling to a readable terminal in the cockpit. |
 | [24-execution-profiles](24-execution-profiles/spec.md) | Not Started | Every product declares an executable build-and-acceptance contract, and Rune proves it with durable, contained evidence before development and at closeout. |
 ---
 
@@ -428,7 +428,7 @@ Today a turn in product B is blocked behind product A's turn (a per-user dispatc
 - **Provenance:** scaffolded by hand 2026-07-02 from the operator-approved PM spec after the `/plan` downstream pipeline threw at the `pmReviewMatch` gate — correctly, because the initial tech-lead breakdown verified the frontend only with jsdom + WS tests, which the spec's DoD rejects. The two failure-handling defects that made that throw silent and unrecoverable are filed in [bugs.md](bugs.md).
 - **Task breakdown & test plan:** see [tasks.md](21-parallel-product-chats/tasks.md) and [test-plan.md](21-parallel-product-chats/test-plan.md). Test-first per phase; the live gate is required.
 
-## 22-fix-run-dispatch — Not Started
+## 22-fix-run-dispatch — Done
 
 [Spec](22-fix-run-dispatch/spec.md)
 
