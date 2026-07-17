@@ -170,12 +170,12 @@ _None yet._
 
 ## Next Task Handoff
 
-- tech-lead repaired test intent: src/server/__acceptance__/fix-run-handoff.acceptance.test.ts
-- Added stub-free acceptance coverage for the fix-run handoff. It verifies the real guard, scaffold/commit, mutation dispatch, terminal reconciliation, logging, and cross-product decline behavior using temporary repositories only.
+- run-dispatch/docs/architecture/module-reference.md:145 accurately documents the new and changed Fix-run modules; no further edits were needed.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 334 files passed; 5,492 tests passed, 8 todo
+- `npm test` — 334 files passed; 5,492 tests passed; 8 todo
+- Worktree clean
 - No tests removed
 - No commit created

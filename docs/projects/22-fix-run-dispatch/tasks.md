@@ -126,7 +126,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
   records `declined`. The only unexercised seam is model-driven agent execution inside
   orchestrated-work, covered by the live gate. _(tests-as-deliverable)_
 
-- [ ] **docs-sync-for-fix-run** — If implementation adds or substantially changes modules,
+- [x] **docs-sync-for-fix-run** — If implementation adds or substantially changes modules,
   commands, persistent log files, env/config surfaces, or documented lifecycle behavior, run
   the docs-sync agent and update `docs/architecture/module-reference.md` plus any affected
   architecture docs. Docs/config-only unless code structure changed enough to require
