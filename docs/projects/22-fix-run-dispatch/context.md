@@ -170,15 +170,12 @@ _None yet._
 
 ## Next Task Handoff
 
-- Implemented structured diagnosis logging across fix-attempt reconciliation, fix-project scaffolding, fix-run handoff, and the cockpit fix endpoint (`src/server/webview.ts`).
-- Scrubbed absolute host paths from unexpected handoff error details before persistence and logging.
-- Preserved terminal idempotency; late outcomes are neither recorded nor misleadingly logged.
+- tech-lead repaired test intent: src/server/__acceptance__/fix-run-handoff.acceptance.test.ts
+- Added stub-free acceptance coverage for the fix-run handoff. It verifies the real guard, scaffold/commit, mutation dispatch, terminal reconciliation, logging, and cross-product decline behavior using temporary repositories only.
 
 Validation:
 
-- Targeted QA: 53 tests passed
 - `npm run build` — passed
-- `npm test` — 333 files passed; 5,490 tests passed, 8 todo
-- Diff checks — passed
-
-No tests removed. No commit created.
+- `npm test` — 334 files passed; 5,492 tests passed, 8 todo
+- No tests removed
+- No commit created

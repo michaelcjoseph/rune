@@ -116,7 +116,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Acceptance
 
-- [ ] **fix-run-e2e-acceptance** — Stub-free acceptance test in `src/server/__acceptance__`
+- [x] **fix-run-e2e-acceptance** — Stub-free acceptance test in `src/server/__acceptance__`
   for the load-bearing path with no stub on `startFixRun` or the reconciler: against a temp git
   repo, real `startFixRun` runs the real guard, real scaffold-and-commit to `baseBranch`, and
   real `createMutation('orchestrated-work')` dispatch, asserting `{ accepted: true, runId }` and
