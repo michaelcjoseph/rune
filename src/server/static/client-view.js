@@ -1,6 +1,9 @@
 import { createHomeView } from './home-view.js';
 import { createProductDeepView } from './product-deep-view.js';
+import { initializeProductChatFrameConsumer } from './product-chat-session-store.js';
 import { createClientViewRouter } from './view-router.js';
+
+initializeProductChatFrameConsumer();
 
 function fetchJson(url) {
   return fetch(url).then(response => {

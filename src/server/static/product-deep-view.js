@@ -1,5 +1,13 @@
 import { createRunFeedSubscription as defaultCreateRunFeedSubscription } from './run-feed-client.js';
 import { renderBarChart, renderSparkline } from './monitoring-charts.js';
+import {
+  getProductSession,
+  reconcileProductSessionOperation,
+  resetProductSessions,
+  subscribeProductSessions,
+} from './product-chat-session-store.js';
+
+export { initializeProductChatFrameConsumer } from './product-chat-session-store.js';
 
 function escHtml(value) {
   return String(value ?? '')
@@ -1119,59 +1127,15 @@ function operationsFromState(state, product) {
   };
 }
 
-// Product chat op-events carry `product`; require an explicit matching product
-// so a global chat or another product's turn cannot attach this panel's pill.
-// Scope the product chat pill to `chat` ops only — product chat + planning
-// turns are chat-kind (claude.ts opLabel:'chat'). Project runs emit no op-events
-// (mutation/run events, already surfaced in the Runs + Operations panels);
-// background `agent` ops (nightly, prep, reviews) are unrelated noise, so they
-// are excluded.
-const PRODUCT_VISIBLE_OP_KINDS = new Set(['chat']);
-
-function shouldShowProductOp(frame, targetProduct) {
-  return frame?.kind === 'op-event' &&
-    typeof targetProduct === 'string' &&
-    targetProduct.length > 0 &&
-    frame.opKind !== 'classifier' &&
-    PRODUCT_VISIBLE_OP_KINDS.has(frame.opKind);
-}
-
-function opDisplayLabel(frame) {
-  if (frame?.opKind === 'chat') return 'Asking Claude';
-  return frame?.label || 'Asking Claude';
-}
-
 function fmtClock(iso) {
   const d = iso ? new Date(iso) : new Date();
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-// Per-product chat + planning state kept at module scope so it survives
-// navigating away from a product and back (client-view.js close()s the view and
-// constructs a fresh one on each route change). In-session only — not persisted
-// across a full page reload. Keyed by product slug.
-const productSessions = new Map();
-
-function getProductSession(product) {
-  let session = productSessions.get(product);
-  if (!session) {
-    session = {
-      chatMessages: [],
-      planning: { active: false, status: 'scoping', artifact: null },
-      activeOp: null,
-      statusLabel: null,
-      streamingMessageIndex: -1,
-      opActivity: [],
-    };
-    productSessions.set(product, session);
-  }
-  return session;
-}
-
 /** Test seam: clear all retained per-product chat/planning state. */
 export function __resetProductSessions() {
-  productSessions.clear();
+  resetProductSessions();
   if (typeof window !== 'undefined' && window[PRODUCT_CHAT_UNREAD_KEY] instanceof Set) {
     window[PRODUCT_CHAT_UNREAD_KEY].clear();
   }
@@ -1228,12 +1192,6 @@ export function createProductDeepView({
     statusLabel = session.statusLabel || null;
     streamingMessageIndex = Number.isFinite(session.streamingMessageIndex) ? session.streamingMessageIndex : -1;
     opActivity = list(session.opActivity);
-  }
-
-  function renderIfCurrent(targetProduct, options = {}) {
-    if (targetProduct !== product || !current) return;
-    syncLocalFromSession();
-    render(options);
   }
 
   function getChatTranscript() {
@@ -1431,54 +1389,8 @@ export function createProductDeepView({
     }
   }
 
-  function appendOperationActivity(row, targetSession = session) {
-    targetSession.opActivity = [...list(targetSession.opActivity), row].slice(-50);
-    if (targetSession === session) syncLocalFromSession();
-  }
-
-  function handleOpFrame(frame, targetProduct) {
-    if (!shouldShowProductOp(frame, targetProduct)) return;
-    const targetSession = getProductSession(targetProduct);
-    const base = {
-      opId: frame.opId,
-      label: targetSession.statusLabel || opDisplayLabel(frame),
-      startedAt: frame.startedAt,
-      elapsedMs: Number.isFinite(frame.elapsedMs) ? frame.elapsedMs : 0,
-    };
-    if (frame.subKind === 'start') {
-      targetSession.activeOp = base;
-      appendOperationActivity({ ...base, at: fmtClock(frame.startedAt), status: 'started' }, targetSession);
-      renderIfCurrent(targetProduct);
-      if (targetProduct === product) syncOpTicker();
-      return;
-    }
-    if (frame.subKind === 'progress') {
-      if (targetSession.activeOp?.opId === frame.opId) targetSession.activeOp = { ...targetSession.activeOp, ...base };
-      if (frame.detail) {
-        appendOperationActivity({
-          ...base,
-          at: fmtClock(new Date().toISOString()),
-          detail: frame.detail,
-        }, targetSession);
-      }
-      renderIfCurrent(targetProduct);
-      return;
-    }
-    if (frame.subKind === 'end') {
-      if (targetSession.activeOp?.opId === frame.opId) targetSession.activeOp = null;
-      targetSession.statusLabel = null;
-      appendOperationActivity({
-        ...base,
-        at: fmtClock(new Date().toISOString()),
-        detail: frame.error || frame.detail || frame.status || 'done',
-        status: frame.status || 'ended',
-      }, targetSession);
-      renderIfCurrent(targetProduct);
-      if (targetProduct === product) syncOpTicker();
-    }
-  }
-
   async function reloadProductAndOperations() {
+    const sessionRevision = session.revision;
     const [nextView, state] = await Promise.all([
       loadJson(`/api/products/${encodeURIComponent(product)}`),
       loadJson('/api/state').catch(() => null),
@@ -1486,7 +1398,12 @@ export function createProductDeepView({
     current = overlayRunControlsFromState(nextView, state, product);
     const nextOperations = operationsFromState(state, product);
     if (nextOperations) currentOperations = nextOperations;
+    if (state && session.revision === sessionRevision) {
+      reconcileProductSessionOperation(product, state);
+      syncLocalFromSession();
+    }
     render();
+    syncOpTicker();
     return current;
   }
 
@@ -1526,45 +1443,9 @@ export function createProductDeepView({
 
   function appendChatMessage(role, text) {
     chatMessages = [...chatMessages, { role, text }];
-    streamingMessageIndex = -1;
+    if (role !== 'user') streamingMessageIndex = -1;
     persistSession();
     render({ followChat: true });
-  }
-
-  function appendChatMessageToSession(targetProduct, role, text) {
-    const targetSession = getProductSession(targetProduct);
-    targetSession.chatMessages = [...list(targetSession.chatMessages), { role, text }];
-    targetSession.streamingMessageIndex = -1;
-    renderIfCurrent(targetProduct, { followChat: true });
-  }
-
-  function appendOrUpdateStreamingForSession(targetProduct, text) {
-    const targetSession = getProductSession(targetProduct);
-    const messages = list(targetSession.chatMessages);
-    const index = Number.isFinite(targetSession.streamingMessageIndex) ? targetSession.streamingMessageIndex : -1;
-    if (index < 0 || !messages[index]) {
-      targetSession.chatMessages = [...messages, { role: 'assistant streaming', text }];
-      targetSession.streamingMessageIndex = targetSession.chatMessages.length - 1;
-    } else {
-      targetSession.chatMessages = messages.map((message, messageIndex) =>
-        messageIndex === index
-          ? { ...message, text: `${message.text || ''}${text}` }
-          : message
-      );
-    }
-    renderIfCurrent(targetProduct, { followChat: true });
-  }
-
-  function setStatusForSession(targetProduct, label) {
-    const targetSession = getProductSession(targetProduct);
-    targetSession.statusLabel = label || null;
-    if (targetSession.activeOp?.opId) {
-      targetSession.activeOp = {
-        ...targetSession.activeOp,
-        label: targetSession.statusLabel || opDisplayLabel(targetSession.activeOp),
-      };
-    }
-    renderIfCurrent(targetProduct);
   }
 
   function markProductUnread(targetProduct) {
@@ -1703,35 +1584,22 @@ export function createProductDeepView({
     focusChatInput();
   }
 
+  const onProductSessionChange = (targetProduct, frame) => {
+    const unreadChanged = isProductChatOutputFrame(frame) && markProductUnread(targetProduct);
+    if (targetProduct === product && current) {
+      syncLocalFromSession();
+      render({
+        followChat: frame.kind === 'chunk' || frame.kind === 'message',
+      });
+      syncOpTicker();
+      return;
+    }
+    if (unreadChanged && current) render();
+  };
+
   const onWebviewFrame = event => {
     const frame = event?.detail;
     if (!frame || !current) return;
-    const frameProduct = typeof frame.product === 'string' && frame.product
-      ? frame.product
-      : null;
-    if (frame.kind === 'op-event') {
-      handleOpFrame(frame, frameProduct);
-      return;
-    }
-    const targetProduct = frameProduct || product;
-    const unreadChanged = isProductChatOutputFrame(frame) && markProductUnread(targetProduct);
-    if (frame.kind === 'chunk') {
-      appendOrUpdateStreamingForSession(targetProduct, frame.text || '');
-      if (unreadChanged && targetProduct !== product) render();
-      return;
-    }
-    if (frame.kind === 'message') {
-      appendChatMessageToSession(targetProduct, 'assistant', frame.text || '');
-      setStatusForSession(targetProduct, null);
-      const targetSession = getProductSession(targetProduct);
-      if (!targetSession.activeOp) renderIfCurrent(targetProduct);
-      if (unreadChanged && targetProduct !== product) render();
-      return;
-    }
-    if (frame.kind === 'status') {
-      setStatusForSession(targetProduct, frame.label || null);
-      return;
-    }
     if (frame.kind === 'run-event') {
       handleRunFrame(frame);
     }
@@ -2086,6 +1954,7 @@ export function createProductDeepView({
   root.addEventListener?.('click', onClick);
   root.addEventListener?.('submit', onSubmit);
   root.addEventListener?.('keydown', onKeyDown);
+  const unsubscribeProductSessions = subscribeProductSessions(onProductSessionChange);
   if (typeof window !== 'undefined') {
     window.addEventListener?.('rune-webview-frame', onWebviewFrame);
   }
@@ -2094,10 +1963,15 @@ export function createProductDeepView({
     async load() {
       current = await loadJson(`/api/products/${encodeURIComponent(product)}`);
       if (loadOperations && !operations) {
+        const sessionRevision = session.revision;
         const state = await loadJson('/api/state').catch(() => null);
         currentOperations = operationsFromState(state, product);
         current = overlayRunControlsFromState(current, state, product);
+        if (state && session.revision === sessionRevision) {
+          reconcileProductSessionOperation(product, state);
+        }
       }
+      syncLocalFromSession();
       // Adopt an already-active planning session (e.g. started from Telegram or a
       // prior visit) so the chat panel surfaces it. In-session planning state
       // restored from the store wins; otherwise seed from /api/state.
@@ -2116,6 +1990,7 @@ export function createProductDeepView({
       // mid-session must not yank the user off whatever tab they're reading.
       if (current?.activeRun?.runId) activeSidePanel = 'runs';
       render();
+      syncOpTicker();
       announceProductViewed(product);
       if (focusRunId) {
         activeSidePanel = 'runs';
@@ -2152,6 +2027,7 @@ export function createProductDeepView({
       root.removeEventListener?.('click', onClick);
       root.removeEventListener?.('submit', onSubmit);
       root.removeEventListener?.('keydown', onKeyDown);
+      unsubscribeProductSessions();
       if (typeof window !== 'undefined') {
         window.removeEventListener?.('rune-webview-frame', onWebviewFrame);
       }

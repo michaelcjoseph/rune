@@ -19,6 +19,7 @@ function makeRoot() {
   };
   const chatSurface = { scrollIntoView: vi.fn() };
   const chatInput = { value: '', focus: vi.fn() };
+  const opElapsed = { textContent: '' };
   // Models a real outerHTML replacement of the self-contained monitoring
   // <section> (no nested <section>, so the first following </section> closes it).
   // Splicing html directly — instead of going through the root innerHTML setter —
@@ -54,12 +55,16 @@ function makeRoot() {
     chatTranscript,
     chatSurface,
     chatInput,
+    opElapsed,
     querySelector: vi.fn((selector: string) => {
       if (selector === '[data-product-chat-transcript]') {
         return html.includes('data-product-chat-transcript') ? chatTranscript : null;
       }
       if (selector === '[data-surface="chat"]') return chatSurface;
       if (selector === '[data-product-chat-form] [name="message"]') return chatInput;
+      if (selector === '[data-product-chat-op-status] .cs-elapsed') {
+        return html.includes('data-product-chat-op-status') ? opElapsed : null;
+      }
       if (selector === '[data-surface="runs"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="projects"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="bugs"]') return { scrollIntoView: vi.fn() };
@@ -439,7 +444,8 @@ function installFrameBusWindow() {
   };
   return {
     emit(type: string, detail: unknown) {
-      for (const listener of listeners.get(type) ?? []) listener({ detail });
+      const event = { detail };
+      for (const listener of listeners.get(type) ?? []) listener(event);
     },
     restore() {
       if (previousWindow === undefined) delete (globalThis as any).window;
@@ -1820,12 +1826,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
       addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
-        listeners.set(type, listener);
+        const existing = listeners.get(type);
+        listeners.set(type, existing
+          ? event => {
+            existing(event);
+            listener(event);
+          }
+          : listener);
       }),
       removeEventListener: vi.fn(),
     };
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const root = makeRoot();
       const fetchJson = vi.fn(async (url: string) => {
         if (url === '/api/products/aura') return productView();
@@ -2834,12 +2850,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
       addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
-        listeners.set(type, listener);
+        const existing = listeners.get(type);
+        listeners.set(type, existing
+          ? event => {
+            existing(event);
+            listener(event);
+          }
+          : listener);
       }),
       removeEventListener: vi.fn(),
     };
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const root = makeRoot();
       const view = createProductDeepView({
         root,
@@ -3358,6 +3384,285 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toContain('Working on it.');
   });
 
+  it('retains scoped chunks, final output, and terminal operation state received while no product view is mounted', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-home-1',
+        label: 'webview chat',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'Drafted ' });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'while on Home.' });
+      bus.emit('rune-webview-frame', {
+        kind: 'message',
+        product: 'aura',
+        text: 'Drafted while on Home.',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'end',
+        opKind: 'chat',
+        opId: 'op-aura-home-1',
+        label: 'webview chat',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 2500,
+        status: 'success',
+      });
+
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        loadOperations: true,
+        fetchJson: vi.fn(async (url: string) => {
+          if (url === '/api/products/aura') return productView({ activeRun: undefined });
+          if (url === '/api/state') return { inFlight: [], mutations: { active: [] } };
+          throw new Error(`unexpected fetch ${url}`);
+        }),
+      });
+      await view.load();
+
+      expect(root.innerHTML).toContain('Drafted while on Home.');
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      view.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('never lets an unscoped global final overwrite an active product stream', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+      });
+      await view.load();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-isolated',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'Aura partial' });
+      bus.emit('rune-webview-frame', { kind: 'message', text: 'Global Home answer' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'Aura authoritative answer' });
+
+      expect(root.innerHTML).toContain('Aura authoritative answer');
+      expect(root.innerHTML).not.toContain('Global Home answer');
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
+      view.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('preserves an interrupted partial response separately from the next operation response', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-cancelled',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'Interrupted partial response' });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'end',
+        opKind: 'chat',
+        opId: 'op-aura-cancelled',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 1000,
+        status: 'cancelled',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-next',
+        startedAt: '2026-07-16T12:00:02.000Z',
+        elapsedMs: 0,
+      });
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'Next draft' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'Next authoritative response' });
+
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+      });
+      await view.load();
+
+      expect(root.innerHTML).toContain('Interrupted partial response');
+      expect(root.innerHTML).toContain('Next authoritative response');
+      expect(root.innerHTML.indexOf('Interrupted partial response'))
+        .toBeLessThan(root.innerHTML.indexOf('Next authoritative response'));
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(2);
+      view.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('hydrates the newest live scoped chat operation and advances its original elapsed timer after reopening', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-16T12:00:05.000Z'));
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        loadOperations: true,
+        fetchJson: vi.fn(async (url: string) => {
+          if (url === '/api/products/aura') return productView({ activeRun: undefined });
+          if (url === '/api/state') {
+            return {
+              inFlight: [
+                {
+                  opId: 'op-other-product',
+                  kind: 'chat',
+                  scope: 'relay',
+                  label: 'Asking Claude',
+                  startedAt: '2026-07-16T12:00:04.000Z',
+                  elapsedMs: 1000,
+                },
+                {
+                  opId: 'op-aura-old',
+                  kind: 'chat',
+                  scope: 'aura',
+                  label: 'Asking Claude',
+                  startedAt: '2026-07-16T11:59:00.000Z',
+                  elapsedMs: 65000,
+                },
+                {
+                  opId: 'op-aura-new',
+                  kind: 'chat',
+                  scope: 'aura',
+                  label: 'Asking Claude',
+                  startedAt: '2026-07-16T12:00:00.000Z',
+                  elapsedMs: 5000,
+                },
+              ],
+              mutations: { active: [] },
+            };
+          }
+          throw new Error(`unexpected fetch ${url}`);
+        }),
+      });
+
+      await view.load();
+
+      expect(root.innerHTML).toMatch(
+        /data-product-chat-op-status[^>]*data-op-id=["']op-aura-new["']/i,
+      );
+      expect(root.innerHTML).toMatch(/· 5s/i);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(root.opElapsed.textContent).toMatch(/· 6s/i);
+      view.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears stale retained operation and status state only after a successful state reconciliation', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      bus.emit('rune-webview-frame', {
+        kind: 'status',
+        product: 'aura',
+        label: 'Reading the repository',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'op-event',
+        product: 'aura',
+        subKind: 'start',
+        opKind: 'chat',
+        opId: 'op-aura-stale',
+        label: 'webview chat',
+        startedAt: '2026-07-16T12:00:00.000Z',
+        elapsedMs: 0,
+      });
+
+      const failedRoot = makeRoot();
+      const failedView = createProductDeepView({
+        root: failedRoot,
+        product: 'aura',
+        loadOperations: true,
+        fetchJson: vi.fn(async (url: string) => {
+          if (url === '/api/products/aura') return productView({ activeRun: undefined });
+          if (url === '/api/state') throw new Error('state unavailable');
+          throw new Error(`unexpected fetch ${url}`);
+        }),
+      });
+      await failedView.load();
+      expect(failedRoot.innerHTML).toContain('op-aura-stale');
+      expect(failedRoot.innerHTML).toContain('Reading the repository');
+      failedView.close();
+
+      const reconciledRoot = makeRoot();
+      const reconciledView = createProductDeepView({
+        root: reconciledRoot,
+        product: 'aura',
+        loadOperations: true,
+        fetchJson: vi.fn(async (url: string) => {
+          if (url === '/api/products/aura') return productView({ activeRun: undefined });
+          if (url === '/api/state') return { inFlight: [], mutations: { active: [] } };
+          throw new Error(`unexpected fetch ${url}`);
+        }),
+      });
+      await reconciledView.load();
+      expect(reconciledRoot.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      reconciledView.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
   it('scrolls the product chat transcript to bottom when appending a user message', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
@@ -3386,12 +3691,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     (globalThis as any).window = {
       runeSendWebviewMessage: vi.fn(() => true),
       addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
-        listeners.set(type, listener);
+        const existing = listeners.get(type);
+        listeners.set(type, existing
+          ? event => {
+            existing(event);
+            listener(event);
+          }
+          : listener);
       }),
       removeEventListener: vi.fn(),
     };
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const root = makeRoot();
       const view = createProductDeepView({
         root,
@@ -3404,16 +3719,60 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       root.chatTranscript.scrollTop = 1500;
 
       await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Stream please' });
-      listeners.get('rune-webview-frame')?.({ detail: { kind: 'chunk', text: 'First chunk. ' } });
+      listeners.get('rune-webview-frame')?.({ detail: { kind: 'chunk', product: 'aura', text: 'First chunk. ' } });
       expect(root.chatTranscript.scrollTop).toBe(root.chatTranscript.scrollHeight);
 
       root.chatTranscript.scrollHeight = 1900;
-      listeners.get('rune-webview-frame')?.({ detail: { kind: 'message', text: 'Final answer.' } });
+      listeners.get('rune-webview-frame')?.({ detail: { kind: 'message', product: 'aura', text: 'Final answer.' } });
       expect(root.chatTranscript.scrollTop).toBe(root.chatTranscript.scrollHeight);
       view.close();
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('keeps the active streaming placeholder when another user turn is queued before the final arrives', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+        sendChat: vi.fn(async () => ({ live: true })),
+      });
+      await view.load();
+
+      bus.emit('rune-webview-frame', {
+        kind: 'chunk',
+        product: 'aura',
+        text: 'First response partial',
+      });
+      await root.submitClosest('[data-product-chat-form]', {
+        product: 'aura',
+        message: 'Queue a follow-up',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'message',
+        product: 'aura',
+        text: 'First authoritative response',
+      });
+
+      expect(root.innerHTML).toContain('First authoritative response');
+      expect(root.innerHTML).toContain('Queue a follow-up');
+      expect(root.innerHTML).not.toContain('First response partial');
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
+      expect(root.innerHTML.indexOf('First authoritative response'))
+        .toBeLessThan(root.innerHTML.indexOf('Queue a follow-up'));
+      view.close();
+    } finally {
+      bus.restore();
     }
   });
 
@@ -3534,12 +3893,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     (globalThis as any).window = {
       runeSendWebviewMessage: vi.fn(() => true),
       addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
-        listeners.set(type, listener);
+        const existing = listeners.get(type);
+        listeners.set(type, existing
+          ? event => {
+            existing(event);
+            listener(event);
+          }
+          : listener);
       }),
       removeEventListener: vi.fn(),
     };
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const root = makeRoot();
       const view = createProductDeepView({
         root,
@@ -3555,7 +3924,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       });
       expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,120}What is next\?/i);
 
-      listeners.get('rune-webview-frame')?.({ detail: { kind: 'message', text: 'Next: pick the highest-risk task.' } });
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'message',
+          product: 'aura',
+          text: 'Next: pick the highest-risk task.',
+        },
+      });
 
       expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,160}highest-risk task/i);
       view.close();
@@ -3569,7 +3944,11 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('routes scoped streamed product frames to their owning session and replays inactive buffers in arrival order', async () => {
     const bus = installFrameBusWindow();
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const auraRoot = makeRoot();
       const relayRoot = makeRoot();
       const fetchJson = vi.fn(async (url: string) => {
@@ -3600,12 +3979,51 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       await auraAgain.load();
 
       const html = auraRoot.innerHTML;
-      expect(html).toContain('aura chunk one');
-      expect(html).toContain('aura chunk two');
       expect(html).toContain('aura final answer');
-      expect(html.indexOf('aura chunk one')).toBeLessThan(html.indexOf('aura chunk two'));
-      expect(html.indexOf('aura chunk two')).toBeLessThan(html.indexOf('aura final answer'));
+      expect(html).not.toContain('aura chunk one');
+      expect(html).not.toContain('aura chunk two');
+      expect(html.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
       auraAgain.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('installs one global consumer across repeated navigation and keeps product sessions strictly isolated', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      initializeProductChatFrameConsumer();
+
+      bus.emit('rune-webview-frame', { kind: 'chunk', product: 'aura', text: 'Aura draft' });
+      bus.emit('rune-webview-frame', { kind: 'message', product: 'aura', text: 'Aura final' });
+
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView({ name: 'aura', activeRun: undefined });
+        if (url === '/api/products/relay') return productView({ name: 'relay', activeRun: undefined });
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const auraRoot = makeRoot();
+      const firstAura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await firstAura.load();
+      expect(auraRoot.innerHTML.match(/Aura final/g)).toHaveLength(1);
+      firstAura.close();
+
+      const relayRoot = makeRoot();
+      const relay = createProductDeepView({ root: relayRoot, product: 'relay', fetchJson });
+      await relay.load();
+      expect(relayRoot.innerHTML).not.toContain('Aura draft');
+      expect(relayRoot.innerHTML).not.toContain('Aura final');
+      relay.close();
+
+      const secondAura = createProductDeepView({ root: auraRoot, product: 'aura', fetchJson });
+      await secondAura.load();
+      expect(auraRoot.innerHTML.match(/Aura final/g)).toHaveLength(1);
+      secondAura.close();
     } finally {
       bus.restore();
     }
@@ -3614,7 +4032,11 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('keeps product chat status pills scoped and restores an inactive product pill on switch-back', async () => {
     const bus = installFrameBusWindow();
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const auraRoot = makeRoot();
       const relayRoot = makeRoot();
       const fetchJson = vi.fn(async (url: string) => {
@@ -3683,7 +4105,11 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('lights a backgrounded sibling channel entry live from a scoped frame, deriving switcher unread in the controller with no injected set', async () => {
     const bus = installFrameBusWindow();
     try {
-      const { createProductDeepView } = await import('./product-deep-view.js');
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
       const relayRoot = makeRoot();
       // Operator is inside relay's deep view (Home is not mounted). Only the
       // deep-view controller can raise the sibling switcher cue here, and it must

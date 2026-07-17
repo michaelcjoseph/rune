@@ -22,6 +22,10 @@ export function renderProductDeepView(
 
 export function __resetProductSessions(): void;
 
+export function initializeProductChatFrameConsumer(
+  targetWindow?: Pick<Window, 'addEventListener'>,
+): void;
+
 export function createProductDeepView(opts?: {
   root?: HTMLElement;
   product?: string;

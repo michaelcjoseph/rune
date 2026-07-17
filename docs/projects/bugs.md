@@ -1,62 +1,5 @@
 ## Active
 
-- [ ] **Product-chat responses and operation state are lost when navigating away from a product view.**
-  - **User impact.** Send a message in product A, navigate to Home or product B, then return to product A. The product chat can show a frozen “Asking Claude” pill whose elapsed counter no longer advances, and the model’s completed response may never appear. Sending another message can make the chat appear to resume, but the original answer has already been dropped from the browser transcript.
-
-  - **Expected behavior.**
-    - A product-chat turn continues while the operator navigates anywhere else in the cockpit.
-    - All streamed chunks, final messages, status frames, and terminal operation frames for that product are retained while its view is inactive.
-    - Returning to a product chat shows its complete accumulated transcript and the correct current operation state.
-    - If an operation remains active, its elapsed timer resumes immediately from its original `startedAt`.
-    - If the operation completed while the product was inactive, the working pill is gone and the final response is visible without requiring another user message.
-
-  - **Actual behavior.**
-    - Route changes call `productView.close()`, which removes the product view’s `rune-webview-frame` listener.
-    - Product-chat frames are delivered over the shared WebSocket and dispatched as browser events, but no route-independent receiver records them after the product view has closed.
-    - Chunks, final messages, status updates, and `op-event:end` frames emitted during that gap are discarded from the client’s retained product session.
-    - Returning to the product restores the stale `activeOp` saved before navigation.
-    - The view’s elapsed timer is cleared on `close()` and is only restarted on a new `op-event:start`; loading an already-active retained op does not start it.
-    - Sending a new message starts a new turn after the server’s per-chat dispatch queue clears. Its fresh `op-event:start` restarts the visual timer, creating the impression that the earlier model turn was “kicked” into action.
-
-  - **Root cause.**
-    - Product chat state is module-scoped, but frame handling is view-scoped. `productSessions` survives route changes, while the only code that writes incoming WebSocket frames into those sessions is the `onWebviewFrame` listener created by `createProductDeepView()`.
-    - The router disposes that view on navigation, which removes the listener. The shared WebSocket remains connected, but its frames have no product-session consumer while Home or another product is active.
-    - Product-page load fetches `/api/state`, but uses its `inFlight` list only for the Operations panel. It does not reconcile the product session’s `activeOp` against the scoped in-flight operation.
-    - The final chat response has no durable server-side transcript/replay source, so `/api/state` cannot restore messages that were dropped while the product view was inactive.
-
-  - **Reproduction steps.**
-    1. Open a product chat, such as Rune.
-    2. Send a request that takes long enough to receive at least one `op-event:start`.
-    3. Before the response completes, navigate to Home.
-    4. Navigate to another product, or wait on Home until the original request completes.
-    5. Return to the original product chat.
-    6. Observe either:
-       - a stale working pill whose elapsed time is frozen; or
-       - no final response despite the model having completed.
-    7. Send another message and observe that a new operation start restores the visible timer, while the original missing response is not recovered.
-
-  - **Fix guidance.**
-    1. Install one route-independent browser-level consumer for scoped product-chat frames. It must remain active for the lifetime of the cockpit page, not the lifetime of one product deep view.
-    2. Buffer `chunk`, `message`, `status`, and scoped `op-event` frames into `productSessions` by product slug, whether or not that product is currently visible.
-    3. Let the active product view subscribe to or render from the shared product-session store. It should not be the owner of WebSocket-frame durability.
-    4. On product-view load, reconcile the retained `activeOp` with `/api/state.inFlight` by both `kind: "chat"` and matching product `scope`:
-       - hydrate an active matching operation when one exists;
-       - clear a stale retained operation when none exists;
-       - start the elapsed ticker whenever the reconciled operation is active.
-    5. Preserve ordering of streamed chunks and final messages across route changes. A final message should finalize the streaming entry rather than create duplicate assistant content.
-    6. Consider a bounded server-side transcript or replay protocol for reload/reconnect resilience. Browser-local buffering fixes navigation within one page lifetime, but cannot recover output after a page refresh or WebSocket disconnect.
-
-  - **Acceptance criteria.**
-    - Sending a product-chat request, navigating Home → another product → back before completion, and then returning shows a ticking elapsed counter based on the original operation start time.
-    - The counter continues increasing without sending another message.
-    - A final response received while the product view is inactive appears in that product’s transcript on return.
-    - The terminal `op-event:end` received while inactive clears the working pill on return.
-    - The original response is not duplicated, truncated, or reordered relative to streamed chunks.
-    - Product A’s frames never appear in product B’s transcript or operation pill.
-    - Navigating away and back repeatedly does not register duplicate global listeners or duplicate messages.
-    - On entry, `/api/state` clears a stale cached product operation that has already completed and hydrates an operation that is still active.
-    - Regression tests cover the full route sequence, inactive completion, inactive streaming, stale-op reconciliation, timer restart, and cross-product isolation.
-
 - [ ] **Orchestrated work can enter closeout without executable required validation, and reviewer evidence can be narrower than the task diff.**
   - **What is broken.** Assay run `7bd0d9ba-30c5-45a0-b175-3991d4a2d8fb` advanced to `ready-for-closeout` although Task 1 required an installable `uv` Python 3.12 package, a committed lockfile, `pytest`, `ruff`, and an installed `assay` entry point. The agents reported that `uv`, `pytest`, `ruff`, and dependency installation were unavailable, then substituted parsing, compilation, and direct CLI checks. The reviewer also reported seeing only `harness/README.md` directly and accepted the substantive work from handoff notes.
 
@@ -178,6 +121,8 @@
 (empty)
 
 ## Done
+
+- [x] **Product-chat responses and operation state are lost when navigating away from a product view.** _(Fixed 2026-07-16 — `product-chat-session-store.js` is the sole page-lifetime scoped-frame owner; `client-view.js` installs it once and product views subscribe only for rendering. It retains chunk/message/status/chat-op frames by exact product slug, rejects unscoped global output, replaces streaming placeholders with authoritative finals, preserves cancelled/error partials separately from later turns, and reconciles `/api/state.inFlight` without erasing cache on fetch failure; hydrated timers resume from the original `startedAt`. Regression coverage includes inactive completion, timer advance, stale/live reconciliation, global/product isolation, interrupted and queued-turn stream ordering, single-message finalization, and duplicate-install prevention. Product/Home/global client suites, TypeScript build, and the full 330-file suite pass: 5,437 tests, 8 todo.)_
 
 - [x] **Codex product-chat resume does not reassert its sandbox authority, and an unresolved product incorrectly falls back to read-only instead of workspace write access.** _(Fixed 2026-07-16 — product-chat authority is explicit `read-only | product-workspace-write | product-full-access`. Home/global stays vault-cwd read-only. A product receives full access only after its configured repo and optional relative scope canonicalize to real paths inside the repository; validation precedes repo-context reads and the same validated context is reused for prompt assembly. Unknown, missing, stale, malformed, or symlink-escaping paths use a stable hashed scratch directory under `RUNE_PRODUCT_CHAT_FALLBACK_ROOT` (default `~/.rune/product-chat-workspaces`), with overlap/symlink checks keeping it disjoint from the vault and configured repos. Fallback gets editing tools but no KB/Cockpit diagnostics: Claude receives strict empty MCP; Codex reasserts `workspace-write` on resume, uses strict config parsing, ignores user config/rules, empties MCP, disables hooks/apps/remote plugins/network, and removes extra/temp writable roots. Resolved Codex uses `danger-full-access`; global uses `read-only`; fresh threads use `-s <mode>` and resumed threads use `-c sandbox_mode="<mode>"`, never the external-sandbox bypass. Thread reuse remains exact on authority/cwd/writable-root, with bounded transcript replay on any mismatch, and legacy metadata never implies fallback authority. Regression coverage spans argv ordering, all authority/binding transitions, invalid/stale/symlink-escaping repo/scope routing, prompts/tools/MCP isolation, path-scrubbed provisioning failures, persistence, controlled Claude/Codex launch/resume, fallback cleanup, and an opt-in live `handleWebviewMessage` proof with hostile project Codex config attempting MCP/hook/network/extra-root escape.)_
 
