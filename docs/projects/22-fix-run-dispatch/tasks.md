@@ -95,7 +95,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Cockpit surface
 
-- [ ] **cockpit-fix-terminal-surface** — Map `fixed` \| `failed` \| `parked-on-human` through
+- [x] **cockpit-fix-terminal-surface** — Map `fixed` \| `failed` \| `parked-on-human` through
   `backlog-actions.ts` `FixActionState`, add readable labels in
   `src/server/static/product-deep-view.js`, add state classes in `src/server/static/app.css`,
   and keep the existing `runId -> /api/work-runs/<runId>` transcript link. Ensure guard

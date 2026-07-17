@@ -170,25 +170,12 @@ _None yet._
 
 ## Next Task Handoff
 
-- Implemented durable Fix-attempt terminal reconciliation for proceeding attempts: startup catch-up and live orchestrated-work terminal events map recorded runs to `fixed`, `failed`, or `parked-on-human` without overwriting existing terminal attempts.
-- Wired reconciler startup and graceful shutdown in `src/index.ts`.
-- Added focused coverage in `src/jobs/fix-attempt-reconciler.test.ts`.
-- Updated `docs/architecture/module-reference.md`.
+- Preserved the fixed, failed, and parked-on-human post-dispatch terminal states, their diagnostic metadata, and transcript run IDs. Added matching product deep-view labels and distinct success, failure, and parked styles.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 333 test files passed; 5,480 tests passed, 8 todo
+- `npm test` — 333 files passed; 5,486 tests passed, 8 todo
 - `git diff --check` — passed
-
-No tests removed. No commit created.
-- e full log per attempt.
-- Added coverage for status precedence, summary fallback, event filtering/fallback, durable merged facts, and unsubscribe behavior.
-
-Validation passed:
-
-- `npm run build`
-- `npm test` — 333 files, 5,485 passed, 8 todo
-- `git diff --check`
 
 No tests removed. No commit created.

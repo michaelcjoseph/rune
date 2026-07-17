@@ -807,9 +807,18 @@ body[data-view="product"] #product-root {
   color: var(--warning);
 }
 .deep-action--declined,
-.deep-action--handoff-failed {
+.deep-action--handoff-failed,
+.deep-action--failed {
   border-color: var(--error-border);
   color: var(--error);
+}
+.deep-action--fixed {
+  border-color: var(--success-border);
+  color: var(--success);
+}
+.deep-action--parked-on-human {
+  border-color: var(--warning-border);
+  color: var(--warning);
 }
 .deep-fix-notice {
   border-left: 2px solid var(--success-border);
@@ -822,8 +831,15 @@ body[data-view="product"] #product-root {
 }
 .deep-fix-notice--declined,
 .deep-fix-notice--handoff-failed,
+.deep-fix-notice--failed,
 .deep-fix-notice--disabled {
   border-color: var(--error-border);
+}
+.deep-fix-notice--fixed {
+  border-color: var(--success-border);
+}
+.deep-fix-notice--parked-on-human {
+  border-color: var(--warning-border);
 }
 .deep-action:disabled,
 .deep-panel button:disabled {

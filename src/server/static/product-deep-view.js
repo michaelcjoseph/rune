@@ -127,6 +127,9 @@ function actionLabel(action, fallback) {
   if (action.state === 'declined') return `${fallback} declined`;
   if (action.state === 'handoff-failed') return `${fallback} handoff failed`;
   if (action.state === 'proceeding') return `${fallback} running`;
+  if (action.state === 'fixed') return `${fallback} fixed`;
+  if (action.state === 'failed') return `${fallback} failed`;
+  if (action.state === 'parked-on-human') return `${fallback} parked on human`;
   if (action.state === 'disabled') return fallback;
   return fallback;
 }

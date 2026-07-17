@@ -89,18 +89,21 @@ describe('computeFixAction - cockpit redesign Phase 3', () => {
   });
 
   it.each(['fixed', 'failed', 'parked-on-human'] as const)(
-    'returns a safe non-throwing placeholder fix action for the post-dispatch %s terminal',
+    'preserves the post-dispatch %s terminal, its diagnosis, and its transcript run id',
     async (state) => {
       const { computeFixAction } = await loadActions();
       const action = computeFixAction(item(), {
         attemptId: `${state}-attempt`,
         state: state as FixAttemptState,
         reason: `${state}-outcome`,
+        detail: `${state}-detail`,
         runId: `${state}-run`,
       });
       expect(action).toEqual({
         kind: 'fix',
-        state: 'proceeding',
+        state,
+        reason: `${state}-outcome`,
+        detail: `${state}-detail`,
         runId: `${state}-run`,
       });
     },
