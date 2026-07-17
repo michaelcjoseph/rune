@@ -170,13 +170,25 @@ _None yet._
 
 ## Next Task Handoff
 
-- - Added regression coverage confirming that policy-declined and rejected handoff outcomes do not overwrite an attempt that has already reached a terminal state.
+- Implemented durable Fix-attempt terminal reconciliation for proceeding attempts: startup catch-up and live orchestrated-work terminal events map recorded runs to `fixed`, `failed`, or `parked-on-human` without overwriting existing terminal attempts.
+- Wired reconciler startup and graceful shutdown in `src/index.ts`.
+- Added focused coverage in `src/jobs/fix-attempt-reconciler.test.ts`.
+- Updated `docs/architecture/module-reference.md`.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 333 test files passed; 5,480 tests passed, 8 todo
+- `git diff --check` — passed
+
+No tests removed. No commit created.
+- e full log per attempt.
+- Added coverage for status precedence, summary fallback, event filtering/fallback, durable merged facts, and unsubscribe behavior.
 
 Validation passed:
 
-- `npx vitest run src/server/fix-endpoint-api.test.ts` — 19 passed
 - `npm run build`
-- `npm test`
+- `npm test` — 333 files, 5,485 passed, 8 todo
 - `git diff --check`
 
-No tests removed.
+No tests removed. No commit created.

@@ -84,7 +84,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Reconciler
 
-- [ ] **fix-attempt-terminal-reconciler** — Reconcile each `proceeding` fix-attempt to a
+- [x] **fix-attempt-terminal-reconciler** — Reconcile each `proceeding` fix-attempt to a
   post-dispatch terminal from the run's existing outcome, with no parallel status system. Read
   run terminal data by `runId` from the mutation descriptor / `supervision-store` and map
   `completed + merged:true` => `fixed`, completed-but-unmerged or parked/blocked/held/noop/
