@@ -1,5 +1,78 @@
 ## Active
 
+- [ ] **Orchestrated runs dispatch role executors without proving their live prerequisites.**
+  - **What is broken.** The production orchestrated runner resolves role models and starts the QA/coder workflow without checking that the selected CLI is installed, authenticated, and callable, or that the QA/coder artifact-MCP configuration can be built. A known missing binary, expired login, invalid sandbox profile, or unavailable required MCP registration can therefore consume a task round, leave a partial diff, and only then surface as a generic executor failure.
+
+  - **Root cause.** `createProductionTaskWorkflowRunner()` resolves policy bindings but has no production executor preflight. The project-14 acceptance harness probes providers, but that check is not part of live dispatch. Artifact-MCP setup is deferred to each `runExecutionAgent()` call.
+
+  - **Expected behavior.** Before any role changes the worktree, Rune verifies every executor required by the resolved role policy and verifies the artifact-MCP setup required by QA/coder. A failed check produces a durable, scrubbed blocked terminal that names the role, provider, model, prerequisite, and remediation, without starting a role round.
+
+  - **Acceptance criteria.**
+    - Missing Codex, failed Codex login, unavailable Claude, and an invalid artifact-MCP/profile configuration each block before QA or coder dispatch.
+    - The preflight covers the actual policy-resolved provider/model set, deduplicates shared executors, and never exposes credentials or host paths.
+    - A successful preflight is recorded as bounded run evidence; a later executor failure remains distinguishable from a preflight failure.
+    - Tests cover each failed prerequisite and prove no execution-agent call or worktree diff occurs.
+
+- [ ] **Execution failures are stringly typed, can escape role boundaries, and lack a durable failing-stage breadcrumb.**
+  - **What is broken.** A normal execution-agent failure is converted to text such as `coder execution failed: …`; unrelated exceptions can still reject the orchestration loop. Neither path carries one typed record containing the role, provider/model, stage, retryability, and bounded scrubbed diagnostic. Once the terminal path fails, progress output only tells us that a coder was active, not whether the failure came from artifact setup, process spawn, model exit, timeout, Git staging, diff capture, or orchestration-adjacent I/O.
+
+  - **Root cause.** `runExecutionAgent()` returns only `{ ok: false, error: string }`; the team-task seams rethrow interpolated strings; `runTeamTaskWorkflow()` catches ordinary errors as generic failed evidence; and the outer runner has no persisted current-role/current-stage checkpoint. The existing parked-terminal bug then discards even that coarse text.
+
+  - **Expected behavior.** All expected execution failures and unexpected exceptions crossing a role boundary become a typed, scrubbed `ExecutionFailure` record. Rune checkpoints the active role/stage before invoking it and preserves the record through task evidence, orchestration result, terminal, summary, transcript, Cockpit, and notifications.
+
+  - **Acceptance criteria.**
+    - Failure stages distinguish artifact-MCP setup, environment build, spawn, timeout/cancellation, nonzero executor exit, Git stage, Git diff, and orchestration-adjacent failure.
+    - A rejection after coder progress retains the last role/stage and a bounded scrubbed diagnostic, even when no normal task evidence returns.
+    - Expected executor failures do not reject the orchestration loop; unexpected exceptions produce a typed orchestration failure instead of an unstructured string.
+    - Tests cover every stage, secret/path scrubbing, and persistence through a dirty-worktree park.
+
+- [ ] **Transient executor failures terminate an orchestrated task without a bounded fresh-process retry policy.**
+  - **What is broken.** A temporary CLI spawn failure, provider transport error, or short-lived executor outage immediately fails or blocks the task. Rune has no retry budget, backoff, fresh-process guarantee, or durable attempt history for role execution. Retrying manually may work, but it spends another full orchestration lifecycle and obscures whether the original cause was transient.
+
+  - **Root cause.** The team-task workflow treats all non-cancellation execution failures as a terminal failed-evidence path. It has no typed retryability signal, so it cannot safely distinguish a transient executor failure from a bad policy, unavailable MCP, sandbox failure, Git failure, or a model-produced implementation failure.
+
+  - **Expected behavior.** Rune retries only explicitly retryable executor failures with a small bounded budget, jittered backoff, and a new child process. It never retries configuration, authentication, sandbox, MCP-registration, validation, or Git failures. Every attempt is visible in the transcript and terminal evidence.
+
+  - **Acceptance criteria.**
+    - A retryable transient failure retries within a fixed budget and succeeds only when a later fresh child succeeds.
+    - Exhaustion records every attempt, final role/stage, and final scrubbed diagnostic without duplicating task mutations.
+    - Non-retryable setup, policy, sandbox, MCP, Git, cancellation, and model-semantic failures do not retry.
+    - Tests prove backoff/attempt bounds, fresh child creation, cancellation during backoff, and no retry after a dirty diff unless the preservation policy explicitly permits it.
+
+- [ ] **Executor failures are not consistently classified as operational terminals.**
+  - **What is broken.** `coder execution failed: …` and equivalent QA/tech-lead failures do not match the orchestrator’s current operational-error heuristic, which looks only for `operational`, `malformed`, or `unparseable`. They can therefore enter the generic blocked route instead of the operational hold and lose the intended remediation semantics.
+
+  - **Root cause.** `isOperationalTerminal()` infers terminal class by regex over human-readable error text rather than a discriminated evidence/failure kind.
+
+  - **Expected behavior.** Terminal routing derives from structured evidence. Executor and infrastructure failures are operational; product findings and ordinary gate rejections retain their existing routes; cancellation remains separate.
+
+  - **Acceptance criteria.**
+    - Coder, QA, and tech-lead execution failures route to the operational terminal without relying on their message wording.
+    - A reviewer finding, a normal gate rejection, model-policy/configuration failure, and user/system cancellation each retain their intended distinct terminal route.
+    - Tests prove changing the diagnostic text cannot change terminal classification.
+
+- [ ] **A parked orchestrated run overwrites the triggering failure and is reported as a clean exit.**
+  - **What is broken.** Project 24 run `23565b44-171e-4b9f-9919-842b7c95ff37` emitted a coder progress message while beginning a repair, then ended parked with `exitCode: 0`, `exitFact: clean-exit`, and only `parked during terminal cleanup: WIP preserved as 213ab06`. The durable record no longer identifies why the coder/orchestration workflow stopped, so the operator cannot distinguish a model/executor failure, malformed artifact, cancellation, or runner exception from a successful completion that merely had uncommitted work.
+
+  - **Root cause.** `orchestratedWorkApplier.apply()` creates a failed terminal when `runOrchestration()` rejects. `prepareTerminalDisposition()` then calls `disposeTerminalWorktree()`; when the worktree is dirty, that function WIP-commits it and returns a new parked `completed` terminal whose reason contains only preservation status. `buildOrchestratedSummary()` derives `exitCode: 0` and `clean-exit` solely from `terminal.kind === 'completed'`. The original terminal kind, error, cancellation source, and failing workflow stage are discarded.
+
+  - **Expected behavior.** WIP preservation must be additive diagnostic state, never a replacement for the triggering terminal fact. A parked run clearly reports both the preservation result and the original cause, including the role/stage when known. A park caused by failure, cancellation, cleanup uncertainty, or an interrupted worker must not be labeled a clean exit.
+
+  - **Reproduction steps.**
+    1. Start an orchestrated task whose coder changes the worktree and then causes its execution promise or orchestration loop to reject.
+    2. Let terminal cleanup inspect the dirty worktree.
+    3. Observe a WIP commit and a parked `completed` terminal.
+    4. Inspect the Cockpit run summary and observe `exitCode: 0` / `clean-exit` with no original error or stage.
+
+  - **Required fix.** Preserve an immutable `trigger` terminal fact before cleanup, and model WIP preservation as a separate disposition (`parked`, WIP SHA, worktree preservation) attached to that fact. Make summary exit fields derive from the trigger, not from the cleanup disposition. Thread structured role/stage/executor failure details through `runExecutionAgent` → team-task workflow → orchestrated terminal, with scrubbed bounded diagnostics. Update Cockpit list, inspect, and notification rendering to show the trigger and preservation result together.
+
+  - **Acceptance criteria.**
+    - A dirty worktree after an orchestration exception remains parked with a WIP commit, while the run retains `failed` exit semantics and the original scrubbed error.
+    - A user, system, and shutdown cancellation each retain their actual cancellation source after WIP preservation.
+    - A normal successful run with dirty state due to cleanup uncertainty is not conflated with an executor failure; both cases name the correct trigger.
+    - Cockpit list and inspect surfaces show the original terminal cause, failure stage/role when available, and WIP SHA in one bounded diagnostic record.
+    - Regression tests cover orchestration rejection, executor error after a dirty diff, cancellation, terminal-cleanup failure, and a genuine clean completion.
+
 - [ ] **Orchestrated work can enter closeout without executable required validation, and reviewer evidence can be narrower than the task diff.**
   - **What is broken.** Assay run `7bd0d9ba-30c5-45a0-b175-3991d4a2d8fb` advanced to `ready-for-closeout` although Task 1 required an installable `uv` Python 3.12 package, a committed lockfile, `pytest`, `ruff`, and an installed `assay` entry point. The agents reported that `uv`, `pytest`, `ruff`, and dependency installation were unavailable, then substituted parsing, compilation, and direct CLI checks. The reviewer also reported seeing only `harness/README.md` directly and accepted the substantive work from handoff notes.
 
