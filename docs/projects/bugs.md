@@ -1,20 +1,5 @@
 ## Active
 
-- [x] **Orchestrated runs dispatch role executors without proving their live prerequisites.**
-  - **What is broken.** The production orchestrated runner resolves role models and starts the QA/coder workflow without checking that the selected CLI is installed, authenticated, and callable, or that the QA/coder artifact-MCP configuration can be built. A known missing binary, expired login, invalid sandbox profile, or unavailable required MCP registration can therefore consume a task round, leave a partial diff, and only then surface as a generic executor failure.
-
-  - **Root cause.** `createProductionTaskWorkflowRunner()` resolves policy bindings but has no production executor preflight. The project-14 acceptance harness probes providers, but that check is not part of live dispatch. Artifact-MCP setup is deferred to each `runExecutionAgent()` call.
-
-  - **Expected behavior.** Before any role changes the worktree, Rune verifies every executor required by the resolved role policy and verifies the artifact-MCP setup required by QA/coder. A failed check produces a durable, scrubbed blocked terminal that names the role, provider, model, prerequisite, and remediation, without starting a role round.
-
-  - **Acceptance criteria.**
-    - Missing Codex, failed Codex login, unavailable Claude, and an invalid artifact-MCP/profile configuration each block before QA or coder dispatch.
-    - The preflight covers the actual policy-resolved provider/model set, deduplicates shared executors, and never exposes credentials or host paths.
-    - A successful preflight is recorded as bounded run evidence; a later executor failure remains distinguishable from a preflight failure.
-    - Tests cover each failed prerequisite and prove no execution-agent call or worktree diff occurs.
-
-  - **Fixed 2026-07-20.** Added the run-scoped, fail-closed `execution-preflight.ts` boundary and invoked it from `createProductionTaskWorkflowRunner()` after policy resolution but before dependency construction. Unique executor/model bindings now prove executable binaries, persisted subscription login from the effective product executor state, and exact-model calls through centralized Claude/Codex adapters with built-in tools disabled. Codex probes use a private auth/runtime, official execution-feature switches, and a macOS Seatbelt sensitive-host-read denial. Each configured QA/coder artifact format is built in a scratch worktree and must complete an authenticated live broker/relay MCP `initialize` + exact `tools/list` handshake before cleanup. Successful results are cached and transcripted once; failures return scrubbed typed `TaskEvidence.executionPreflight` plus an actionable `blockedReason` with no invoked roles. Raw CLI output never leaves the adapters, and probe processes, brokers, relays, sockets, scratch/probe files, and temporary directories are reaped on every terminal path or reported as cleanup failure. Focused coverage pins missing/unexecutable CLIs, auth/model failures and real timeouts, host-read containment, Seatbelt/broker/registration/cleanup failures, deduplication, mixed providers, no-MCP products, transcript emission/caching, redaction bounds, and unchanged tracked/staged/untracked product-worktree state.
-
 - [ ] **Execution failures are stringly typed, can escape role boundaries, and lack a durable failing-stage breadcrumb.**
   - **What is broken.** A normal execution-agent failure is converted to text such as `coder execution failed: …`; unrelated exceptions can still reject the orchestration loop. Neither path carries one typed record containing the role, provider/model, stage, retryability, and bounded scrubbed diagnostic. Once the terminal path fails, progress output only tells us that a coder was active, not whether the failure came from artifact setup, process spawn, model exit, timeout, Git staging, diff capture, or orchestration-adjacent I/O.
 
@@ -196,6 +181,21 @@
 (empty)
 
 ## Done
+
+- [x] **Orchestrated runs dispatch role executors without proving their live prerequisites.**
+  - **What is broken.** The production orchestrated runner resolves role models and starts the QA/coder workflow without checking that the selected CLI is installed, authenticated, and callable, or that the QA/coder artifact-MCP configuration can be built. A known missing binary, expired login, invalid sandbox profile, or unavailable required MCP registration can therefore consume a task round, leave a partial diff, and only then surface as a generic executor failure.
+
+  - **Root cause.** `createProductionTaskWorkflowRunner()` resolves policy bindings but has no production executor preflight. The project-14 acceptance harness probes providers, but that check is not part of live dispatch. Artifact-MCP setup is deferred to each `runExecutionAgent()` call.
+
+  - **Expected behavior.** Before any role changes the worktree, Rune verifies every executor required by the resolved role policy and verifies the artifact-MCP setup required by QA/coder. A failed check produces a durable, scrubbed blocked terminal that names the role, provider, model, prerequisite, and remediation, without starting a role round.
+
+  - **Acceptance criteria.**
+    - Missing Codex, failed Codex login, unavailable Claude, and an invalid artifact-MCP/profile configuration each block before QA or coder dispatch.
+    - The preflight covers the actual policy-resolved provider/model set, deduplicates shared executors, and never exposes credentials or host paths.
+    - A successful preflight is recorded as bounded run evidence; a later executor failure remains distinguishable from a preflight failure.
+    - Tests cover each failed prerequisite and prove no execution-agent call or worktree diff occurs.
+
+  - **Fixed 2026-07-20.** Added the run-scoped, fail-closed `execution-preflight.ts` boundary and invoked it from `createProductionTaskWorkflowRunner()` after policy resolution but before dependency construction. Unique executor/model bindings now prove executable binaries, persisted subscription login from the effective product executor state, and exact-model calls through centralized Claude/Codex adapters with built-in tools disabled. Codex probes use a private auth/runtime, official execution-feature switches, and a macOS Seatbelt sensitive-host-read denial. Each configured QA/coder artifact format is built in a scratch worktree and must complete an authenticated live broker/relay MCP `initialize` + exact `tools/list` handshake before cleanup. Successful results are cached and transcripted once; failures return scrubbed typed `TaskEvidence.executionPreflight` plus an actionable `blockedReason` with no invoked roles. Raw CLI output never leaves the adapters, and probe processes, brokers, relays, sockets, scratch/probe files, and temporary directories are reaped on every terminal path or reported as cleanup failure. Focused coverage pins missing/unexecutable CLIs, auth/model failures and real timeouts, host-read containment, Seatbelt/broker/registration/cleanup failures, deduplication, mixed providers, no-MCP products, transcript emission/caching, redaction bounds, and unchanged tracked/staged/untracked product-worktree state.
 
 - [x] **Product-chat responses and operation state are lost when navigating away from a product view.** _(Fixed 2026-07-16 — `product-chat-session-store.js` is the sole page-lifetime scoped-frame owner; `client-view.js` installs it once and product views subscribe only for rendering. It retains chunk/message/status/chat-op frames by exact product slug, rejects unscoped global output, replaces streaming placeholders with authoritative finals, preserves cancelled/error partials separately from later turns, and reconciles `/api/state.inFlight` without erasing cache on fetch failure; hydrated timers resume from the original `startedAt`. Regression coverage includes inactive completion, timer advance, stale/live reconciliation, global/product isolation, interrupted and queued-turn stream ordering, single-message finalization, and duplicate-install prevention. Product/Home/global client suites, TypeScript build, and the full 330-file suite pass: 5,437 tests, 8 todo.)_
 
