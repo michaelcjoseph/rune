@@ -17,7 +17,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 
 const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
-  spawnSyncMock: vi.fn(() => ({ status: 0 })),
+  spawnSyncMock: vi.fn((..._args: unknown[]) => ({ status: 0 })),
 }));
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -45,6 +45,32 @@ function makeBrokerChild(): any {
         child.emit('exit', 0, null);
       });
     }),
+  };
+  return child;
+}
+
+function makeRelayChild(toolNames = ['vault_search', 'journal_range', 'follow_wikilinks']): any {
+  const child = new EventEmitter() as any;
+  child.pid = fakePid++;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.stdout = new EventEmitter();
+  child.stderr = Object.assign(new EventEmitter(), { resume: vi.fn() });
+  child.stdin = {
+    write: (raw: string) => {
+      const request = JSON.parse(raw) as { id?: number };
+      if (request.id === 1) {
+        queueMicrotask(() => child.stdout.emit('data', Buffer.from(
+          `${JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fixture', version: '1' } } })}\n`,
+        )));
+      } else if (request.id === 2) {
+        queueMicrotask(() => child.stdout.emit('data', Buffer.from(
+          `${JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: toolNames.map((name) => ({ name })) } })}\n`,
+        )));
+      }
+      return true;
+    },
+    end: () => queueMicrotask(() => child.emit('close', 0, null)),
   };
   return child;
 }
@@ -210,6 +236,53 @@ describe('buildArtifactMcpConfig', () => {
     }
   });
 
+  it('performs a live relay initialize and exact tools-list handshake', async () => {
+    const realRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const f = fixture(true);
+    const relay = makeRelayChild();
+    spawnMock
+      .mockImplementationOnce(() => makeBrokerChild())
+      .mockImplementationOnce(() => relay);
+    const cfg = await buildArtifactMcpConfig(f.sandbox, {
+      productsConfigPath: f.products,
+      projectRoot: realRoot,
+      vaultDir: f.vault,
+      codexHome: f.codexHome,
+    });
+    try {
+      await expect(cfg!.verifyRegistration()).resolves.toBeUndefined();
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(spawnMock.mock.calls[1]![0]).toBe('/usr/bin/sandbox-exec');
+      expect(spawnMock.mock.calls[1]![1]).toEqual(expect.arrayContaining([
+        '-f', cfg!.sandboxProfilePath,
+        join(realRoot, 'src', 'mcp', 'artifact-readonly-relay.ts'),
+      ]));
+    } finally {
+      await cfg?.stop();
+    }
+  });
+
+  it('fails registration when the relay exposes a broader tool surface', async () => {
+    const realRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const f = fixture(true);
+    spawnMock
+      .mockImplementationOnce(() => makeBrokerChild())
+      .mockImplementationOnce(() => makeRelayChild([
+        'vault_search', 'journal_range', 'follow_wikilinks', 'kb_ingest',
+      ]));
+    const cfg = await buildArtifactMcpConfig(f.sandbox, {
+      productsConfigPath: f.products,
+      projectRoot: realRoot,
+      vaultDir: f.vault,
+      codexHome: f.codexHome,
+    });
+    try {
+      await expect(cfg!.verifyRegistration()).rejects.toThrow(/registration handshake failed/);
+    } finally {
+      await cfg?.stop();
+    }
+  });
+
   it('rejects missing and non-directory vault paths before spawning the broker', async () => {
     const realRoot = fileURLToPath(new URL('../..', import.meta.url));
     const f = fixture(true);
@@ -267,7 +340,16 @@ describe('buildArtifactMcpConfig', () => {
   it('preflights shell startup and a worktree write against the generated profile', async () => {
     const realRoot = fileURLToPath(new URL('../..', import.meta.url));
     const f = fixture(true);
-    spawnSyncMock.mockReturnValueOnce({ status: 1 });
+    let worktreeProbePath = '';
+    spawnSyncMock.mockImplementationOnce((_command: unknown, args: unknown) => {
+      const argv = args as string[];
+      worktreeProbePath = argv.at(-1) as string;
+      // Model the failure mode the operator-side cleanup protects against:
+      // Seatbelt started the shell and created the probe, but the in-sandbox
+      // cleanup did not run before the process failed.
+      writeFileSync(worktreeProbePath, 'partial preflight');
+      return { status: 1 };
+    });
 
     await expect(buildArtifactMcpConfig(f.sandbox, {
       productsConfigPath: f.products,
@@ -278,5 +360,7 @@ describe('buildArtifactMcpConfig', () => {
     const preflightArgs = (spawnSyncMock.mock.calls as unknown as Array<[string, string[]]>)[0]![1];
     expect(preflightArgs[0]).toBe('-f');
     expect(existsSync(join(preflightArgs[1]!, '..'))).toBe(false);
+    expect(worktreeProbePath).toMatch(/\.rune-artifact-preflight-/);
+    expect(existsSync(worktreeProbePath)).toBe(false);
   });
 });

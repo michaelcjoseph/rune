@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
@@ -33,6 +34,9 @@ export interface ArtifactMcpConfig {
   runtimeEnv: Record<string, string>;
   /** Codex-only auth/runtime environment. Omitted for Claude-format artifact sessions. */
   codexEnv?: Record<string, string>;
+  /** Live relay → broker MCP initialize/tools-list handshake. This is invoked
+   * by executor preflight before the environment is accepted. */
+  verifyRegistration: () => Promise<void>;
   stop: () => Promise<void>;
 }
 
@@ -122,20 +126,27 @@ function preflightArtifactSandbox(
   worktree: string,
   runtimeDir: string,
 ): void {
+  const probePath = join(worktree, `.rune-artifact-preflight-${randomUUID()}`);
   const args = [
     '-f', profilePath,
     '/bin/sh', '-c',
-    'pwd >/dev/null\nprobe="$1/.rune-artifact-preflight-$$"\n: > "$probe"\nrm -f "$probe"',
-    'sh', worktree,
+    'pwd >/dev/null\n: > "$1"\nrm -f "$1"',
+    'sh', probePath,
   ];
-  const probe = spawnSync('/usr/bin/sandbox-exec', args, {
-    cwd: worktree,
-    env: { PATH: '/usr/bin:/bin', TMPDIR: runtimeDir },
-    encoding: 'utf8',
-    timeout: 5_000,
-  });
-  if (probe.status !== 0 || probe.error) {
-    throw new Error('artifact sandbox preflight failed: shell startup or worktree write denied');
+  try {
+    const probe = spawnSync('/usr/bin/sandbox-exec', args, {
+      cwd: worktree,
+      env: { PATH: '/usr/bin:/bin', TMPDIR: runtimeDir },
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    if (probe.status !== 0 || probe.error) {
+      throw new Error('artifact sandbox preflight failed: shell startup or worktree write denied');
+    }
+  } finally {
+    // If the profile or shell fails after creating the probe but before its
+    // in-sandbox rm, the operator process still restores the worktree.
+    rmSync(probePath, { force: true });
   }
 }
 
@@ -174,6 +185,115 @@ function waitForBrokerReady(child: ChildProcess, timeoutMs: number): Promise<voi
     child.stderr?.on('data', onStderr);
     child.once('error', onError);
     child.once('exit', onExit);
+  });
+}
+
+const ARTIFACT_TOOL_NAMES = ['vault_search', 'journal_range', 'follow_wikilinks'] as const;
+
+function verifyRelayRegistration(opts: {
+  nodePath: string;
+  loaderPath: string;
+  relayPath: string;
+  socketPath: string;
+  profilePath: string;
+  projectRoot: string;
+  runtimeDir: string;
+  timeoutMs: number;
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const relay = spawn('/usr/bin/sandbox-exec', [
+      '-f', opts.profilePath,
+      opts.nodePath, '--import', opts.loaderPath, opts.relayPath, opts.socketPath,
+    ], {
+      cwd: opts.projectRoot,
+      env: { TMPDIR: opts.runtimeDir },
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    registerActiveProcess(relay);
+    let stdout = '';
+    let terminalError: Error | null = null;
+    let stopping = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    let timeout: NodeJS.Timeout;
+
+    const killGroup = (signal: NodeJS.Signals): void => {
+      if (relay.pid === undefined) return;
+      try { process.kill(-relay.pid, signal); } catch { /* already exited */ }
+    };
+    const stop = (err: Error | null): void => {
+      if (stopping) return;
+      stopping = true;
+      terminalError = err;
+      clearTimeout(timeout);
+      relay.stdin?.end();
+      killGroup('SIGTERM');
+      killTimer = setTimeout(() => killGroup('SIGKILL'), 1_000);
+      killTimer.unref();
+    };
+    const fail = (): void => stop(new Error('artifact MCP relay registration handshake failed'));
+
+    const send = (message: Record<string, unknown>): void => {
+      relay.stdin?.write(`${JSON.stringify(message)}\n`);
+    };
+    const handleLine = (line: string): void => {
+      if (!line.trim() || stopping) return;
+      let response: Record<string, unknown>;
+      try { response = JSON.parse(line) as Record<string, unknown>; } catch { fail(); return; }
+      if (response['id'] === 1 && response['result'] && typeof response['result'] === 'object') {
+        send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+        return;
+      }
+      if (response['id'] !== 2) return;
+      const result = response['result'];
+      const tools = result && typeof result === 'object'
+        ? (result as Record<string, unknown>)['tools']
+        : undefined;
+      if (!Array.isArray(tools)) { fail(); return; }
+      const names = tools.map((tool) => tool && typeof tool === 'object'
+        ? (tool as Record<string, unknown>)['name']
+        : undefined).filter((name): name is string => typeof name === 'string').sort();
+      const expected = [...ARTIFACT_TOOL_NAMES].sort();
+      if (JSON.stringify(names) !== JSON.stringify(expected)) { fail(); return; }
+      stop(null);
+    };
+
+    relay.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+      let newline = stdout.indexOf('\n');
+      while (newline !== -1) {
+        const line = stdout.slice(0, newline).replace(/\r$/, '');
+        stdout = stdout.slice(newline + 1);
+        handleLine(line);
+        newline = stdout.indexOf('\n');
+      }
+    });
+    relay.stderr?.resume();
+    relay.once('error', fail);
+    relay.once('close', () => {
+      clearTimeout(timeout);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      unregisterActiveProcess(relay);
+      if (!stopping) {
+        reject(new Error('artifact MCP relay registration handshake failed'));
+      } else if (terminalError !== null) {
+        reject(terminalError);
+      } else {
+        resolve();
+      }
+    });
+    timeout = setTimeout(fail, opts.timeoutMs);
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'rune-executor-preflight', version: '1' },
+      },
+    });
   });
 }
 
@@ -349,6 +469,16 @@ export async function buildArtifactMcpConfig(
     sandboxProfilePath: profilePath,
     runtimeEnv,
     ...(codexEnv !== undefined ? { codexEnv } : {}),
+    verifyRegistration: () => verifyRelayRegistration({
+      nodePath,
+      loaderPath,
+      relayPath,
+      socketPath,
+      profilePath,
+      projectRoot,
+      runtimeDir,
+      timeoutMs: opts.startupTimeoutMs ?? 10_000,
+    }),
     stop,
   };
 }

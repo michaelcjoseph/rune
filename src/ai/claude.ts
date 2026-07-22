@@ -26,6 +26,10 @@ import {
 } from '../transport/in-flight.js';
 import type { OperationCancellation } from '../cancellation.js';
 import { formatToolUse } from './tool-labels.js';
+import {
+  runBoundedProcess,
+  type AiExecutorProbeResult,
+} from './bounded-process.js';
 
 const log = createLogger('claude');
 
@@ -48,6 +52,75 @@ function resolveClaudePath(): string {
 /** Resolved path to the Claude CLI binary. Exported for use by callers that
  *  spawn claude directly (e.g. work-runner) to keep binary resolution centralized. */
 export const CLAUDE_BIN = resolveClaudePath();
+
+export interface ClaudeExecutorProbeOpts {
+  binaryPath?: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  model?: string;
+  mcpArgs?: string[];
+  sandboxProfilePath?: string;
+}
+
+function boundedClaudeProbe(
+  args: string[],
+  opts: ClaudeExecutorProbeOpts,
+): ReturnType<typeof runBoundedProcess> {
+  const binary = opts.binaryPath ?? CLAUDE_BIN;
+  const command = opts.sandboxProfilePath ? '/usr/bin/sandbox-exec' : binary;
+  const commandArgs = opts.sandboxProfilePath
+    ? ['-f', opts.sandboxProfilePath, binary, ...args]
+    : args;
+  return runBoundedProcess(command, commandArgs, {
+    cwd: opts.cwd,
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    register: registerActiveProcess,
+    unregister: unregisterActiveProcess,
+  });
+}
+
+/** Subscription-login probe used by orchestrated executor preflight. Raw CLI
+ * output is parsed locally and never leaves this AI adapter. */
+export async function probeClaudeAuthentication(
+  opts: ClaudeExecutorProbeOpts,
+): Promise<AiExecutorProbeResult> {
+  const result = await boundedClaudeProbe(['auth', 'status', '--json'], opts);
+  if (result.status === 'timed-out') return { ok: false, code: 'timeout' };
+  if (result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
+  if (result.exitCode !== 0) return { ok: false, code: 'not-authenticated' };
+  try {
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    return parsed['loggedIn'] === true
+      ? { ok: true }
+      : { ok: false, code: 'not-authenticated' };
+  } catch {
+    return { ok: false, code: 'invalid-response' };
+  }
+}
+
+/** Exact-model, built-in-tools-disabled probe used by orchestrated preflight. */
+export async function probeClaudeModelCall(
+  opts: ClaudeExecutorProbeOpts & { model: string },
+): Promise<AiExecutorProbeResult> {
+  const args = [
+    '--safe-mode',
+    '--disable-slash-commands',
+    ...(opts.mcpArgs ?? ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']),
+    '--tools', '',
+    '--no-session-persistence',
+    '--model', opts.model,
+    '-p', 'Reply with exactly OK. Do not use tools.',
+  ];
+  const result = await boundedClaudeProbe(args, opts);
+  if (result.status === 'timed-out') return { ok: false, code: 'timeout' };
+  if (result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
+  if (result.exitCode !== 0) return { ok: false, code: 'nonzero-exit' };
+  return result.stdout.trim() === 'OK'
+    ? { ok: true }
+    : { ok: false, code: 'invalid-response' };
+}
 
 /** Absolute path to Rune's project-local Claude settings (declares the
  *  single `rune-kb` MCP server). Passed to every spawn via

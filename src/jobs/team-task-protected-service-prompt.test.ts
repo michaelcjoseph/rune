@@ -136,7 +136,16 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
         modelPolicyPath: REAL_POLICY_PATH,
         cap: 1,
       },
-      { judgmentCall, runExecution },
+      {
+        preflightExecution: async () => ({
+          status: 'success',
+          bindings: [],
+          artifactMcp: 'not-required',
+          artifactFormats: [],
+        }),
+        judgmentCall,
+        runExecution,
+      },
     );
     const task: SelectedTask = {
       id: 'orchestration-protected-service-prompt',

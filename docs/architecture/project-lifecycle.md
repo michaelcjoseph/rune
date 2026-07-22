@@ -67,7 +67,9 @@ The branch is `rune-work/<slug>` cut at the repo HEAD `baseSha`. Dependency prov
 
 ## C2 — Per-task role workflow (`src/intent/team-task-workflow.ts` `runGated`)
 
-A single task runs through these ordered sub-gates. Verdicts emit `role-verdict` events; rejections emit `gate-rejection`. Gate identifiers are the exact strings in code.
+The production runner first resolves all role models and, before dependency construction or the first role call, executes the run-scoped executor preflight: executable CLIs, persisted subscription authentication from the effective product executor state, and one bounded built-in-tools-disabled live call per unique exact model binding. Claude and Codex probes stay behind their centralized AI spawn boundaries; Codex additionally uses a private auth/runtime, official execution-feature disabling, and a macOS Seatbelt sensitive-host-read denial. When artifact MCP is configured, each distinct QA/coder format is built in a temporary scratch worktree, authenticated through its generated profile/runtime, and must complete a live relay/broker MCP `initialize` + exact `tools/list` handshake before cleanup. A success is transcripted once and cached for later tasks/closeout retries in the same run. A failure is a bounded, scrubbed, typed `blocked` terminal with no raw probe output, no invoked roles, and unchanged tracked, staged, and untracked product-worktree state; failed checks are retried rather than cached. Manual/live release-gate tasks bypass this automated-executor gate.
+
+After preflight, a single task runs through these ordered sub-gates. Verdicts emit `role-verdict` events; rejections emit `gate-rejection`. Gate identifiers are the exact strings in code.
 
 | Sub | Stage | Primary | Gate | PASS criteria / FAIL handling |
 |---|---|---|---|---|

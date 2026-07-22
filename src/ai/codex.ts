@@ -19,7 +19,19 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
@@ -31,6 +43,11 @@ import {
 } from '../transport/in-flight.js';
 import type { OperationCancellation } from '../cancellation.js';
 import type { OpKind } from '../transport/notification-bus.js';
+import {
+  runBoundedProcess,
+  type AiExecutorProbeResult,
+  type BoundedProcessResult,
+} from './bounded-process.js';
 
 const log = createLogger('codex');
 
@@ -69,6 +86,225 @@ let _codexBin: string | null = null;
 export function getCodexBin(): string {
   if (_codexBin === null) _codexBin = resolveCodexPath();
   return _codexBin;
+}
+
+export interface CodexExecutorProbeOpts {
+  binaryPath?: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  model?: string;
+  configOverrides?: string[];
+  /** Existing outer Seatbelt profile, used for an artifact-MCP authentication
+   * probe. Ordinary probes get a private sensitive-read-deny profile below. */
+  sandboxProfilePath?: string;
+}
+
+type CodexProbeProcessResult =
+  | { status: 'process'; result: BoundedProcessResult }
+  | { status: 'probe-failure'; code: 'not-authenticated' | 'sandbox-unavailable' | 'sandbox-setup-failed' | 'cleanup-failed' };
+
+function seatbeltLiteral(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+function safeProbeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of ['PATH', 'USER', 'LANG', 'LC_ALL', 'TERM', 'SHELL'] as const) {
+    if (source[key] !== undefined) out[key] = source[key];
+  }
+  return out;
+}
+
+function codexAuthSource(env: NodeJS.ProcessEnv): string {
+  const sourceHome = env['CODEX_HOME'] ?? join(env['HOME'] ?? homedir(), '.codex');
+  return join(sourceHome, 'auth.json');
+}
+
+function buildCodexProbeProfile(
+  profilePath: string,
+  runtimeDir: string,
+  binaryPath: string,
+  deniedReadRoots: readonly string[],
+): void {
+  const realBinary = realpathSync(binaryPath);
+  writeFileSync(profilePath, [
+    '(version 1)',
+    '(allow default)',
+    '(deny file-write*)',
+    `(allow file-write* (subpath "${seatbeltLiteral(runtimeDir)}"))`,
+    '(allow file-write* (subpath "/dev"))',
+    ...[...new Set(deniedReadRoots)].map((path) =>
+      `(deny file-read* (subpath "${seatbeltLiteral(path)}"))`),
+    // The executable is copied into the private runtime before this profile
+    // is generated, so only that probe-owned copy needs an explicit rule.
+    `(allow file-read* (literal "${seatbeltLiteral(binaryPath)}"))`,
+    `(allow file-read* (literal "${seatbeltLiteral(realBinary)}"))`,
+    `(deny file-read* (literal "${seatbeltLiteral(profilePath)}"))`,
+    '(deny network-outbound (remote ip "localhost:*"))',
+  ].join('\n'), { mode: 0o600 });
+}
+
+async function boundedCodexProbe(
+  args: string[],
+  opts: CodexExecutorProbeOpts,
+): Promise<CodexProbeProcessResult> {
+  const binary = opts.binaryPath ?? getCodexBin();
+  if (opts.sandboxProfilePath !== undefined) {
+    const result = await runBoundedProcess(
+      '/usr/bin/sandbox-exec',
+      ['-f', opts.sandboxProfilePath, binary, ...args],
+      {
+        cwd: opts.cwd,
+        env: opts.env,
+        timeoutMs: opts.timeoutMs,
+        register: registerActiveProcess,
+        unregister: unregisterActiveProcess,
+      },
+    );
+    return { status: 'process', result };
+  }
+  if (process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec')) {
+    return { status: 'probe-failure', code: 'sandbox-unavailable' };
+  }
+
+  const authSource = codexAuthSource(opts.env);
+  if (!existsSync(authSource) || !statSync(authSource).isFile()) {
+    return { status: 'probe-failure', code: 'not-authenticated' };
+  }
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'rune-codex-preflight-'));
+  const privateCodexHome = join(runtimeDir, 'codex-home');
+  const privateBinary = join(runtimeDir, 'codex');
+  const profilePath = join(runtimeDir, 'probe.sb');
+  let processResult: BoundedProcessResult;
+  try {
+    mkdirSync(privateCodexHome, { mode: 0o700 });
+    copyFileSync(authSource, join(privateCodexHome, 'auth.json'));
+    chmodSync(join(privateCodexHome, 'auth.json'), 0o600);
+    copyFileSync(realpathSync(binary), privateBinary);
+    chmodSync(privateBinary, 0o700);
+    const deniedReadRoots = [
+      opts.env['HOME'],
+      opts.env['CODEX_HOME'],
+      homedir(),
+      PROJECT_ROOT,
+      config.VAULT_DIR,
+    ].filter((path): path is string => typeof path === 'string' && path !== '' && path !== runtimeDir)
+      .flatMap((path) => {
+        try { return [path, realpathSync(path)]; } catch { return [path]; }
+      });
+    buildCodexProbeProfile(profilePath, runtimeDir, privateBinary, deniedReadRoots);
+    const env = {
+      ...safeProbeEnv(opts.env),
+      HOME: runtimeDir,
+      CODEX_HOME: privateCodexHome,
+      TMPDIR: runtimeDir,
+    };
+    processResult = await runBoundedProcess(
+      '/usr/bin/sandbox-exec',
+      ['-f', profilePath, privateBinary, ...args],
+      {
+        cwd: runtimeDir,
+        env,
+        timeoutMs: opts.timeoutMs,
+        register: registerActiveProcess,
+        unregister: unregisterActiveProcess,
+      },
+    );
+  } catch {
+    try { rmSync(runtimeDir, { recursive: true, force: true }); }
+    catch { return { status: 'probe-failure', code: 'cleanup-failed' }; }
+    return { status: 'probe-failure', code: 'sandbox-setup-failed' };
+  }
+  try {
+    rmSync(runtimeDir, { recursive: true, force: true });
+  } catch {
+    return { status: 'probe-failure', code: 'cleanup-failed' };
+  }
+  return { status: 'process', result: processResult };
+}
+
+function mapProbeProcessFailure(result: CodexProbeProcessResult): AiExecutorProbeResult | null {
+  if (result.status === 'probe-failure') return { ok: false, code: result.code };
+  if (result.result.status === 'timed-out') return { ok: false, code: 'timeout' };
+  if (result.result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
+  return null;
+}
+
+/** Subscription-login probe. API keys are deliberately omitted by the private
+ * runtime so a green result proves the same persisted Codex login that artifact
+ * execution seeds into its isolated home. */
+export async function probeCodexAuthentication(
+  opts: CodexExecutorProbeOpts,
+): Promise<AiExecutorProbeResult> {
+  const result = await boundedCodexProbe(['login', 'status'], opts);
+  const failure = mapProbeProcessFailure(result);
+  if (failure !== null) return failure;
+  if (result.status !== 'process' || result.result.status !== 'completed') {
+    return { ok: false, code: 'invalid-response' };
+  }
+  if (result.result.exitCode !== 0) return { ok: false, code: 'not-authenticated' };
+  const loggedIn = [result.result.stdout, result.result.stderr]
+    .some((stream) => /(?:^|\n)Logged in\b/im.test(stream));
+  return loggedIn ? { ok: true } : { ok: false, code: 'not-authenticated' };
+}
+
+function validCodexCompletion(stdout: string): AiExecutorProbeResult {
+  let sawMessage = false;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      return { ok: false, code: 'invalid-response' };
+    }
+    const item = parsed['item'];
+    if (parsed['type'] !== 'item.completed' || item === null || typeof item !== 'object') continue;
+    const itemType = (item as Record<string, unknown>)['type'];
+    if (['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(String(itemType))) {
+      return { ok: false, code: 'tool-attempt' };
+    }
+    if (itemType === 'agent_message' && (item as Record<string, unknown>)['text'] === 'OK') {
+      sawMessage = true;
+    }
+  }
+  return sawMessage ? { ok: true } : { ok: false, code: 'invalid-response' };
+}
+
+/** Exact-model Codex probe with execution features disabled and a private
+ * sensitive-read-deny Seatbelt boundary as defense in depth. */
+export async function probeCodexModelCall(
+  opts: CodexExecutorProbeOpts & { model: string },
+): Promise<AiExecutorProbeResult> {
+  const args = [
+    'exec', '--ephemeral', '--skip-git-repo-check',
+    '-m', opts.model,
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--json', '--strict-config', '--ignore-user-config', '--ignore-rules',
+    '-c', 'mcp_servers={}',
+    '-c', 'web_search="disabled"',
+    '-c', 'hooks={}',
+    '-c', 'apps.enabled=false',
+    '-c', 'remote_plugins.enabled=false',
+    '-c', 'features.shell_tool=false',
+    '-c', 'features.unified_exec=false',
+    '-c', 'features.multi_agent=false',
+    '-c', 'features.computer_use=false',
+    '-c', 'features.browser_use=false',
+    '-c', 'tools_view_image=false',
+    '-c', 'shell_environment_policy.inherit="none"',
+    ...(opts.configOverrides ?? []).flatMap((override) => ['-c', override]),
+    'Reply with exactly OK. Do not use tools.',
+  ];
+  const result = await boundedCodexProbe(args, opts);
+  const failure = mapProbeProcessFailure(result);
+  if (failure !== null) return failure;
+  if (result.status !== 'process' || result.result.status !== 'completed') {
+    return { ok: false, code: 'invalid-response' };
+  }
+  if (result.result.exitCode !== 0) return { ok: false, code: 'nonzero-exit' };
+  return validCodexCompletion(result.result.stdout);
 }
 
 /** Returns `true` when the Codex CLI is resolvable. Non-throwing — used by

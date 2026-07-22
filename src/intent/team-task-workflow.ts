@@ -26,6 +26,7 @@ import type { SizedTask } from './planning-roles.js';
 import type { DispatchProvider } from './dispatch.js';
 import type { RoleName } from '../roles/loader.js';
 import type { OperationCancellation } from '../cancellation.js';
+import type { ExecutionPreflightFailure } from './execution-preflight.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -344,6 +345,9 @@ export interface TaskEvidence {
   noCodeTestRationale?: string;
   /** Set on a `blocked` outcome. */
   blockedReason?: string;
+  /** Present only for a fail-closed executor prerequisite block. Ordinary
+   * post-preflight role failures continue to use `failureReason`. */
+  executionPreflight?: ExecutionPreflightFailure;
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected

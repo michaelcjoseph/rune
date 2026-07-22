@@ -21,7 +21,7 @@
  * output. See tasks.md Phase 8.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -140,6 +140,12 @@ const GATE_VERDICT_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 
 function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeams> {
   return {
+    preflightExecution: async () => ({
+      status: 'success',
+      bindings: [],
+      artifactMcp: 'not-required',
+      artifactFormats: [],
+    }),
     judgmentCall: greenJudgment,
     runExecution: greenExecution,
     // Fail-deterministic: a fixture that doesn't inject runGit must never
@@ -1357,7 +1363,9 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
     const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    const lines = events.filter((event) => typeof event.data?.['line'] === 'string');
+    const lines = events.filter((event) =>
+      typeof event.data?.['line'] === 'string' && typeof event.data?.['role'] === 'string',
+    );
     expect(lines.length).toBeGreaterThan(0);
     const declared = loadRealPolicy().roleDefaults;
     const expectedByRole = new Map([
@@ -1638,6 +1646,9 @@ describe('no-stub regression (Phase 8)', () => {
       text: `**live-release-gate** — Operator verifies the live browser path ${MANUAL_LIVE_GATE_MARKER}`,
       section: 'Phase 3 - Release',
     };
+    const preflightExecution = vi.fn(async () => {
+      throw new Error('manual gates must not invoke executor preflight');
+    });
     const run = createProductionTaskWorkflowRunner(
       {
         sandbox: makeSandbox(),
@@ -1645,6 +1656,7 @@ describe('no-stub regression (Phase 8)', () => {
         modelPolicyPath: '/nonexistent/model-policy.json',
       },
       makeSeams({
+        preflightExecution,
         runExecution: async () => {
           throw new Error('manual gates must not invoke QA/coder execution');
         },
@@ -1660,6 +1672,181 @@ describe('no-stub regression (Phase 8)', () => {
     expect(evidence.rolesInvoked).toEqual([]);
     expect(evidence.blockedReason).toMatch(/manual\/live release gate/i);
     expect(evidence.blockedReason).toMatch(/operator evidence/i);
+    expect(preflightExecution).not.toHaveBeenCalled();
+  });
+
+  it('blocks on typed preflight evidence before any judgment or execution role', async () => {
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+    const judgmentCall = vi.fn(greenJudgment);
+    const runExecution = vi.fn(greenExecution);
+    const rawSecret = 'sk-preflightRunnerSecret123456';
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+      },
+      makeSeams({
+        judgmentCall,
+        runExecution,
+        preflightExecution: async () => ({
+          status: 'failed',
+          roles: ['qa', 'coder'],
+          provider: 'openai',
+          format: 'codex',
+          model: 'gpt-coder',
+          prerequisite: 'authentication',
+          diagnostic: `${rawSecret} expired at ${REPO_ROOT}/private/auth.json`,
+          remediation: 'run `codex login` and retry',
+        }),
+      }),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'h', contextMd: 'c' });
+
+    expect(judgmentCall).not.toHaveBeenCalled();
+    expect(runExecution).not.toHaveBeenCalled();
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      rolesInvoked: [],
+      executionPreflight: {
+        status: 'failed',
+        roles: ['qa', 'coder'],
+        prerequisite: 'authentication',
+        provider: 'openai',
+        format: 'codex',
+        model: 'gpt-coder',
+      },
+    });
+    expect(evidence.blockedReason).toMatch(/authentication.*qa, coder.*openai\/codex/i);
+    expect(JSON.stringify(evidence)).not.toContain(rawSecret);
+    expect(JSON.stringify(evidence)).not.toContain(REPO_ROOT);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'activity',
+        data: expect.objectContaining({
+          event: 'executor-preflight',
+          status: 'failed',
+          prerequisite: 'authentication',
+        }),
+      }),
+    ]);
+  });
+
+  it('caches a successful run-scoped preflight and emits its durable activity once', async () => {
+    const preflightExecution = vi.fn(async () => ({
+      status: 'success' as const,
+      bindings: [
+        { roles: ['qa', 'coder'] as Array<'qa' | 'coder'>, provider: 'openai' as const, format: 'codex' as const, model: 'gpt-coder' },
+      ],
+      artifactMcp: 'not-required' as const,
+      artifactFormats: [],
+    }));
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+        cap: 1,
+      },
+      makeSeams({ preflightExecution }),
+    );
+
+    const [first, second] = await Promise.all([
+      run(selectedTask, { handoff: 'h1', contextMd: 'c1' }),
+      run(
+        { ...selectedTask, id: 'demo-task-2', text: 'demo task two' },
+        { handoff: 'h2', contextMd: 'c2' },
+      ),
+    ]);
+
+    expect(first.outcome).toBe('ready-for-closeout');
+    expect(second.outcome).toBe('ready-for-closeout');
+    expect(preflightExecution).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.data?.['event'] === 'executor-preflight')).toEqual([
+      expect.objectContaining({
+        kind: 'activity',
+        data: expect.objectContaining({ status: 'success', artifactMcp: 'not-required' }),
+      }),
+    ]);
+  });
+
+  it('never caches a failed preflight as success', async () => {
+    const preflightExecution = vi.fn(async () => ({
+      status: 'failed' as const,
+      roles: ['qa'] as Array<'qa'>,
+      provider: 'openai' as const,
+      format: 'codex' as const,
+      model: 'gpt-qa',
+      prerequisite: 'model-call' as const,
+      diagnostic: 'model temporarily unavailable',
+      remediation: 'verify model access and retry',
+    }));
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+      },
+      makeSeams({ preflightExecution }),
+    );
+
+    await run(selectedTask, { handoff: 'h1', contextMd: 'c1' });
+    await run(selectedTask, { handoff: 'h2', contextMd: 'c2' });
+
+    expect(preflightExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves tracked, staged, and untracked worktree state byte-for-byte unchanged on preflight failure', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'executor-preflight-worktree-'));
+    try {
+      const git = (gitArgs: string[]) => defaultRunGit(gitArgs, { cwd: dir });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(dir, 'tracked.ts'), 'baseline\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+      await writeFile(join(dir, 'tracked.ts'), 'unstaged change\n');
+      await writeFile(join(dir, 'staged.ts'), 'staged change\n');
+      await git(['add', 'staged.ts']);
+      await writeFile(join(dir, 'untracked.ts'), 'untracked change\n');
+      const before = await git(['status', '--porcelain=v1']);
+
+      const run = createProductionTaskWorkflowRunner(
+        {
+          sandbox: { ...makeSandbox(), worktree: dir },
+          productsConfigPath: '/nonexistent/products.json',
+          modelPolicyPath: REAL_POLICY_PATH,
+        },
+        makeSeams({
+          preflightExecution: async () => ({
+            status: 'failed',
+            roles: ['qa', 'coder'],
+            provider: 'openai',
+            format: 'codex',
+            model: 'gpt-coder',
+            prerequisite: 'binary',
+            diagnostic: 'binary missing',
+            remediation: 'install codex',
+          }),
+        }),
+      );
+
+      const evidence = await run(selectedTask, { handoff: 'h', contextMd: 'c' });
+      const after = await git(['status', '--porcelain=v1']);
+
+      expect(evidence.outcome).toBe('blocked');
+      expect(after.stdout).toBe(before.stdout);
+      expect(await readFile(join(dir, 'tracked.ts'), 'utf8')).toBe('unstaged change\n');
+      expect(await readFile(join(dir, 'staged.ts'), 'utf8')).toBe('staged change\n');
+      expect(await readFile(join(dir, 'untracked.ts'), 'utf8')).toBe('untracked change\n');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

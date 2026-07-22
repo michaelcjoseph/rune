@@ -66,6 +66,7 @@ import {
   type TestRepairRedCheck,
   type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
+import type { ExecutionPreflightFailure } from '../intent/execution-preflight.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import { runValidationCommands } from './work-run-gate-runtime.js';
 import {
@@ -84,6 +85,21 @@ import { redactSecrets } from './work-run-transcript.js';
 import { getBaseEnv } from './credential-injector.js';
 import { createLogger } from '../utils/logger.js';
 import { formatProtectedLocalServicesWarning } from '../utils/protected-local-services.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  boundExecutionPreflightText,
+  preflightExecution,
+  sanitizeExecutionPreflightFailure,
+  type ExecutionPreflightResult,
+  type PreflightExecutionArgs,
+} from './execution-preflight.js';
+
+export type {
+  ExecutionPreflightFailure,
+  ExecutionPreflightPrerequisite,
+  ExecutionPreflightResult,
+  ExecutionPreflightSuccess,
+} from './execution-preflight.js';
 
 const log = createLogger('team-task-deps');
 const PROTECTED_LOCAL_SERVICES_WARNING = formatProtectedLocalServicesWarning();
@@ -195,6 +211,9 @@ export interface JudgmentModelCall {
 }
 
 export interface TeamTaskSeams {
+  /** Run-scoped prerequisite gate, invoked after policy resolution and before
+   * dependency construction or any role workflow call. */
+  preflightExecution: (args: PreflightExecutionArgs) => Promise<ExecutionPreflightResult>;
   judgmentCall: JudgmentModelCall;
   runExecution: (
     opts: ExecutionAgentOpts,
@@ -262,6 +281,7 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
 };
 
 const defaultSeams: TeamTaskSeams = {
+  preflightExecution,
   judgmentCall: defaultJudgmentCall,
   runExecution: runExecutionAgent,
   runGit: defaultRunGit,
@@ -1439,7 +1459,11 @@ function toSizedTask(task: SelectedTask): SizedTask {
   };
 }
 
-function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
+function blockedEvidence(
+  task: SelectedTask,
+  reason: string,
+  executionPreflight?: ExecutionPreflightFailure,
+): TaskEvidence {
   return {
     taskId: task.id,
     outcome: 'blocked',
@@ -1447,6 +1471,7 @@ function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
     objectionOpen: false,
     handoffNotes: [],
     blockedReason: reason,
+    ...(executionPreflight !== undefined ? { executionPreflight } : {}),
     findingsLedger: [],
     loopExitReason: 'operational',
   };
@@ -1546,6 +1571,10 @@ export function createProductionTaskWorkflowRunner(
   task: SelectedTask,
   ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
 ) => Promise<TaskEvidence> {
+  const seams: TeamTaskSeams = { ...defaultSeams, ...seamOverrides };
+  let preflightPassed = false;
+  let pendingPreflight: Promise<ExecutionPreflightResult> | null = null;
+
   return async (task, ctx) => {
     if (isManualLiveGateTask(task)) {
       return manualLiveGateEvidence(task);
@@ -1571,6 +1600,38 @@ export function createProductionTaskWorkflowRunner(
       return blockedEvidence(task, `role model resolution failed: ${(err as Error).message}`);
     }
 
+    if (!preflightPassed) {
+      if (pendingPreflight === null) {
+        pendingPreflight = seams.preflightExecution({
+          models,
+          sandbox: args.sandbox,
+          productsConfigPath: args.productsConfigPath,
+        }).then((result) => {
+          if (result.status === 'success') {
+            preflightPassed = true;
+            emitPreflight(args.emit, result);
+          }
+          return result;
+        });
+      }
+      let preflight: ExecutionPreflightResult;
+      try {
+        preflight = await pendingPreflight;
+      } catch (err) {
+        pendingPreflight = null;
+        return blockedEvidence(
+          task,
+          boundedPreflightReason(`executor preflight failed unexpectedly: ${(err as Error).message}`),
+        );
+      }
+      pendingPreflight = null;
+      if (preflight.status === 'failed') {
+        const evidence = sanitizeExecutionPreflightFailure(preflight);
+        emitPreflight(args.emit, evidence);
+        return blockedEvidence(task, formatPreflightBlockedReason(evidence), evidence);
+      }
+    }
+
     const deps = buildProductionTeamTaskDeps(
       {
         sandbox: args.sandbox,
@@ -1581,7 +1642,7 @@ export function createProductionTaskWorkflowRunner(
           : {}),
         ...(args.emit !== undefined ? { emit: args.emit } : {}),
       },
-      seamOverrides,
+      seams,
     );
     const emit = args.emit !== undefined
       ? attributeWorkflowEvents(args.emit, models)
@@ -1604,4 +1665,60 @@ export function createProductionTaskWorkflowRunner(
       deps,
     );
   };
+}
+
+const PREFLIGHT_REASON_MAX_CHARS = 2_000;
+
+function boundedPreflightReason(value: string): string {
+  return redactSecrets(scrubAbsolutePaths(scrubPathsInText(value))).replace(/[\r\n\t]+/g, ' ').trim()
+    .slice(0, PREFLIGHT_REASON_MAX_CHARS);
+}
+
+function formatPreflightBlockedReason(failure: ExecutionPreflightFailure): string {
+  return boundedPreflightReason(
+    `executor preflight ${failure.prerequisite} failed for roles ` +
+      `${failure.roles.join(', ')} (${failure.provider}/${failure.format}, model ${failure.model}): ` +
+      `${failure.diagnostic}. Remediation: ${failure.remediation}`,
+  );
+}
+
+function emitPreflight(
+  emit: TaskWorkflowRunnerArgs['emit'],
+  result: ExecutionPreflightResult,
+): void {
+  if (emit === undefined) return;
+  const data = result.status === 'success'
+    ? {
+        event: 'executor-preflight',
+        status: 'success',
+        bindings: result.bindings.map((binding) => ({
+          roles: binding.roles,
+          provider: binding.provider,
+          format: binding.format,
+          model: boundExecutionPreflightText(binding.model),
+        })),
+        artifactMcp: result.artifactMcp,
+        artifactFormats: result.artifactFormats,
+        line: boundedPreflightReason(
+          `executor preflight passed (${result.bindings.length} model binding` +
+          `${result.bindings.length === 1 ? '' : 's'}; artifact MCP ${result.artifactMcp})`,
+        ),
+      }
+    : {
+        event: 'executor-preflight',
+        status: 'failed',
+        roles: result.roles,
+        provider: result.provider,
+        format: result.format,
+        model: boundExecutionPreflightText(result.model),
+        prerequisite: result.prerequisite,
+        diagnostic: boundExecutionPreflightText(result.diagnostic),
+        remediation: boundExecutionPreflightText(result.remediation),
+        line: formatPreflightBlockedReason(result),
+      };
+  try {
+    emit({ kind: 'activity', data });
+  } catch {
+    /* transcript/activity sinks are observability-only. */
+  }
 }

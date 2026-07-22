@@ -488,6 +488,7 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
     sandboxProfilePath: '/tmp/artifact.sb',
     runtimeEnv: { TMPDIR: '/tmp/rune-artifact-runtime' },
     codexEnv: { HOME: '/tmp/rune-artifact-runtime', CODEX_HOME: '/tmp/rune-artifact-runtime/codex-home' },
+    verifyRegistration: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   };
 
