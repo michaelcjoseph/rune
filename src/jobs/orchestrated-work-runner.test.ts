@@ -296,6 +296,9 @@ function makeFakeTranscriptSink(path = '/tmp/work-runs/orch/transcript.jsonl') {
       appended.push(event);
       operations.push(`append:${mutationEvent.kind}:${String((mutationEvent.data as Record<string, unknown> | undefined)?.['line'] ?? '')}`);
     }),
+    flush: vi.fn(async () => {
+      operations.push('flush');
+    }),
     finish: vi.fn(async () => {
       operations.push('finish:start');
       await Promise.resolve();
@@ -741,11 +744,117 @@ describe('orchestratedWorkApplier', () => {
         expect.arrayContaining(['add', 'commit', 'rev-parse']),
       );
       expect(events.at(-1)).toEqual(expect.objectContaining({
-        kind: 'completed',
-        data: expect.objectContaining({ parked: true, preserveWorktree: true, preserveBranch: true }),
+        kind: 'failed',
+        data: expect.objectContaining({
+          parked: true,
+          preserveWorktree: true,
+          preserveBranch: true,
+          trigger: expect.objectContaining({ kind: 'failure' }),
+          disposition: expect.objectContaining({ kind: 'parked', wipSha: 'deadbeefcafebabe' }),
+        }),
       }));
       expect(parked).not.toHaveBeenCalled();
       expect(destroyed).toBe(false);
+    });
+
+    it('preserves an executor-failure trigger while parking its dirty WIP', async () => {
+      const executionFailure = {
+        taskId: 'task-one', role: 'coder', provider: 'openai' as const, format: 'codex' as const,
+        model: 'gpt-test', workflowStage: 'coder-implementation',
+        checkpointedAt: '2026-07-22T00:00:00.000Z', failureStage: 'provider' as const,
+        diagnostic: 'temporary transport failure', retryable: true, attempts: [{
+          attempt: 1,
+          startedAt: '2026-07-22T00:00:00.000Z',
+          endedAt: '2026-07-22T00:00:01.000Z',
+          failureStage: 'provider' as const,
+          diagnostic: 'temporary transport failure',
+          retryable: true,
+        }],
+        retryDisposition: 'worktree-changed' as const,
+      };
+      inject({
+        kind: 'held',
+        reason: 'coder implementation failed at provider: temporary transport failure',
+        handoff: { runId: 'mut-1', project: 'demo', product: 'rune', branch: 'rune-work/demo', taskRecords: [] },
+        branch: 'rune-work/demo',
+        worktreePath: wtDir ?? '',
+        executionFailure,
+      });
+      __setOrchestratedRuntimeForTest({
+        inspectWorktreeStatus: async () => ' M src/partial.ts\n',
+        preflightRecovery: async () => ({
+          kind: 'recoverable',
+          cursor: {
+            runId: 'mut-1', product: 'rune', project: 'demo', branch: 'rune-work/demo',
+            baseBranch: 'main', worktreePath: wtDir ?? '', resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: 'task-one', nextTaskId: 'task-one' },
+          },
+          reconstruction: { completedTaskIds: [], nextTask: null, drift: false },
+        }),
+        runGit: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'cafebabedeadbeef\n', stderr: '' }
+          : { stdout: '', stderr: '' },
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      expect(events.at(-1)).toMatchObject({
+        kind: 'failed',
+        data: {
+          outcome: 'failed',
+          reason: expect.stringContaining('temporary transport failure'),
+          trigger: { kind: 'failure', executionFailure },
+          disposition: { kind: 'parked', wipSha: 'cafebabedeadbeef' },
+          parked: true,
+        },
+      });
+      expect(destroyed).toBe(false);
+    });
+
+    it('removes a clean executor-failure worktree without leaving stale parked fields', async () => {
+      const executionFailure = {
+        taskId: 'task-one', role: 'coder', provider: 'openai' as const, format: 'codex' as const,
+        model: 'gpt-test', workflowStage: 'coder-implementation',
+        checkpointedAt: '2026-07-22T00:00:00.000Z', failureStage: 'executor-exit' as const,
+        diagnostic: 'executor exited with code 1', retryable: true, attempts: [{
+          attempt: 1,
+          startedAt: '2026-07-22T00:00:00.000Z',
+          endedAt: '2026-07-22T00:00:01.000Z',
+          failureStage: 'executor-exit' as const,
+          diagnostic: 'executor exited with code 1',
+          retryable: true,
+        }],
+        retryDisposition: 'exhausted' as const,
+      };
+      inject({
+        kind: 'held',
+        reason: 'executor exited with code 1',
+        handoff: {
+          runId: 'mut-1',
+          project: 'demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
+          taskRecords: [],
+        },
+        branch: 'rune-work/demo',
+        worktreePath: '/tmp/stale-path',
+        executionFailure,
+      });
+      __setOrchestratedRuntimeForTest({ inspectWorktreeStatus: async () => '' });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.at(-1)!;
+      expect(terminal).toMatchObject({
+        kind: 'failed',
+        data: {
+          trigger: { kind: 'failure', executionFailure },
+          disposition: { kind: 'removed' },
+        },
+      });
+      expect(terminal.data).not.toHaveProperty('parked');
+      expect(terminal.data).not.toHaveProperty('operatorWorktreePath');
+      expect(terminal.data).not.toHaveProperty('preserveWorktree');
+      expect(latestRun('mut-1').status).toBe('failed');
+      expect(destroyed).toBe(true);
     });
 
     it('dirty terminal parks and preserves when recovery eligibility is unavailable', async () => {
@@ -763,8 +872,11 @@ describe('orchestratedWorkApplier', () => {
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
 
       expect(events.at(-1)).toEqual(expect.objectContaining({
-        kind: 'completed',
-        data: expect.objectContaining({ parked: true, preserveWorktree: true, preserveBranch: true }),
+        kind: 'failed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true, preserveBranch: true,
+          trigger: expect.objectContaining({ kind: 'failure' }),
+          disposition: expect.objectContaining({ kind: 'parked' }),
+        }),
       }));
       expect(parked).not.toHaveBeenCalled();
       expect(destroyed).toBe(false);
@@ -781,8 +893,11 @@ describe('orchestratedWorkApplier', () => {
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
 
       expect(events.at(-1)).toEqual(expect.objectContaining({
-        kind: 'completed',
-        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+        kind: 'failed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true,
+          trigger: expect.objectContaining({ kind: 'failure' }),
+          disposition: expect.objectContaining({ kind: 'parked' }),
+        }),
       }));
       expect(parked).not.toHaveBeenCalled();
       expect(destroyed).toBe(false);
@@ -812,8 +927,11 @@ describe('orchestratedWorkApplier', () => {
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
 
       expect(events.at(-1)).toEqual(expect.objectContaining({
-        kind: 'completed',
-        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+        kind: 'failed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true,
+          trigger: expect.objectContaining({ kind: 'failure' }),
+          disposition: expect.objectContaining({ kind: 'parked' }),
+        }),
       }));
       expect(parked).not.toHaveBeenCalled();
       expect(destroyed).toBe(false);
@@ -845,8 +963,11 @@ describe('orchestratedWorkApplier', () => {
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
 
       expect(events.at(-1)).toEqual(expect.objectContaining({
-        kind: 'completed',
-        data: expect.objectContaining({ parked: true, preserveWorktree: true }),
+        kind: 'failed',
+        data: expect.objectContaining({ parked: true, preserveWorktree: true,
+          trigger: expect.objectContaining({ kind: 'failure' }),
+          disposition: expect.objectContaining({ kind: 'parked' }),
+        }),
       }));
       expect(parked).not.toHaveBeenCalled();
       expect(destroyed).toBe(false);
@@ -961,7 +1082,7 @@ describe('orchestratedWorkApplier', () => {
       },
     );
 
-    it('does not strand a run when the consumer abandons after work-product artifacts are written but before the terminal event is consumed', async () => {
+    it('defers terminal persistence until finalizer teardown and disposition resolution complete', async () => {
       const runId = 'mut-orch-lost-yield-no-strand';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-lost-yield-'));
       const { runGit } = makeWorkProductGitStub({
@@ -1040,37 +1161,86 @@ describe('orchestratedWorkApplier', () => {
         await Promise.resolve();
         expect(terminalConsumed, 'the terminal event must not be consumed in this lost-yield scenario').toBe(false);
 
-        const terminalMutationWrites = mockAppendMutationLine.mock.calls
+        const prematureMutationWrites = mockAppendMutationLine.mock.calls
           .map(([entry]) => entry as MutationDescriptor)
           .filter((entry) => entry.id === runId);
-        expect(
-          terminalMutationWrites.at(-1),
-          'once work-product artifacts are written, abandoning the iterator must not leave the mutation running',
-        ).toMatchObject({
-          id: runId,
-          kind: 'orchestrated-work',
-          status: 'completed',
-        });
-
-        const terminalSupervisionWrites = mockUpsertRun.mock.calls
+        expect(prematureMutationWrites).toEqual([]);
+        expect(mockUpsertRun.mock.calls
           .map(([run]) => run as SupervisedRun)
-          .filter((run) => run.id === runId);
-        expect(
-          terminalSupervisionWrites.at(-1),
-          'once work-product artifacts are written, abandoning the iterator must not leave supervision running',
-        ).toMatchObject({
-          id: runId,
-          kind: 'orchestrated-work',
-          status: 'completed',
-        });
+          .filter((run) => run.id === runId)).toEqual([]);
 
         releaseFinalizer();
         await Promise.allSettled([droppedTerminal, abandon ?? Promise.resolve({ done: true, value: undefined as never })]);
+
+        expect(mockAppendMutationLine.mock.calls
+          .map(([entry]) => entry as MutationDescriptor)
+          .filter((entry) => entry.id === runId).at(-1)).toMatchObject({
+          id: runId,
+          kind: 'orchestrated-work',
+          status: 'completed',
+        });
+        expect(mockUpsertRun.mock.calls
+          .map(([run]) => run as SupervisedRun)
+          .filter((run) => run.id === runId).at(-1)).toMatchObject({
+          id: runId,
+          kind: 'orchestrated-work',
+          status: 'completed',
+        });
       } finally {
         releaseFinalizer?.();
         await abandon?.catch(() => undefined);
         rmSync(artifactsDir, { recursive: true, force: true });
       }
+    });
+
+    it('persists an early finalizer hold only after outer cleanup enriches it as parked', async () => {
+      const runId = 'mut-finalizer-hold-parks';
+      inject({ kind: 'finalized', outcome: 'unused' });
+      mockRunFinalizer.mockImplementationOnce(async (_input, effects) => {
+        const terminalEvent = {
+          mutationId: runId,
+          ts: new Date().toISOString(),
+          kind: 'completed' as const,
+          data: { outcome: 'branch-complete', reason: 'merge conflict hold' },
+        };
+        effects.writeSupervisionTerminal('completed', terminalEvent);
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: false,
+          merged: false,
+          branchDeleted: false,
+          phases: ['classified'],
+        };
+      });
+      __setOrchestratedRuntimeForTest({
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
+        inspectWorktreeStatus: async () => ' M src/conflict.ts\n',
+        preflightRecovery: async () => ({
+          kind: 'not-resumable',
+          reason: 'merge conflict requires operator review',
+        }),
+      });
+
+      const events = await drain(
+        orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx),
+      );
+      expect(events.at(-1)).toMatchObject({
+        kind: 'completed',
+        data: {
+          trigger: { kind: 'success', reason: 'merge conflict hold' },
+          disposition: { kind: 'parked' },
+          parked: true,
+        },
+      });
+      expect(mockUpsertRun.mock.calls
+        .map(([run]) => run as SupervisedRun)
+        .filter((run) => run.id === runId)).toHaveLength(1);
+      expect(latestRun(runId)).toMatchObject({
+        status: 'blocked-on-human',
+        operatorWorktreePath: expect.any(String),
+      });
     });
 
     it('treats the yielded terminal event as notification-only after the applier writes lifecycle state', async () => {
@@ -1167,9 +1337,9 @@ describe('orchestratedWorkApplier', () => {
 
     it.each([
       {
-        outcome: 'branch-complete',
+        outcome: 'failed',
         runId: 'mut-orch-agree-branch-complete',
-        expectedStatus: 'completed' as const,
+        expectedStatus: 'failed' as const,
         git: {
           commitShas: ['bc1111'],
           diffstat: ' src/complete.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
@@ -1375,8 +1545,9 @@ describe('orchestratedWorkApplier', () => {
 
         const streamed = events.filter((event) => event.kind === 'activity' || event.kind === 'output');
         expect(streamed).toHaveLength(2);
-        expect(fake.sink.append).toHaveBeenCalledTimes(2);
-        expect(fake.appended).toEqual(streamed);
+        expect(fake.sink.append).toHaveBeenCalledTimes(3);
+        expect(fake.appended.slice(0, 2)).toEqual(streamed);
+        expect((fake.appended[2] as MutationEvent | undefined)?.data).toMatchObject({ event: 'terminal-facts' });
         expect(fake.operations).toEqual(expect.arrayContaining([
           'append:activity:qa wrote tests from the spec',
           'append:output:coder implemented against the red test',
@@ -1425,7 +1596,8 @@ describe('orchestratedWorkApplier', () => {
 
         expect(terminal?.kind).toBe('failed');
         expect(String((terminal?.data as Record<string, unknown> | undefined)?.['reason'] ?? '')).toContain('role process crashed');
-        expect(fake.sink.append).toHaveBeenCalledOnce();
+        expect(fake.sink.append).toHaveBeenCalledTimes(2);
+        expect((fake.appended[1] as MutationEvent | undefined)?.data).toMatchObject({ event: 'terminal-facts' });
         expect(fake.sink.finish).toHaveBeenCalledOnce();
         expect(fake.sink.destroy).toHaveBeenCalledOnce();
         expect(fake.operations[fake.operations.length - 1]).toBe('destroy');
@@ -3625,6 +3797,35 @@ describe('orchestratedWorkApplier', () => {
       const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal?.kind).toBe('failed');
       expect(destroyed).toBe(false);
+    });
+
+    it('records pre-start cancellation source and a removed no-worktree disposition', async () => {
+      const createWorktree = vi.fn();
+      __setOrchestratedRuntimeForTest({ createWorktree });
+      const cancelledCtx = {
+        ...ctx,
+        cancel: () => true,
+        cancelReason: () => 'system' as const,
+        cancelSource: () => 'shutdown' as const,
+      };
+
+      const events = await drain(
+        orchestratedWorkApplier.apply(makeDescriptor(undefined, 'mut-prestart-cancel'), cancelledCtx),
+      );
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: 'completed',
+        data: {
+          trigger: {
+            kind: 'cancellation',
+            reason: 'cancelled before start',
+            cancellationSource: 'shutdown',
+          },
+          disposition: { kind: 'removed', reason: 'no worktree was created' },
+        },
+      });
+      expect(createWorktree).not.toHaveBeenCalled();
     });
 
     it('fails with a scrubbed provisioning stage before any orchestration role is spawned', async () => {

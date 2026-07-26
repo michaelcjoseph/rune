@@ -70,6 +70,9 @@ export interface TranscriptSink {
   /** Append one stream event. Resolves once the write is accepted (awaiting a
    *  `drain` first if the stream is backpressured), so no event is dropped. */
   append(event: unknown): Promise<void>;
+  /** Verify that all preceding awaited appends were accepted without closing
+   * the stream. Terminal facts may still be appended after this checkpoint. */
+  flush(): Promise<void>;
   /** End the stream and resolve only after its `finish` event — i.e. after all
    *  buffered writes have flushed to disk. */
   finish(): Promise<void>;
@@ -264,6 +267,11 @@ export function createTranscriptSink(opts: CreateTranscriptSinkOptions): Transcr
           else resolve();
         });
       });
+    },
+    flush(): Promise<void> {
+      if (streamError) return Promise.reject(streamError);
+      if (destroyed) return Promise.reject(new Error('createTranscriptSink: flush after destroy'));
+      return Promise.resolve();
     },
     finish(): Promise<void> {
       // Resolve only after the stream's `finish` — all buffered writes have

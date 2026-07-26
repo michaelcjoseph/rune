@@ -52,6 +52,7 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
+import type { ExecutionFailure } from '../intent/execution-failure.js';
 import { defaultRunGit } from './sandbox-runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,35 @@ const greenExecution = async (): Promise<ExecutionAgentResult> => ({
   diff: 'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n',
   output: 'wrote tests',
 });
+
+function failedExecution(
+  diagnostic: string,
+  cancellation?: ExecutionFailure['cancellation'],
+): ExecutionAgentResult {
+  const failure: ExecutionFailure = {
+    taskId: 'task-one',
+    role: 'coder',
+    provider: 'openai',
+    format: 'codex',
+    model: 'test-model',
+    workflowStage: 'coder-implementation',
+    checkpointedAt: '2026-07-22T00:00:00.000Z',
+    failureStage: cancellation ? 'cancellation' : 'provider',
+    diagnostic,
+    retryable: false,
+    attempts: [{
+      attempt: 1,
+      startedAt: '2026-07-22T00:00:00.000Z',
+      endedAt: '2026-07-22T00:00:01.000Z',
+      failureStage: cancellation ? 'cancellation' : 'provider',
+      diagnostic,
+      retryable: false,
+    }],
+    retryDisposition: cancellation ? 'cancelled' : 'not-eligible',
+    ...(cancellation ? { cancellation } : {}),
+  };
+  return { ok: false, failure, ...(cancellation ? { cancellation } : {}) };
+}
 
 const GATE_VERDICT_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 
@@ -1312,7 +1342,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
   it('a failed execution agent surfaces as a seam rejection → structured failed evidence, not a fake diff', async () => {
     const deps = buildDeps(
       resolveTeamRoleModels(loadRealPolicy()),
-      makeSeams({ runExecution: async () => ({ ok: false, error: 'codex unavailable' }) }),
+      makeSeams({ runExecution: async () => failedExecution('codex unavailable') }),
     );
 
     const evidence = await runTeamTaskWorkflow(
@@ -1322,6 +1352,69 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     );
     expect(evidence.outcome).toBe('failed');
     expect(evidence.failureReason).toContain('codex unavailable');
+  });
+
+  it('persists the role checkpoint before spawn and blocks when that write fails', async () => {
+    const order: string[] = [];
+    const runExecution = vi.fn(async () => {
+      order.push('spawn');
+      return greenExecution();
+    });
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        order.push(`checkpoint:${checkpoint.workflowStage}`);
+        throw new Error('/Users/private/operator/cursor write failed');
+      },
+    }, makeSeams({ runExecution }));
+
+    const evidence = await runTeamTaskWorkflow(
+      sizedTask,
+      { spec: 's', contextMd: 'c', coderProvider: 'openai', cap: 2 },
+      deps,
+    );
+
+    expect(order).toEqual(['checkpoint:qa-tests']);
+    expect(runExecution).not.toHaveBeenCalled();
+    expect(evidence).toMatchObject({
+      outcome: 'failed',
+      executionFailure: {
+        role: 'qa',
+        workflowStage: 'qa-tests',
+        failureStage: 'orchestration-adjacent',
+      },
+    });
+    expect(evidence.failureReason).not.toContain('/Users/private/operator');
+  });
+
+  it('passes the exact persisted checkpoint into the execution agent call', async () => {
+    let persisted: unknown;
+    let invoked: unknown;
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        persisted = checkpoint;
+      },
+    }, makeSeams({
+      runExecution: async (opts) => {
+        invoked = opts.checkpoint;
+        return greenExecution();
+      },
+    }));
+
+    await deps.qaWriteTests({ task: sizedTask, spec: 's' });
+
+    expect(persisted).toBeDefined();
+    expect(invoked).toBe(persisted);
+    expect(invoked).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'qa',
+      workflowStage: 'qa-tests',
+    });
   });
 });
 
@@ -1508,7 +1601,7 @@ describe('no-stub regression (Phase 8)', () => {
             return greenJudgment(input);
           },
           runExecution: async (opts) => opts.role === cancelledRole
-            ? { ok: false, error: 'Cancelled by user', cancellation }
+            ? failedExecution('Cancelled by user', cancellation)
             : greenExecution(),
         }),
       );

@@ -66,6 +66,7 @@ export type ExitFact =
   | 'reaped-after-terminal-result'
   | 'user-cancel'
   | 'system-cancel'
+  | 'execution-failure'
   | 'external-kill';
 
 /** Process exit facts handed back by the (Phase 2) refactored `streamProcess`
@@ -334,6 +335,8 @@ function classifyByExitFact(
       const result = classifyWorkProduct(product);
       return { outcome: result.outcome, reason: `system-cancelled (backstop); ${result.reason}` };
     }
+    case 'execution-failure':
+      return { outcome: 'failed', reason: 'execution failed' };
     case 'external-kill':
       return { outcome: 'failed', reason: externalKillReason(exit) };
     case 'clean-exit':

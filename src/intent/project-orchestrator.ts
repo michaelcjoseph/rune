@@ -59,6 +59,12 @@ import {
   type RevocableMutationCancellationSource,
 } from '../transport/mutations.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  adjacentExecutionFailure,
+  executionFailureSummary,
+  type ExecutionCheckpoint,
+  type ExecutionFailure,
+} from './execution-failure.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output' | 'progress';
@@ -100,6 +106,7 @@ export interface OrchestrationRunCursor {
     currentTaskId: string | null;
     nextTaskId: string | null;
   };
+  executionCheckpoint?: ExecutionCheckpoint;
 }
 
 export interface OrchestrationTerminalBugEntry {
@@ -137,6 +144,7 @@ export interface OrchestrationDeps {
   appendTaskRunRecord?: (record: TaskRunRecord) => Promise<void>;
   /** Optional durable cursor sink used to resume a still-running mutation. */
   writeRunCursor?: (cursor: OrchestrationRunCursor) => Promise<void>;
+  currentExecutionCheckpoint?: () => ExecutionCheckpoint | undefined;
   /** Optional durable bug sink for unresolved terminal findings. */
   appendTerminalBugEntries?: (entries: OrchestrationTerminalBugEntry[]) => Promise<void>;
 
@@ -179,12 +187,14 @@ export type OrchestrationResult =
       worktreePath?: string;
       preserveBranch?: true;
       preserveWorktree?: true;
+      executionFailure?: ExecutionFailure;
     }
-  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun }
+  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun; executionFailure?: ExecutionFailure }
   | {
       kind: 'cancelled';
       reason: CancelReason;
       task?: SelectedTask;
+      source?: MutationCancellationSource;
       /** Present when cancellation originated in a nested team role. */
       cancellation?: RoleCancellation;
     };
@@ -199,6 +209,25 @@ export interface ParkedTaskRun {
 
 /** Run the whole project loop to a terminal result. */
 export async function runProjectOrchestration(
+  deps: OrchestrationDeps,
+): Promise<OrchestrationResult> {
+  try {
+    return await runProjectOrchestrationImpl(deps);
+  } catch (err) {
+    const checkpoint = deps.currentExecutionCheckpoint?.();
+    if (checkpoint === undefined) {
+      return buildOperationalHold(
+        deps,
+        scrubAbsolutePaths(`orchestration failed unexpectedly: ${(err as Error).message}`),
+        [],
+      );
+    }
+    const failure = adjacentExecutionFailure(checkpoint, err);
+    return buildOperationalHold(deps, executionFailureSummary(failure), [], failure);
+  }
+}
+
+async function runProjectOrchestrationImpl(
   deps: OrchestrationDeps,
 ): Promise<OrchestrationResult> {
   const taskRecords: TaskRunRecord[] = [];
@@ -371,9 +400,11 @@ function cancellationResult(
   task?: SelectedTask,
 ): Extract<OrchestrationResult, { kind: 'cancelled' }> | null {
   if (deps.cancel?.() !== true) return null;
+  const source = deps.cancelSource?.() ?? null;
   return {
     kind: 'cancelled',
     reason: deps.cancelReason?.() ?? 'user',
+    ...(source !== null ? { source } : {}),
     ...(task !== undefined ? { task } : {}),
   };
 }
@@ -765,8 +796,7 @@ function acceptanceField(
 }
 
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
-  const reason = evidence.blockedReason ?? evidence.failureReason ?? '';
-  return /\boperational\b|malformed|unparseable/i.test(reason);
+  return evidence.executionFailure !== undefined;
 }
 
 /** Terminal routing for task evidence that did not reach ready-for-closeout:
@@ -806,6 +836,7 @@ async function resolveNonCloseoutEvidence(
       deps,
       evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
       taskRecords,
+      evidence.executionFailure,
     );
   }
   const parked = maybeParkedRun(deps, evidence);
@@ -858,6 +889,7 @@ function buildOperationalHold(
   deps: OrchestrationDeps,
   reason: string,
   taskRecords: TaskRunRecord[],
+  executionFailure?: ExecutionFailure,
 ): Extract<OrchestrationResult, { kind: 'held' }> {
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
@@ -873,8 +905,11 @@ function buildOperationalHold(
     handoff,
     branch: deps.branch,
     ...(deps.worktreePath !== undefined ? { worktreePath: deps.worktreePath } : {}),
-    preserveBranch: true,
-    preserveWorktree: true,
+    ...(executionFailure === undefined ? {
+      preserveBranch: true as const,
+      preserveWorktree: true as const,
+    } : {}),
+    ...(executionFailure !== undefined ? { executionFailure } : {}),
   };
 }
 

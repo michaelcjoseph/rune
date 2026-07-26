@@ -32,8 +32,14 @@ import {
   appendIndexRow,
   readRecentIndex,
   readWorkRunSummaryResult,
+  readWorkRunSummary,
 } from './work-run-store.js';
 import type { WorkRunSummary, WorkRunIndexRow } from './work-run-store.js';
+import {
+  EXECUTION_DIAGNOSTIC_MAX_CHARS,
+  executionFailureSummary,
+  type ExecutionFailure,
+} from '../intent/execution-failure.js';
 
 // ---------------------------------------------------------------------------
 // Temp dir management — one fresh dir per test
@@ -119,6 +125,65 @@ describe('writeSummary', () => {
       expect(parsed).toEqual(summary);
     },
   );
+
+  it('round-trips structured trigger and disposition records', () => {
+    const summary = makeSummary({
+      outcome: 'failed',
+      reason: 'coder failed at provider: temporary outage',
+      trigger: {
+        kind: 'failure',
+        reason: 'coder failed at provider: temporary outage',
+        executionFailure: {
+          taskId: 'task-one', role: 'coder', provider: 'openai', format: 'codex',
+          model: 'gpt-test', workflowStage: 'coder-implementation',
+          checkpointedAt: '2026-07-22T00:00:00.000Z', failureStage: 'provider',
+          diagnostic: 'temporary outage', retryable: true, attempts: [{
+            attempt: 1,
+            startedAt: '2026-07-22T00:00:00.000Z',
+            endedAt: '2026-07-22T00:00:01.000Z',
+            failureStage: 'provider',
+            diagnostic: 'temporary outage',
+            retryable: true,
+          }],
+          retryDisposition: 'exhausted',
+        },
+      },
+      disposition: { kind: 'parked', reason: 'WIP preserved', wipSha: 'deadbeef' },
+    });
+    writeSummary(join(tmpDir, summary.id), summary);
+    expect(readWorkRunSummary(tmpDir, summary.id)).toEqual(summary);
+  });
+
+  it('round-trips a trigger composed from a maximum-size execution diagnostic', () => {
+    const executionFailure: ExecutionFailure = {
+      taskId: 'task-one', role: 'coder', provider: 'openai', format: 'codex',
+      model: 'gpt-test', workflowStage: 'coder-implementation',
+      checkpointedAt: '2026-07-22T00:00:00.000Z', failureStage: 'provider',
+      diagnostic: 'x'.repeat(EXECUTION_DIAGNOSTIC_MAX_CHARS),
+      retryable: true,
+      attempts: [{
+        attempt: 1,
+        startedAt: '2026-07-22T00:00:00.000Z',
+        endedAt: '2026-07-22T00:00:01.000Z',
+        failureStage: 'provider',
+        diagnostic: 'x'.repeat(EXECUTION_DIAGNOSTIC_MAX_CHARS),
+        retryable: true,
+      }],
+      retryDisposition: 'exhausted',
+    };
+    const reason = executionFailureSummary(executionFailure);
+    const summary = makeSummary({
+      id: 'max-diagnostic-run',
+      outcome: 'failed',
+      reason,
+      trigger: { kind: 'failure', reason, executionFailure },
+    });
+
+    writeSummary(join(tmpDir, summary.id), summary);
+
+    expect(reason.length).toBeLessThanOrEqual(EXECUTION_DIAGNOSTIC_MAX_CHARS);
+    expect(readWorkRunSummary(tmpDir, summary.id)).toEqual(summary);
+  });
 
   it(
     // Atomicity: no leftover .tmp file should remain after a successful write.

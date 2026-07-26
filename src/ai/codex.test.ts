@@ -245,6 +245,7 @@ describe('ai/codex', () => {
       expect(result.text).toBe('partial');
       expect(result.error).toBeTruthy();
       expect(result.exitCode).toBe(1);
+      expect(result.failureKind).toBe('executor-exit');
     });
 
     it('non-zero exit with no stderr: error contains exit code', async () => {
@@ -256,6 +257,7 @@ describe('ai/codex', () => {
 
       expect(result.error).toMatch(/2/);
       expect(result.exitCode).toBe(2);
+      expect(result.failureKind).toBe('executor-exit');
     });
 
     it('spawn error event: returns error message and undefined exitCode', async () => {
@@ -277,6 +279,7 @@ describe('ai/codex', () => {
       expect(result.text).toBeNull();
       expect(result.error).toMatch(/ENOENT/i);
       expect(result.exitCode).toBeUndefined();
+      expect(result.failureKind).toBe('spawn');
     });
 
     it('timeout/SIGTERM: kills the child and returns a timeout error', async () => {
@@ -295,6 +298,7 @@ describe('ai/codex', () => {
 
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       expect(result.error).toMatch(/timeout|timed out/i);
+      expect(result.failureKind).toBe('timeout');
     });
 
     it('returns structured cancellation metadata for a registered Codex op', async () => {

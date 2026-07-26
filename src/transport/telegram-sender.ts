@@ -105,13 +105,26 @@ function formatWorkRunTerminal(event: BusMutationEvent, opts: { suppressMergeCla
     const question = parkedQuestion && typeof parkedQuestion['question'] === 'string' ? parkedQuestion['question'] : '';
     const worktree = typeof data['operatorWorktreePath'] === 'string' ? data['operatorWorktreePath'] : '';
     const command = typeof data['command'] === 'string' ? data['command'] : '';
-    const parkedReason = typeof data['reason'] === 'string' ? data['reason'] : '';
+    const trigger = data['trigger'] && typeof data['trigger'] === 'object'
+      ? data['trigger'] as Record<string, unknown>
+      : null;
+    const parkedReason = trigger && typeof trigger['reason'] === 'string'
+      ? trigger['reason']
+      : typeof data['reason'] === 'string' ? data['reason'] : '';
+    const disposition = data['disposition'] && typeof data['disposition'] === 'object'
+      ? data['disposition'] as Record<string, unknown>
+      : null;
+    const dispositionReason = disposition && typeof disposition['reason'] === 'string'
+      ? disposition['reason'] : '';
+    const wipSha = disposition && typeof disposition['wipSha'] === 'string'
+      ? disposition['wipSha'] : '';
     const lines = [`⏸️ ${slug} parked · needs you · id=${id}`];
     if (question) lines.push(`❓ ${question}`);
     if (pendingCheck) lines.push(`📋 ${pendingCheck}`);
     if (worktree) lines.push(`📂 ${worktree}`);
     if (command) lines.push(`▶️ ${command}`);
     if (parkedReason) lines.push(`↳ ${parkedReason}`);
+    if (dispositionReason) lines.push(`💾 ${dispositionReason}${wipSha ? ` · WIP ${wipSha}` : ''}`);
     return lines.join('\n');
   }
 

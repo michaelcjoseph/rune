@@ -587,7 +587,80 @@ describe('project-orchestrator — closeout', () => {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — operational terminal', () => {
-  it('treats malformed gate output as a non-finding operational HOLD with branch/worktree preserved', async () => {
+  it('attributes an unexpected orchestration exception to the latest execution checkpoint', async () => {
+    const checkpoint = {
+      taskId: 'build-the-streak-core',
+      role: 'coder',
+      provider: 'openai',
+      format: 'codex',
+      model: 'gpt-test',
+      workflowStage: 'coder-implementation',
+      checkpointedAt: '2026-07-22T00:00:00.000Z',
+    } as const;
+    const h = makeHarness({
+      currentExecutionCheckpoint: () => checkpoint,
+      runTaskWorkflow: async () => {
+        throw new Error('unexpected /Users/private/operator/worktree failure');
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      executionFailure: {
+        ...checkpoint,
+        failureStage: 'orchestration-adjacent',
+        retryDisposition: 'not-eligible',
+      },
+    });
+    expect(JSON.stringify(res)).not.toContain('/Users/private/operator/worktree');
+  });
+
+  it('routes typed executor failures operationally regardless of diagnostic wording', async () => {
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'failed',
+        rolesInvoked: ['qa', 'coder'],
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        objectionOpen: false,
+        handoffNotes: [],
+        failureReason: 'purple banana',
+        executionFailure: {
+          taskId: task.id,
+          role: 'coder',
+          provider: 'openai',
+          format: 'codex',
+          model: 'gpt-test',
+          workflowStage: 'coder-implementation',
+          checkpointedAt: '2026-07-22T00:00:00.000Z',
+          failureStage: 'provider',
+          diagnostic: 'purple banana',
+          retryable: true,
+          attempts: [{
+            attempt: 1,
+            startedAt: '2026-07-22T00:00:00.000Z',
+            endedAt: '2026-07-22T00:00:01.000Z',
+            failureStage: 'provider',
+            diagnostic: 'purple banana',
+            retryable: true,
+          }],
+          retryDisposition: 'exhausted',
+        },
+      }),
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: 'purple banana',
+      executionFailure: { failureStage: 'provider', role: 'coder' },
+    });
+  });
+
+  it('does not infer an operational HOLD from malformed diagnostic wording alone', async () => {
     const worktreePath = '/tmp/rune-worktrees/aura/14-malformed-gate-output';
     let workflowCalls = 0;
     const h = makeHarness({
@@ -608,9 +681,9 @@ describe('project-orchestrator — operational terminal', () => {
 
     const res = await runProjectOrchestration({ ...h.deps, worktreePath });
 
-    expectOperationalHold(res, {
-      reason: /operational|malformed|unparseable|reviewer-verdict/i,
-      worktreePath,
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: expect.stringMatching(/operational|malformed|unparseable|reviewer-verdict/i),
     });
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
     expect(h.state.commits).toEqual([]);

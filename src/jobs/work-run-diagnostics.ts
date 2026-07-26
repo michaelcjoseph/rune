@@ -158,6 +158,8 @@ function summaryRow(summary: WorkRunSummary | null, supervised: SupervisedRun | 
       outcome: summary.outcome,
       reason: summary.reason,
       ...(summary.cancellation !== undefined ? { cancellation: summary.cancellation } : {}),
+      ...(summary.trigger !== undefined ? { trigger: summary.trigger } : {}),
+      ...(summary.disposition !== undefined ? { disposition: summary.disposition } : {}),
     } : {}),
     startedAt: summary?.startedAt ?? supervised?.startedAt,
     ...(summary?.endedAt ? { endedAt: summary.endedAt } : {}),

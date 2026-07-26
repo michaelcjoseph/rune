@@ -151,6 +151,17 @@ import {
   writeOrchestratedRunCursor,
 } from './orchestrated-run-store.js';
 import { invalidateCursorThenRemoveWorktree } from './terminal-worktree-cleanup.js';
+import {
+  adjacentExecutionFailure,
+  executionFailureSummary,
+  isExecutionFailure,
+  isExecutionTerminalDisposition,
+  isExecutionTerminalTrigger,
+  type ExecutionFailure,
+  type ExecutionTerminalDisposition,
+  type ExecutionTerminalTrigger,
+  sanitizeExecutionDiagnostic,
+} from '../intent/execution-failure.js';
 
 export {
   invalidateOrchestratedRunCursor,
@@ -540,6 +551,13 @@ export async function parkInFlightOrchestratedRuns(
           product,
           parked: true,
           reason,
+          cancelReason: 'system',
+          cancelSource: 'shutdown',
+          disposition: {
+            kind: 'parked',
+            reason: 'worktree parked for shutdown recovery',
+            ...(wipSha !== null ? { wipSha } : {}),
+          },
           operatorWorktreePath: worktreePath,
           branch,
           baseBranch,
@@ -595,32 +613,108 @@ async function commitWorktreeWip(
   }
 }
 
-type TerminalWorktreeDisposition =
-  | { kind: 'removed' }
-  | { kind: 'parked'; terminal: MutationEvent }
-  | { kind: 'preserved' };
+function withTerminalDisposition(
+  terminal: MutationEvent,
+  disposition: ExecutionTerminalDisposition,
+  sandbox?: SandboxSpec,
+  branch?: string,
+  baseBranch?: string,
+): MutationEvent {
+  const triggered = withTerminalTrigger(terminal);
+  const data = { ...((triggered.data ?? {}) as Record<string, unknown>) };
+  const durable: ExecutionTerminalDisposition = {
+    kind: disposition.kind,
+    reason: sanitizeExecutionDiagnostic(disposition.reason),
+    ...(disposition.kind === 'parked' && disposition.wipSha ? { wipSha: disposition.wipSha } : {}),
+  };
+  data['disposition'] = durable;
+  if (disposition.kind === 'parked' && sandbox !== undefined) {
+    data['parked'] = true;
+    data['operatorWorktreePath'] = sandbox.worktree;
+    if (branch !== undefined) data['branch'] = branch;
+    if (baseBranch !== undefined) data['baseBranch'] = baseBranch;
+    data['preserveBranch'] = true;
+    data['preserveWorktree'] = true;
+  } else if (disposition.kind === 'removed') {
+    delete data['parked'];
+    delete data['operatorWorktreePath'];
+    delete data['preserveBranch'];
+    delete data['preserveWorktree'];
+  }
+  return { ...triggered, data };
+}
 
-function parkedTerminal(
-  descriptor: MutationDescriptor<OrchestratedWorkPayload>,
-  sandbox: SandboxSpec,
-  branch: string,
-  baseBranch: string,
-  reason: string,
-): TerminalWorktreeDisposition {
+function withTerminalTrigger(terminal: MutationEvent): MutationEvent {
+  const data = { ...((terminal.data ?? {}) as Record<string, unknown>) };
+  if (isExecutionTerminalTrigger(data['trigger'])) return { ...terminal, data };
+  const reason = typeof data['reason'] === 'string'
+    ? sanitizeExecutionDiagnostic(data['reason'])
+    : terminal.kind === 'completed' ? 'completed' : 'failed';
+  const executionFailure = isExecutionFailure(data['executionFailure'])
+    ? data['executionFailure']
+    : undefined;
+  const cancellation = workRunCancellation(data['cancellation']);
+  const cancellationSource = typeof data['cancelSource'] === 'string'
+    ? data['cancelSource'] as ExecutionTerminalTrigger['cancellationSource']
+    : data['cancelReason'] as ExecutionTerminalTrigger['cancellationSource'];
+  const trigger: ExecutionTerminalTrigger = data['cancelReason'] === 'user' || data['cancelReason'] === 'system'
+    ? {
+        kind: 'cancellation',
+        reason,
+        ...(cancellationSource !== undefined ? { cancellationSource } : {}),
+        ...(cancellation !== undefined ? { cancellation } : {}),
+      }
+    : terminal.kind === 'failed'
+      ? { kind: 'failure', reason, ...(executionFailure !== undefined ? { executionFailure } : {}) }
+      : { kind: 'success', reason };
+  return { ...terminal, data: { ...data, reason, trigger } };
+}
+
+function parkedDisposition(reason: string, wipSha?: string): ExecutionTerminalDisposition {
   return {
     kind: 'parked',
-    terminal: term(descriptor.id, 'completed', {
-      projectSlug: descriptor.payload.projectSlug,
-      product: descriptor.payload.product ?? 'rune',
-      parked: true,
-      reason: scrubAbsolutePaths(reason),
-      operatorWorktreePath: sandbox.worktree,
-      branch,
-      baseBranch,
-      preserveBranch: true,
-      preserveWorktree: true,
-    }),
+    reason: sanitizeExecutionDiagnostic(reason),
+    ...(wipSha ? { wipSha } : {}),
   };
+}
+
+type TerminalizationPhase =
+  | 'active'
+  | 'disposition-resolved'
+  | 'transcript-flushed'
+  | 'terminal-persisted';
+
+class TerminalizationCoordinator {
+  phase: TerminalizationPhase = 'active';
+  preserveWorktree = false;
+  finalizerOwnsTeardown = false;
+  private dispositionDone = false;
+
+  get dispositionResolved(): boolean {
+    return this.dispositionDone;
+  }
+
+  requestPreservation(): void {
+    this.preserveWorktree = true;
+  }
+
+  markFinalizerTeardown(): void {
+    this.finalizerOwnsTeardown = true;
+  }
+
+  markDispositionResolved(disposition?: ExecutionTerminalDisposition): void {
+    if (disposition?.kind !== 'removed') this.requestPreservation();
+    this.dispositionDone = true;
+    this.phase = 'disposition-resolved';
+  }
+
+  markTranscriptFlushed(): void {
+    this.phase = 'transcript-flushed';
+  }
+
+  markTerminalPersisted(): void {
+    this.phase = 'terminal-persisted';
+  }
 }
 
 /**
@@ -634,19 +728,17 @@ async function disposeTerminalWorktree(args: {
   sandbox: SandboxSpec;
   branch: string;
   baseBranch: string;
-}): Promise<TerminalWorktreeDisposition> {
+}): Promise<ExecutionTerminalDisposition> {
   const { deps, descriptor, sandbox, branch, baseBranch } = args;
-  if (!claimMutationTerminalTeardown(descriptor.id)) return { kind: 'preserved' };
+  if (!claimMutationTerminalTeardown(descriptor.id)) {
+    return { kind: 'preserved', reason: 'terminal cleanup already claimed' };
+  }
   try {
     let dirty: boolean;
     try {
       dirty = (await deps.inspectWorktreeStatus(sandbox.worktree)).trim() !== '';
     } catch {
-      return parkedTerminal(
-        descriptor,
-        sandbox,
-        branch,
-        baseBranch,
+      return parkedDisposition(
         'parked during terminal cleanup: Git status could not be verified',
       );
     }
@@ -657,15 +749,12 @@ async function disposeTerminalWorktree(args: {
       try {
         preflight = await deps.preflightRecovery(runningMutation);
       } catch {
-        return parkedTerminal(
-          descriptor,
-          sandbox,
-          branch,
-          baseBranch,
+        return parkedDisposition(
           'parked during terminal cleanup: resumable cursor could not be verified',
         );
       }
       let reason = 'parked during terminal cleanup: uncommitted work was preserved';
+      let wipSha: string | undefined;
       if (preflight.kind === 'recoverable') {
         const sha = await commitWorktreeWip(deps.runGit, sandbox.worktree, {
           message: `rune(${descriptor.payload.product ?? 'rune'}): WIP — terminal park — ${descriptor.payload.projectSlug}`,
@@ -677,12 +766,13 @@ async function disposeTerminalWorktree(args: {
         if (sha === null) {
           reason = 'parked during terminal cleanup: WIP commit could not be verified';
         } else {
+          wipSha = sha;
           reason = `parked during terminal cleanup: WIP preserved as ${sha.slice(0, 7)}`;
         }
       } else {
         reason = `parked during terminal cleanup: ${preflight.reason}; uncommitted work was preserved`;
       }
-      return parkedTerminal(descriptor, sandbox, branch, baseBranch, reason);
+      return parkedDisposition(reason, wipSha);
     }
 
     try {
@@ -695,17 +785,13 @@ async function disposeTerminalWorktree(args: {
           worktreeRoot: config.WORKTREE_ROOT,
         }),
       });
-      return { kind: 'removed' };
+      return { kind: 'removed', reason: 'clean terminal worktree removed' };
     } catch (err) {
       log.warn('orchestrated-work-runner: terminal worktree cleanup failed', {
         sandbox: sandbox.worktree,
         error: (err as Error).message,
       });
-      return parkedTerminal(
-        descriptor,
-        sandbox,
-        branch,
-        baseBranch,
+      return parkedDisposition(
         'parked during terminal cleanup: cursor invalidation or worktree removal failed',
       );
     }
@@ -858,6 +944,23 @@ function buildOrchestrationDeps(args: {
     modelPolicyPath: config.MODEL_POLICY_FILE,
     validationCommands: args.validationCommands,
     cap: ORCHESTRATED_ROUND_CAP,
+    persistExecutionCheckpoint: async (executionCheckpoint) => {
+      const cursor = readOrchestratedRunCursor(args.workRunsDir, descriptor.id);
+      if (cursor === null) throw new Error('resumable orchestration cursor is unavailable');
+      writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, {
+        ...cursor,
+        executionCheckpoint,
+      });
+    },
+    ...(args.cancel !== undefined ? {
+      cancellationDuringBackoff: () => args.cancel?.()
+        ? {
+            operationId: descriptor.id,
+            source: 'internal' as const,
+            requestedAt: new Date().toISOString(),
+          }
+        : undefined,
+    } : {}),
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
   });
 
@@ -881,6 +984,8 @@ function buildOrchestrationDeps(args: {
       args.publishAgents?.(records.length > 0 ? records : [record]);
     },
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
+    currentExecutionCheckpoint: () =>
+      readOrchestratedRunCursor(args.workRunsDir, descriptor.id)?.executionCheckpoint,
     appendTerminalBugEntries: async (entries) => {
       // File to the CANONICAL product repo's bugs.md, NEVER the throwaway
       // worktree: a non-merge run (hold/partial/parked) GCs its branch, and an
@@ -1481,29 +1586,62 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     };
 
     if (ctx.cancel()) {
-      const terminal = term(descriptor.id, 'failed', { reason: 'cancelled before start', projectSlug, product });
+      const cancelReason = ctx.cancelReason?.() ?? 'user';
+      const cancelSource = ctx.cancelSource?.() ?? (cancelReason === 'user' ? 'user' : 'system');
+      const trigger: ExecutionTerminalTrigger = {
+        kind: 'cancellation',
+        reason: 'cancelled before start',
+        cancellationSource: cancelSource,
+      };
+      const terminal = term(descriptor.id, cancelReason === 'user' ? 'failed' : 'completed', {
+        reason: trigger.reason,
+        cancelReason,
+        cancelSource,
+        projectSlug,
+        product,
+        trigger,
+        disposition: {
+          kind: 'removed',
+          reason: 'no worktree was created',
+        } satisfies ExecutionTerminalDisposition,
+      });
       persistTerminalStateOnce(terminal);
       yield terminal;
       return;
     }
 
     let sandbox: SandboxSpec | null = null;
-    let preserveWorktree = false;
-    let finalizerOwnedTeardown = false;
-    let terminalDispositionHandled = false;
+    const terminalization = new TerminalizationCoordinator();
     let dispositionBaseBranch = recovery?.baseBranch ?? 'main';
     let sink: TranscriptSink | null = null;
     const startedAtMs = Date.now();
     const prepareTerminalDisposition = async (terminal: MutationEvent): Promise<MutationEvent> => {
-      if (!sandbox || terminalDispositionHandled) return terminal;
+      if (!sandbox || terminalization.dispositionResolved) return terminal;
+      if (isExecutionTerminalDisposition(((terminal.data ?? {}) as Record<string, unknown>)['disposition'])) {
+        terminalization.markDispositionResolved(
+          ((terminal.data ?? {}) as Record<string, unknown>)['disposition'] as ExecutionTerminalDisposition,
+        );
+        return terminal;
+      }
       if (
         isMutationRecoveryHandoff(descriptor.id) ||
         isMutationShutdownInProgress() ||
-        preserveWorktree ||
-        finalizerOwnedTeardown
+        terminalization.preserveWorktree ||
+        terminalization.finalizerOwnsTeardown
       ) {
-        terminalDispositionHandled = true;
-        return terminal;
+        const alreadyParked = ((terminal.data ?? {}) as Record<string, unknown>)['parked'] === true;
+        const disposition: ExecutionTerminalDisposition = {
+          kind: alreadyParked ? 'parked' : 'preserved',
+          reason: alreadyParked
+            ? 'worktree parked by orchestration result'
+            : terminalization.finalizerOwnsTeardown
+            ? 'terminal worktree lifecycle owned by finalizer'
+            : isMutationShutdownInProgress()
+              ? 'worktree preserved for shutdown recovery'
+              : 'worktree preserved by orchestration result',
+        };
+        terminalization.markDispositionResolved(disposition);
+        return withTerminalDisposition(terminal, disposition);
       }
       const disposition = await disposeTerminalWorktree({
         deps,
@@ -1512,13 +1650,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch: dispositionBaseBranch,
       });
-      terminalDispositionHandled = true;
-      if (disposition.kind === 'parked') {
-        preserveWorktree = true;
-        return disposition.terminal;
-      }
-      if (disposition.kind === 'preserved') preserveWorktree = true;
-      return terminal;
+      terminalization.markDispositionResolved(disposition);
+      return withTerminalDisposition(terminal, disposition, sandbox, branch, dispositionBaseBranch);
     };
     try {
       try {
@@ -1676,7 +1809,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         wakeStream = undefined;
       };
       let finalizerTerminal: MutationEvent | null = null;
-      let finalizerDispositionTerminal: MutationEvent | null = null;
+      let finalizerDisposition: ExecutionTerminalDisposition | null = null;
       let gateHeldReason: GateFailReason | null = null;
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
@@ -1762,7 +1895,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             flushTranscript: async () => {
               if (!sink) return;
               try {
-                await sink.finish();
+                await sink.flush();
+                terminalization.markTranscriptFlushed();
               } catch (err) {
                 log.warn('orchestrated-work-runner: transcript flush failed', {
                   id: descriptor.id,
@@ -1823,7 +1957,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 }
               : {}),
             writeSupervisionTerminal: (_status, terminalEvent) => {
-              persistTerminalStateOnce(finalizerDispositionTerminal ?? terminalEvent);
+              // The finalizer reports its trigger before teardown has settled.
+              // Capture it here; the outer terminalization boundary persists
+              // once the final disposition is known.
+              finalizerTerminal = finalizerDisposition === null
+                ? terminalEvent
+                : withTerminalDisposition(
+                    terminalEvent,
+                    finalizerDisposition,
+                    runSandbox,
+                    branch,
+                    baseBranch,
+                  );
             },
             removeWorktree: async () => {
               const disposition = await disposeTerminalWorktree({
@@ -1833,14 +1978,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 branch,
                 baseBranch,
               });
+              terminalization.markDispositionResolved(disposition);
               if (disposition.kind === 'removed') {
-                finalizerOwnedTeardown = true;
+                terminalization.markFinalizerTeardown();
+                finalizerDisposition = disposition;
                 return;
               }
-              preserveWorktree = true;
-              if (disposition.kind === 'parked') {
-                finalizerDispositionTerminal = disposition.terminal;
-              }
+              finalizerDisposition = disposition;
               throw new Error('worktree teardown deferred for preservation');
             },
             recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
@@ -1958,7 +2102,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             if (!finalizerResult.merged && gateHeldReason) data['gateHeldReason'] = gateHeldReason;
           }
           finalizerResult.terminalEvent.data = data;
-          finalizerTerminal = finalizerDispositionTerminal ?? finalizerResult.terminalEvent;
+          finalizerTerminal = finalizerDisposition === null
+            ? finalizerResult.terminalEvent
+            : withTerminalDisposition(finalizerResult.terminalEvent, finalizerDisposition, runSandbox, branch, baseBranch);
           return { kind: 'finalized', outcome: readOutcome(finalizerResult.terminalEvent) };
         },
       });
@@ -2018,8 +2164,15 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         yield event;
       }
       if (outcome.kind === 'error') {
+        const checkpoint = readOrchestratedRunCursor(deps.workRunsDir, descriptor.id)?.executionCheckpoint;
+        const executionFailure = checkpoint === undefined
+          ? undefined
+          : adjacentExecutionFailure(checkpoint, outcome.error);
         const terminal = await prepareTerminalDisposition(term(descriptor.id, 'failed', {
-          reason: scrubPathsInText(`orchestration loop threw: ${(outcome.error as Error).message}`),
+          reason: executionFailure === undefined
+            ? scrubPathsInText(`orchestration loop threw: ${(outcome.error as Error).message}`)
+            : executionFailureSummary(executionFailure),
+          ...(executionFailure !== undefined ? { executionFailure } : {}),
           projectSlug,
           product,
         }));
@@ -2038,14 +2191,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           result: null,
         });
         persistTerminalStateOnce(terminal);
+        terminalization.markTerminalPersisted();
         yield terminal;
         return;
       }
 
       const result = outcome.result;
-      preserveWorktree =
+      if (
         (result.kind === 'blocked' && result.parked?.preserveWorktree === true) ||
-        (result.kind === 'held' && result.preserveWorktree === true);
+        (result.kind === 'held' && result.preserveWorktree === true)
+      ) {
+        terminalization.requestPreservation();
+      }
       const terminal = await prepareTerminalDisposition(
         finalizerTerminal ?? mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch),
       );
@@ -2064,6 +2221,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         result,
       });
       persistTerminalStateOnce(terminal);
+      terminalization.markTerminalPersisted();
       yield terminal;
     } finally {
       sink?.destroy();
@@ -2080,7 +2238,12 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         log.info('orchestrated-work-runner: shutdown in progress; leaving worktree for parker/boot recovery', {
           sandbox: sandbox.worktree,
         });
-      } else if (sandbox && !terminalDispositionHandled && !preserveWorktree && !finalizerOwnedTeardown) {
+      } else if (
+        sandbox &&
+        !terminalization.dispositionResolved &&
+        !terminalization.preserveWorktree &&
+        !terminalization.finalizerOwnsTeardown
+      ) {
         const disposition = await disposeTerminalWorktree({
           deps,
           descriptor,
@@ -2091,9 +2254,20 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         if (disposition.kind === 'parked') {
           // Unexpected throws have no normal terminal construction point. Keep
           // the fail-closed worktree visible through the recovery writer.
-          deps.writeRecoveredTerminal(descriptor, disposition.terminal);
+          const checkpoint = readOrchestratedRunCursor(deps.workRunsDir, descriptor.id)?.executionCheckpoint;
+          const failure = checkpoint === undefined ? undefined : adjacentExecutionFailure(
+            checkpoint,
+            'orchestration runner threw outside its terminal boundary',
+          );
+          const terminal = withTerminalDisposition(term(descriptor.id, 'failed', {
+            projectSlug,
+            product,
+            reason: failure ? executionFailureSummary(failure) : 'orchestration runner threw',
+            ...(failure ? { executionFailure: failure } : {}),
+          }), disposition, sandbox, branch, dispositionBaseBranch);
+          deps.writeRecoveredTerminal(descriptor, terminal);
         }
-      } else if (sandbox && preserveWorktree) {
+      } else if (sandbox && terminalization.preserveWorktree) {
         log.info('orchestrated-work-runner: preserving parked worktree', {
           sandbox: sandbox.worktree,
         });
@@ -2120,6 +2294,10 @@ function createFallbackTranscriptSink(runId: string, baseDir: string): Transcrip
     append(event: unknown): Promise<void> {
       if (destroyed) return Promise.reject(new Error('createFallbackTranscriptSink: append after destroy'));
       appendFileSync(path, redactSecrets(JSON.stringify(event)) + '\n', 'utf8');
+      return Promise.resolve();
+    },
+    flush(): Promise<void> {
+      if (destroyed) return Promise.reject(new Error('createFallbackTranscriptSink: flush after destroy'));
       return Promise.resolve();
     },
     finish(): Promise<void> {
@@ -2158,9 +2336,42 @@ async function persistTerminalArtifacts(args: {
   baselineTasks: string;
   result: OrchestrationResult | null;
 }): Promise<void> {
-  const { deps, sink, descriptor, terminal, startedAtMs, projectSlug, product, branch, sandbox, projectDir, baselineTasks, result } = args;
+  const {
+    deps,
+    sink,
+    descriptor,
+    terminal,
+    startedAtMs,
+    projectSlug,
+    product,
+    branch,
+    sandbox,
+    projectDir,
+    baselineTasks,
+    result,
+  } = args;
   if (sink) {
     try {
+      const data = (terminal.data ?? {}) as Record<string, unknown>;
+      const trigger = isExecutionTerminalTrigger(data['trigger']) ? data['trigger'] : undefined;
+      const disposition = isExecutionTerminalDisposition(data['disposition']) ? data['disposition'] : undefined;
+      const terminalFactEvent = {
+        mutationId: descriptor.id,
+        ts: terminal.ts,
+        kind: 'activity',
+        data: {
+          event: 'terminal-facts',
+          ...(trigger !== undefined ? { trigger } : {}),
+          ...(disposition !== undefined ? { disposition } : {}),
+          line: [
+            trigger ? `terminal ${trigger.kind}: ${trigger.reason}` : '',
+            disposition ? `disposition ${disposition.kind}: ${disposition.reason}` : '',
+          ].filter(Boolean).join(' · '),
+        },
+      };
+      if (trigger !== undefined || disposition !== undefined) {
+        await sink.append(terminalFactEvent);
+      }
       await sink.finish();
     } catch (err) {
       log.warn('orchestrated-work-runner: transcript flush failed', {
@@ -2171,7 +2382,7 @@ async function persistTerminalArtifacts(args: {
   }
 
   const endedAt = new Date().toISOString();
-  const workProduct = await computeOrchestratedWorkProduct({
+  const computedWorkProduct = await computeOrchestratedWorkProduct({
     deps,
     descriptor,
     sandbox,
@@ -2179,6 +2390,7 @@ async function persistTerminalArtifacts(args: {
     projectDir,
     baselineTasks,
   });
+  const workProduct = terminalWorkProduct(terminal) ?? computedWorkProduct;
   normalizeLateErrorTerminalFromWorkProduct(terminal, workProduct, result);
   const summary = buildOrchestratedSummary({
     id: descriptor.id,
@@ -2243,6 +2455,7 @@ function normalizeLateErrorTerminalFromWorkProduct(
 ): void {
   if (result !== null || terminal.kind !== 'failed' || workProduct === null) return;
   const data = (terminal.data ?? {}) as Record<string, unknown>;
+  if (isExecutionTerminalTrigger(data['trigger']) && data['trigger'].kind !== 'success') return;
   if (data['outcome'] !== undefined) return;
 
   const classification = classifyOutcome({
@@ -2323,19 +2536,35 @@ function buildOrchestratedSummary(args: {
 }): WorkRunSummary {
   const { id, project, product, target, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, workProduct, result } = args;
   const data = (terminal.data ?? {}) as Record<string, unknown>;
-  const cancelReason = data['cancelReason'];
+  const trigger: ExecutionTerminalTrigger = isExecutionTerminalTrigger(data['trigger'])
+    ? data['trigger']
+    : {
+        kind: terminal.kind === 'completed' ? 'success' : 'failure',
+        reason: sanitizeExecutionDiagnostic(
+          typeof data['reason'] === 'string' ? data['reason'] : terminal.kind,
+        ),
+      };
+  const disposition = isExecutionTerminalDisposition(data['disposition'])
+    ? data['disposition']
+    : undefined;
+  const cancelReason = trigger.kind === 'cancellation' ? trigger.cancellationSource : data['cancelReason'];
   const exit: ExitFacts = {
-    exitCode: terminal.kind === 'completed' ? 0 : 1,
+    exitCode:
+      trigger.kind === 'success' ? 0
+      : trigger.kind === 'cancellation' && cancelReason !== 'user' ? null
+      : 1,
     signal: null,
     cancelled: cancelReason === 'user',
     durationMs: Date.parse(endedAt) - startedAtMs,
     exitFact:
       cancelReason === 'user' ? 'user-cancel'
-      : cancelReason === 'system' ? 'system-cancel'
+      : trigger.kind === 'cancellation' ? 'system-cancel'
+      : trigger.kind === 'failure' ? 'execution-failure'
       : 'clean-exit',
   };
-  const classification =
-    workProduct !== null
+  const classification = trigger.kind === 'failure' || cancelReason === 'user'
+    ? { outcome: 'failed' as const, reason: trigger.reason }
+    : workProduct !== null
       ? classifyOutcome({ exit, product: workProduct })
       : { outcome: orchestratedOutcome(result, terminal), reason: '' };
   const cancellation = workRunCancellation(data['cancellation']);
@@ -2345,7 +2574,7 @@ function buildOrchestratedSummary(args: {
     product,
     target,
     outcome: classification.outcome,
-    reason: typeof data['reason'] === 'string' ? data['reason'] : classification.reason,
+    reason: trigger.reason || classification.reason,
     exit,
     workProduct: workProduct ?? EMPTY_WORK_PRODUCT,
     baseSha,
@@ -2359,6 +2588,8 @@ function buildOrchestratedSummary(args: {
     ...(typeof data['branchDeleted'] === 'boolean' ? { branchDeleted: data['branchDeleted'] } : {}),
     ...(typeof data['gateHeldReason'] === 'string' ? { gateHeldReason: data['gateHeldReason'] } : {}),
     ...(cancellation !== undefined ? { cancellation } : {}),
+    trigger,
+    ...(disposition !== undefined ? { disposition } : {}),
   };
 }
 
@@ -2494,7 +2725,8 @@ function mapResultToTerminal(
     return term(mutationId, 'completed', { ...base, outcome: result.outcome, baseBranch });
   }
   if (result.kind === 'held') {
-    return term(mutationId, 'completed', {
+    const executionFailure = result.executionFailure;
+    return term(mutationId, executionFailure === undefined ? 'completed' : 'failed', {
       ...base,
       held: true,
       reason: result.reason ?? 'branch-complete; held for the Project 15 finalizer',
@@ -2504,6 +2736,9 @@ function mapResultToTerminal(
       ...(result.worktreePath !== undefined ? { operatorWorktreePath: result.worktreePath } : {}),
       ...(result.preserveBranch === true ? { preserveBranch: true } : {}),
       ...(result.preserveWorktree === true ? { preserveWorktree: true } : {}),
+      ...(executionFailure !== undefined ? {
+        executionFailure,
+      } : {}),
     });
   }
   if (result.kind === 'cancelled') {
@@ -2517,6 +2752,7 @@ function mapResultToTerminal(
       return term(mutationId, 'failed', {
         ...base,
         cancelReason: 'user',
+        ...(result.source !== undefined ? { cancelSource: result.source } : {}),
         reason: nestedReason ?? 'cancelled',
         ...(nested !== undefined ? { cancellation: nested } : {}),
         ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
@@ -2525,6 +2761,7 @@ function mapResultToTerminal(
     return term(mutationId, 'completed', {
       ...base,
       cancelReason: 'system',
+      ...(result.source !== undefined ? { cancelSource: result.source } : {}),
       reason: nestedReason ?? 'system-cancelled; stopped at orchestration boundary',
       ...(nested !== undefined ? { cancellation: nested } : {}),
       baseBranch,
@@ -2555,7 +2792,12 @@ function term(
   kind: 'completed' | 'failed',
   data: Record<string, unknown>,
 ): MutationEvent {
-  return { mutationId, ts: new Date().toISOString(), kind, data };
+  return withTerminalTrigger({
+    mutationId,
+    ts: new Date().toISOString(),
+    kind,
+    data,
+  });
 }
 
 function toMutationEvent(mutationId: string, event: OrchestrationActivityEvent): MutationEvent {

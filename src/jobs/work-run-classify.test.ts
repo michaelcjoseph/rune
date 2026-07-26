@@ -278,6 +278,7 @@ type ExitFactTag =
   | 'reaped-after-terminal-result'
   | 'user-cancel'
   | 'system-cancel'
+  | 'execution-failure'
   | 'external-kill';
 
 /**
@@ -383,6 +384,14 @@ describe('classifyOutcome — exit-fact taxonomy (P0.3)', () => {
       product: branchCompleteProduct(),
     };
     expect(classifyOutcome(facts).outcome).toBe('failed');
+  });
+
+  it('execution-failure stays failed even when the worktree looks branch-complete', () => {
+    const result = classifyOutcome({
+      exit: exitWith('execution-failure', { exitCode: 1 }),
+      product: branchCompleteProduct(),
+    });
+    expect(result).toMatchObject({ outcome: 'failed', reason: 'execution failed' });
   });
 
   // --- external-kill: operator SIGTERM, no terminal result seen → failed. ---

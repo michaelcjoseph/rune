@@ -497,6 +497,9 @@ export interface CodexResult {
   /** Process exit code when the child closed cleanly; undefined when the
    *  process never produced one (spawn error, timeout-killed). */
   exitCode?: number;
+  /** Durable process-level outcome for callers that must distinguish a
+   * failed spawn, timeout, and ordinary non-zero executor exit. */
+  failureKind?: 'spawn' | 'timeout' | 'executor-exit';
   /** Structured first-request cancellation captured before the operation is
    * unregistered. */
   cancellation?: OperationCancellation;
@@ -673,7 +676,7 @@ export async function runCodex(
       log.error('codex spawn error', { error: err.message });
       finish(cancellation !== undefined
         ? { text: null, error: 'Cancelled by user', cancellation }
-        : { text: null, error: err.message });
+        : { text: null, error: err.message, failureKind: 'spawn' });
     });
 
     child.on('close', (code, signal) => {
@@ -697,6 +700,7 @@ export async function runCodex(
         finish({
           text: stdout || null,
           error: `codex exec timed out after ${timeout}ms`,
+          failureKind: 'timeout',
         });
         return;
       }
@@ -713,7 +717,12 @@ export async function runCodex(
       // canonical "exited with code N" message. Match Claude's pattern.
       const error = stderr.trim() || `codex exec exited with code ${code}`;
       if (op) unregisterOp(op.opId, 'error', error);
-      finish({ text: stdout || null, error, exitCode: code ?? undefined });
+      finish({
+        text: stdout || null,
+        error,
+        exitCode: code ?? undefined,
+        failureKind: 'executor-exit',
+      });
     });
   });
 }

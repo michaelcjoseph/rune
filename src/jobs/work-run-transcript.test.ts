@@ -111,6 +111,19 @@ describe('TranscriptSink — persistence', () => {
     },
   );
 
+  it('flush() keeps the sink open so terminal facts can be appended before finish()', async () => {
+    const sink = createTranscriptSink({ runId: 'run-nonclosing-flush', baseDir: tmpDir });
+    const first = { type: 'assistant', text: 'work complete' };
+    const terminalFacts = { type: 'activity', event: 'terminal-facts' };
+
+    await sink.append(first);
+    await sink.flush();
+    await sink.append(terminalFacts);
+    await sink.finish();
+
+    assertTranscript(sink.path, [first, terminalFacts]);
+  });
+
   it(
     // test-plan §1 Persistence line 2: transcript survives a failed run;
     // finish() flushes so every appended event is on disk after it resolves.

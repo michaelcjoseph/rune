@@ -47,6 +47,7 @@ import { runPostMortem } from '../intent/postmortem.js';
 import type { FeedbackRecord, RoleStage } from '../intent/feedback-record.js';
 import {
   mapObjectionSeverityToOutcome,
+  ExecutionFailureError,
   RoleCancellationError,
   runTeamTaskWorkflow,
   type ObjectionClass,
@@ -76,6 +77,10 @@ import {
   type ExecutionAgentResult,
   type RoleModelBinding,
 } from './execution-agent.js';
+import {
+  adjacentExecutionFailure,
+  type ExecutionCheckpoint,
+} from '../intent/execution-failure.js';
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { SizedTask } from '../intent/planning-roles.js';
@@ -789,22 +794,72 @@ export interface BuildTeamTaskDepsArgs {
    * executor output with the invoking role/model before it reaches the
    * mutation stream. */
   emit?: (event: WorkflowActivityEvent) => void;
+  /** Persisted before each artifact-role child is invoked. A failed write
+   * blocks before spawn so restart attribution never lies. */
+  persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
+}
+
+function executionCheckpoint(
+  taskId: string,
+  role: RoleName,
+  binding: RoleModelBinding,
+  workflowStage: string,
+): ExecutionCheckpoint {
+  return {
+    taskId,
+    role,
+    provider: binding.provider,
+    format: binding.format,
+    model: binding.alias,
+    workflowStage,
+    checkpointedAt: new Date().toISOString(),
+  };
+}
+
+async function runCheckpointed<T>(
+  checkpoint: ExecutionCheckpoint,
+  persist: BuildTeamTaskDepsArgs['persistExecutionCheckpoint'],
+  call: () => Promise<T>,
+): Promise<T> {
+  try {
+    await persist?.(checkpoint);
+    return await call();
+  } catch (err) {
+    if (err instanceof RoleCancellationError || err instanceof ExecutionFailureError) throw err;
+    throw new ExecutionFailureError(adjacentExecutionFailure(checkpoint, err));
+  }
 }
 
 /** Compose a judgment role's two-channel charter prompt and run one call. */
-function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string, product: string) {
-  return (role: RoleName, binding: RoleModelBinding, instruction: string, body: string) => {
+function makeJudge(
+  seams: TeamTaskSeams,
+  projectExemplarsDir: string,
+  product: string,
+  persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>,
+) {
+  return async (
+    role: RoleName,
+    binding: RoleModelBinding,
+    instruction: string,
+    body: string,
+    taskId = 'orchestration',
+    workflowStage = `${role}-judgment`,
+  ) => {
     const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const message = ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body;
-    return seams.judgmentCall({
-      role,
-      model: binding.alias,
-      provider: binding.provider,
-      format: binding.format,
-      product,
-      systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
-      message,
-    });
+    const checkpoint = executionCheckpoint(taskId, role, binding, workflowStage);
+    return runCheckpointed(checkpoint, persistExecutionCheckpoint, () =>
+      seams.judgmentCall({
+        role,
+        model: binding.alias,
+        provider: binding.provider,
+        format: binding.format,
+        product,
+        systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
+        message,
+      }),
+    );
   };
 }
 
@@ -964,7 +1019,12 @@ export function buildProductionTeamTaskDeps(
   const { sandbox, productsConfigPath, models } = args;
   const validationCommands = args.validationCommands ?? [];
   const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
-  const judge = makeJudge(seams, projectExemplarsDir, sandbox.product);
+  const judge = makeJudge(
+    seams,
+    projectExemplarsDir,
+    sandbox.product,
+    args.persistExecutionCheckpoint,
+  );
 
   // The QA work product, retained so the tech-lead reviews actual test
   // content rather than bare file paths (QaResult carries only testIds).
@@ -1031,6 +1091,8 @@ export function buildProductionTeamTaskDeps(
   const execute = async (
     role: 'qa' | 'coder' | 'tech-lead',
     binding: RoleModelBinding,
+    taskId: string,
+    workflowStage: string,
     instruction: string,
     body: string,
   ): Promise<ExecutionAgentResult> => {
@@ -1038,14 +1100,28 @@ export function buildProductionTeamTaskDeps(
     const emit = args.emit
       ? attributeRoleEvents(args.emit, role, binding)
       : undefined;
+    const checkpoint = executionCheckpoint(taskId, role, binding, workflowStage);
+    try {
+      await args.persistExecutionCheckpoint?.(checkpoint);
+    } catch (err) {
+      return { ok: false, failure: adjacentExecutionFailure(
+        checkpoint,
+        `execution checkpoint write failed: ${(err as Error).message}`,
+      ) };
+    }
     const result = await seams.runExecution({
       systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       prompt: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
       sandbox,
       model: binding,
       role,
+      taskId,
+      workflowStage,
+      checkpoint,
       productsConfigPath,
       ...(emit !== undefined ? { emit } : {}),
+    }, args.cancellationDuringBackoff === undefined ? undefined : {
+      cancellationDuringBackoff: args.cancellationDuringBackoff,
     });
     if (!result.ok && result.cancellation !== undefined) {
       throw new RoleCancellationError(role, result.cancellation);
@@ -1066,9 +1142,9 @@ export function buildProductionTeamTaskDeps(
         `## Spec\n\n${spec}`,
         ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
       ].join('\n');
-      const result = await execute('qa', models.qa, QA_EXEC_INSTRUCTION, body);
+      const result = await execute('qa', models.qa, task.id, 'qa-tests', QA_EXEC_INSTRUCTION, body);
       if (!result.ok) {
-        throw new Error(`QA execution failed: ${result.error}`);
+        throw new ExecutionFailureError(result.failure);
       }
       if (result.diff.trim() === '') {
         const rationale =
@@ -1098,7 +1174,7 @@ export function buildProductionTeamTaskDeps(
           : `## QA no-code-test rationale\n\n${qa.rationale}`,
         ...(redCheckSection !== undefined ? ['', redCheckSection] : []),
       ].join('\n');
-      const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body);
+      const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body, task.id, 'tech-lead-test-review');
       const { value, notes, suggestedChange, repairable } = parseFlagVerdict(
         reply,
         'tl-test-review',
@@ -1172,6 +1248,8 @@ export function buildProductionTeamTaskDeps(
         const result = await execute(
           'tech-lead',
           models.techLead,
+          task.id,
+          'tech-lead-test-repair',
           TL_TEST_REPAIR_INSTRUCTION,
           body,
         );
@@ -1190,7 +1268,7 @@ export function buildProductionTeamTaskDeps(
             );
         if (!result.ok) {
           await revertEntries(preTree, delta);
-          return notRepaired(`tech-lead repair execution failed: ${result.error}`);
+          throw new ExecutionFailureError(result.failure);
         }
         if (delta.length === 0) {
           return notRepaired('tech-lead made no changes');
@@ -1256,6 +1334,7 @@ export function buildProductionTeamTaskDeps(
         ];
         return { kind: 'repaired', testIds, redCheck };
       } catch (err) {
+        if (err instanceof ExecutionFailureError) throw err;
         if (err instanceof RoleCancellationError) throw err;
         return notRepaired(`tech-lead repair failed: ${(err as Error).message}`);
       }
@@ -1292,14 +1371,14 @@ export function buildProductionTeamTaskDeps(
           : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const result = await execute('coder', models.coder, CODER_EXEC_INSTRUCTION, body);
+      const result = await execute('coder', models.coder, task.id, 'coder-implementation', CODER_EXEC_INSTRUCTION, body);
       if (!result.ok) {
-        throw new Error(`coder execution failed: ${result.error}`);
+        throw new ExecutionFailureError(result.failure);
       }
       return { diff: result.diff, handoffNotes: tailNote(result.output) };
     },
 
-    coderSelfReview: async ({ artifact }) => {
+    coderSelfReview: async ({ task, artifact }) => {
       try {
         return await runSelfReview({
           role: 'coder',
@@ -1309,20 +1388,29 @@ export function buildProductionTeamTaskDeps(
           model: models.coder.alias,
           provider: models.coder.provider,
           modelCall: async ({ sessionId, systemPrompt, message }) => {
-            return seams.judgmentCall({
-              role: 'coder',
-              model: models.coder.alias,
-              provider: models.coder.provider,
-              format: models.coder.format,
-              product: sandbox.product,
-              systemPrompt,
-              message,
-              sessionId,
-            });
+            const checkpoint = executionCheckpoint(
+              task.id,
+              'coder',
+              models.coder,
+              'coder-self-review',
+            );
+            return runCheckpointed(checkpoint, args.persistExecutionCheckpoint, () =>
+              seams.judgmentCall({
+                role: 'coder',
+                model: models.coder.alias,
+                provider: models.coder.provider,
+                format: models.coder.format,
+                product: sandbox.product,
+                systemPrompt,
+                message,
+                sessionId,
+              }),
+            );
           },
         });
       } catch (err) {
         if (err instanceof RoleCancellationError) throw err;
+        if (err instanceof ExecutionFailureError) throw err;
         throw new Error(`coder self-review failed: ${(err as Error).message}`);
       }
     },
@@ -1342,7 +1430,7 @@ export function buildProductionTeamTaskDeps(
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
       ].join('\n');
-      const reply = await judge('qa', models.qa, QA_DIFF_REVALIDATION_INSTRUCTION, body);
+      const reply = await judge('qa', models.qa, QA_DIFF_REVALIDATION_INSTRUCTION, body, task.id, 'qa-diff-revalidation');
       const { value, notes } = parseFlagVerdict(
         reply,
         'qa-diff-revalidation',
@@ -1377,7 +1465,7 @@ export function buildProductionTeamTaskDeps(
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('reviewer', models.reviewer, REVIEWER_INSTRUCTION, body);
+      const reply = await judge('reviewer', models.reviewer, REVIEWER_INSTRUCTION, body, task.id, 'reviewer-review');
       return parseReviewerVerdict(reply);
     },
 
@@ -1393,7 +1481,7 @@ export function buildProductionTeamTaskDeps(
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body);
+      const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body, task.id, 'tech-lead-diff-review');
       return parseGateVerdict(reply, 'tl-diff-review');
     },
 
@@ -1405,13 +1493,13 @@ export function buildProductionTeamTaskDeps(
         `## Diff\n\n${diff}`,
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body);
+      const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body, task.id, 'designer-review');
       return parseGateVerdict(reply, 'designer-review');
     },
 
     pmWrapup: async ({ task, reason }) => {
       const body = [`## Task\n\n${task.text}`, '', `## Situation\n\n${reason}`].join('\n');
-      const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body);
+      const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body, task.id, 'pm-wrapup');
       return parsePmWrapup(reply);
     },
 
@@ -1443,6 +1531,8 @@ export interface TaskWorkflowRunnerArgs {
   cap?: number;
   /** Optional live activity sink forwarded into runTeamTaskWorkflow. */
   emit?: (event: WorkflowActivityEvent) => void;
+  persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
 /** Map a selected `tasks.md` task onto the workflow's SizedTask. tasks.md
@@ -1576,6 +1666,7 @@ export function createProductionTaskWorkflowRunner(
   let pendingPreflight: Promise<ExecutionPreflightResult> | null = null;
 
   return async (task, ctx) => {
+    let latestCheckpoint: ExecutionCheckpoint | undefined;
     if (isManualLiveGateTask(task)) {
       return manualLiveGateEvidence(task);
     }
@@ -1641,6 +1732,13 @@ export function createProductionTaskWorkflowRunner(
           ? { validationCommands: args.validationCommands }
           : {}),
         ...(args.emit !== undefined ? { emit: args.emit } : {}),
+        persistExecutionCheckpoint: async (checkpoint) => {
+          await args.persistExecutionCheckpoint?.(checkpoint);
+          latestCheckpoint = checkpoint;
+        },
+        ...(args.cancellationDuringBackoff !== undefined
+          ? { cancellationDuringBackoff: args.cancellationDuringBackoff }
+          : {}),
       },
       seams,
     );
@@ -1648,7 +1746,7 @@ export function createProductionTaskWorkflowRunner(
       ? attributeWorkflowEvents(args.emit, models)
       : undefined;
 
-    return runTeamTaskWorkflow(
+    const evidence = await runTeamTaskWorkflow(
       toSizedTask(task),
       {
         // The orchestrator's bounded handoff (task + context.md + spec slices)
@@ -1664,6 +1762,22 @@ export function createProductionTaskWorkflowRunner(
       },
       deps,
     );
+    if (
+      evidence.outcome === 'failed' &&
+      evidence.executionFailure === undefined &&
+      latestCheckpoint !== undefined
+    ) {
+      const failure = adjacentExecutionFailure(
+        latestCheckpoint,
+        evidence.failureReason ?? 'workflow failed after role boundary',
+      );
+      return {
+        ...evidence,
+        executionFailure: failure,
+        failureReason: failure.diagnostic,
+      };
+    }
+    return evidence;
   };
 }
 

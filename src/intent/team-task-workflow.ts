@@ -27,6 +27,10 @@ import type { DispatchProvider } from './dispatch.js';
 import type { RoleName } from '../roles/loader.js';
 import type { OperationCancellation } from '../cancellation.js';
 import type { ExecutionPreflightFailure } from './execution-preflight.js';
+import {
+  executionFailureSummary,
+  type ExecutionFailure,
+} from './execution-failure.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -41,6 +45,16 @@ export class RoleCancellationError extends Error {
     super(`${role} cancelled`);
     this.name = 'RoleCancellationError';
     this.cancellation = { role, ...cancellation };
+  }
+}
+
+export class ExecutionFailureError extends Error {
+  readonly failure: ExecutionFailure;
+
+  constructor(failure: ExecutionFailure) {
+    super(executionFailureSummary(failure));
+    this.name = 'ExecutionFailureError';
+    this.failure = failure;
   }
 }
 
@@ -348,6 +362,8 @@ export interface TaskEvidence {
   /** Present only for a fail-closed executor prerequisite block. Ordinary
    * post-preflight role failures continue to use `failureReason`. */
   executionPreflight?: ExecutionPreflightFailure;
+  /** Typed durable failure from a role executor or its orchestration boundary. */
+  executionFailure?: ExecutionFailure;
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
@@ -402,6 +418,22 @@ export async function runTeamTaskWorkflow(
         objectionOpen: false,
         handoffNotes,
         cancellation: err.cancellation,
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        ...(repairEvidence.testIntentRepair !== undefined
+          ? { testIntentRepair: repairEvidence.testIntentRepair }
+          : {}),
+      };
+    }
+    if (err instanceof ExecutionFailureError) {
+      return {
+        taskId: task.id,
+        outcome: 'failed',
+        rolesInvoked: roles.list(),
+        objectionOpen: false,
+        handoffNotes,
+        executionFailure: err.failure,
+        failureReason: executionFailureSummary(err.failure),
         findingsLedger: [],
         loopExitReason: 'operational',
         ...(repairEvidence.testIntentRepair !== undefined

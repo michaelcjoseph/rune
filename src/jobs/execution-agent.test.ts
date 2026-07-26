@@ -148,6 +148,8 @@ function makeIo(
     spawnAgent,
     buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
     buildArtifactMcp: () => null,
+    delay: async () => {},
+    random: () => 0,
   };
 }
 
@@ -188,6 +190,12 @@ function makeControlledChild() {
   child.kill = vi.fn();
   child.pid = 12345;
   return child;
+}
+
+async function waitForSpawn(): Promise<void> {
+  for (let i = 0; i < 20 && mockSpawn.mock.calls.length === 0; i++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +388,7 @@ describe('runExecutionAgent — protected-service runtime prompt transport', () 
   });
 
   it('carries the protected-service invariant into Claude executor prompts via append-system-prompt', async () => {
-    mockSpawn.mockReturnValue(makeFakeChild({
+    mockSpawn.mockImplementation(() => makeFakeChild({
       stdoutLines: [
         JSON.stringify({
           type: 'assistant',
@@ -443,7 +451,11 @@ describe('runExecutionAgent — structured cancellation', () => {
       buildArtifactMcp: () => null,
     });
 
-    expect(result).toEqual({ ok: false, error: 'Cancelled by user', cancellation });
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'cancellation', diagnostic: 'Cancelled by user', retryDisposition: 'cancelled' },
+      cancellation,
+    });
     expect(mockRunCodex.mock.calls[0]![1]).toMatchObject({ opLabel: 'team:coder' });
   });
 
@@ -459,7 +471,7 @@ describe('runExecutionAgent — structured cancellation', () => {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
       buildArtifactMcp: () => null,
     });
-    await Promise.resolve();
+    await waitForSpawn();
     const op = listOps().find((candidate) => candidate.opId);
     expect(op).toBeDefined();
     cancelOp(op!.opId, 'telegram');
@@ -467,7 +479,7 @@ describe('runExecutionAgent — structured cancellation', () => {
     const result = await pending;
     expect(result).toMatchObject({
       ok: false,
-      error: 'Cancelled by user',
+      failure: { failureStage: 'cancellation', diagnostic: 'Cancelled by user' },
       cancellation: {
         operationId: op!.opId,
         source: 'telegram',
@@ -527,7 +539,7 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
   });
 
   it('replaces Claude project MCP args with the strict artifact config', async () => {
-    mockSpawn.mockReturnValue(makeFakeChild());
+    mockSpawn.mockImplementation(() => makeFakeChild());
     const buildArtifactMcp = vi.fn(() => artifactMcp);
     const result = await runExecutionAgent(makeOpts({ model: claudeModel, role: 'coder' }), {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
@@ -555,9 +567,12 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
       buildArtifactMcp: () => { throw new Error('read-only MCP entrypoint is missing'); },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
-      error: 'rune-kb not registered: read-only MCP entrypoint is missing',
+      failure: {
+        failureStage: 'artifact-mcp',
+        diagnostic: 'rune-kb not registered: read-only MCP entrypoint is missing',
+      },
     });
     expect(mockRunCodex).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
@@ -568,9 +583,13 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
       buildArtifactMcp: () => { throw new Error('VAULT_DIR is not a directory: /tmp/test-vault'); },
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
-      error: 'rune-kb not registered: VAULT_DIR is not a directory: <vault>',
+      failure: {
+        failureStage: 'artifact-mcp',
+        diagnostic: 'rune-kb not registered: VAULT_DIR is not a directory: <vault>',
+        retryDisposition: 'not-eligible',
+      },
     });
   });
 
@@ -587,7 +606,7 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toMatch(/^rune-kb not registered: .*invalid artifactMcp/);
+    expect(result.failure.diagnostic).toMatch(/^rune-kb not registered: .*invalid artifactMcp/);
     expect(buildEnv).not.toHaveBeenCalled();
     expect(mockRunCodex).not.toHaveBeenCalled();
   });
@@ -700,7 +719,8 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain('spawn ENOENT');
+    expect(result.failure.diagnostic).toContain('spawn ENOENT');
+    expect(result.failure.retryDisposition).toBe('exhausted');
   });
 
   it('maps an agent-reported error to structured failed evidence', async () => {
@@ -710,7 +730,194 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain('agent exited with code 1');
+    expect(result.failure.diagnostic).toContain('agent exited with code 1');
+  });
+
+  it.each(['timeout', 'provider', 'executor-exit'] as const)(
+    'preserves the adapter %s stage through exhausted attempt history',
+    async (failureStage) => {
+      const result = await runExecutionAgent(makeOpts(), makeIo(async () => ({
+        output: '', error: `${failureStage} diagnostic`, failureStage, retryable: true,
+      })));
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.failure).toMatchObject({ failureStage, retryDisposition: 'exhausted' });
+      expect(result.failure.attempts.map((attempt) => attempt.failureStage)).toEqual([failureStage, failureStage]);
+    },
+  );
+
+  it('classifies environment and Git capture failures without retrying', async () => {
+    const environment = await runExecutionAgent(makeOpts(), {
+      ...makeIo(async () => ({ output: '', error: null })),
+      buildEnv: () => { throw new Error('invalid product credential configuration'); },
+    });
+    expect(environment).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'environment', retryDisposition: 'not-eligible' },
+    });
+
+    let calls = 0;
+    const gitDiff = await runExecutionAgent(makeOpts(), {
+      ...makeIo(async () => ({ output: 'done', error: null })),
+      runGit: async (args) => {
+        calls += 1;
+        if (args[0] === 'write-tree') return { stdout: 'tree-before\n', stderr: '' };
+        if (args[0] === 'diff') throw new Error('diff capture failed');
+        return { stdout: '', stderr: '' };
+      },
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(gitDiff).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'git-diff', retryDisposition: 'not-eligible' },
+    });
+  });
+
+  it('retries one unchanged-tree transient failure with a fresh child and fresh MCP environment', async () => {
+    const spawnAgent = vi.fn()
+      .mockResolvedValueOnce({ output: '', error: 'temporary provider outage', failureStage: 'provider', retryable: true })
+      .mockResolvedValueOnce({ output: 'recovered', error: null });
+    const stops = [vi.fn(async () => {}), vi.fn(async () => {})];
+    const buildArtifactMcp = vi.fn()
+      .mockResolvedValueOnce({ stop: stops[0] })
+      .mockResolvedValueOnce({ stop: stops[1] });
+    const delays: number[] = [];
+
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      ...makeIo(spawnAgent),
+      buildArtifactMcp,
+      delay: async (ms) => { delays.push(ms); },
+      random: () => 0.5,
+    });
+
+    expect(result).toMatchObject({ ok: true, output: 'recovered' });
+    expect(spawnAgent).toHaveBeenCalledTimes(2);
+    expect(buildArtifactMcp).toHaveBeenCalledTimes(2);
+    expect(stops[0]).toHaveBeenCalledOnce();
+    expect(stops[1]).toHaveBeenCalledOnce();
+    expect(delays.reduce((sum, ms) => sum + ms, 0)).toBeGreaterThanOrEqual(1_000);
+    expect(delays.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(2_000);
+  });
+
+  it('records both attempts when a clean-tree transient failure exhausts its budget', async () => {
+    const spawnAgent = vi.fn(async () => ({
+      output: '', error: 'executor unavailable', failureStage: 'spawn' as const, retryable: true,
+    }));
+    const result = await runExecutionAgent(makeOpts(), makeIo(spawnAgent));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.retryDisposition).toBe('exhausted');
+    expect(result.failure.attempts).toHaveLength(2);
+    expect(result.failure.attempts.map((attempt) => attempt.attempt)).toEqual([1, 2]);
+  });
+
+  it('does not retry a transient executor failure after the attempt mutates the tree', async () => {
+    const spawnAgent = vi.fn(async ({ cwd }: { cwd: string }) => {
+      writeFileSync(join(cwd, 'partial.ts'), 'export const partial = true;\n', 'utf8');
+      return { output: '', error: 'connection reset', failureStage: 'provider' as const, retryable: true };
+    });
+    const result = await runExecutionAgent(makeOpts(), makeIo(spawnAgent));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.retryDisposition).toBe('worktree-changed');
+    expect(spawnAgent).toHaveBeenCalledOnce();
+  });
+
+  it('cancellation during retry backoff prevents the second spawn', async () => {
+    const cancellation = {
+      operationId: 'backoff-cancel', source: 'internal' as const,
+      requestedAt: '2026-07-22T00:00:00.000Z',
+    };
+    const spawnAgent = vi.fn(async () => ({
+      output: '', error: 'temporary outage', failureStage: 'provider' as const, retryable: true,
+    }));
+    const result = await runExecutionAgent(makeOpts(), {
+      ...makeIo(spawnAgent),
+      cancellationDuringBackoff: () => cancellation,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'cancellation', retryDisposition: 'cancelled' },
+      cancellation,
+    });
+    expect(spawnAgent).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry an adapter-classified authentication failure', async () => {
+    mockRunCodex.mockResolvedValue({ text: null, error: 'Unauthorized: login required', exitCode: 1 });
+    const result = await runExecutionAgent(makeOpts(), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+      delay: async () => {},
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'provider', retryable: false, retryDisposition: 'not-eligible' },
+    });
+    expect(mockRunCodex).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['spawn', 'spawn'],
+    ['timeout', 'timeout'],
+    ['executor-exit', 'executor-exit'],
+  ] as const)('maps Codex %s outcomes to the durable %s stage', async (failureKind, failureStage) => {
+    mockRunCodex.mockResolvedValue({
+      text: null,
+      error: `${failureKind} from codex`,
+      failureKind,
+      ...(failureKind === 'executor-exit' ? { exitCode: 1 } : {}),
+    });
+
+    const result = await runExecutionAgent(makeOpts(), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+      delay: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        failureStage,
+        retryDisposition: 'exhausted',
+        attempts: [{ failureStage }, { failureStage }],
+      },
+    });
+    expect(mockRunCodex).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the executor failure as primary when artifact MCP cleanup also fails', async () => {
+    const stop = vi.fn(async () => {
+      throw new Error('broker socket cleanup failed');
+    });
+    const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
+      ...makeIo(async () => ({
+        output: '',
+        error: 'provider transport failed',
+        failureStage: 'provider',
+        retryable: true,
+      })),
+      buildArtifactMcp: async () => ({ stop }) as never,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        failureStage: 'provider',
+        diagnostic: 'provider transport failed',
+        retryable: false,
+        retryDisposition: 'not-eligible',
+        attempts: [{
+          failureStage: 'provider',
+          diagnostic: 'provider transport failed',
+          cleanupDiagnostic: expect.stringContaining('artifact MCP cleanup failed'),
+        }],
+      },
+    });
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it('redacts arbitrary product credential values from structured evidence', async () => {
@@ -724,8 +931,24 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).not.toContain(planted);
-    expect(result.error).toContain('<secret-redacted-');
+    expect(result.failure.diagnostic).not.toContain(planted);
+    expect(result.failure.diagnostic).toContain('<secret-redacted-');
+  });
+
+  it('bounds and scrubs every durable attempt diagnostic', async () => {
+    const planted = 'opaque-product-credential-7491';
+    const raw = `/Users/private/operator/worktree ${planted} ${'x'.repeat(5_000)}`;
+    const result = await runExecutionAgent(makeOpts(), {
+      ...makeIo(async () => ({ output: '', error: raw, failureStage: 'provider', retryable: true })),
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '', CUSTOM_SERVICE_VALUE: planted }),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    for (const diagnostic of [result.failure.diagnostic, ...result.failure.attempts.map((attempt) => attempt.diagnostic)]) {
+      expect(diagnostic.length).toBeLessThanOrEqual(2_000);
+      expect(diagnostic).not.toContain(planted);
+      expect(diagnostic).not.toContain('/Users/private/operator');
+    }
   });
 
   it('surfaces a git-capture failure as structured failure (worktree is not a repo)', async () => {
@@ -799,7 +1022,7 @@ describe('runExecutionAgent — Claude stream-json forwarding (Phase 10)', () =>
       }),
       JSON.stringify({ type: 'result', result: 'finished cleanly' }),
     ];
-    mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0, stdoutLines: envelopes }));
+    mockSpawn.mockImplementation(() => makeFakeChild({ exitCode: 0, stdoutLines: envelopes }));
 
     const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
     const opts = {
@@ -840,6 +1063,8 @@ describe('runExecutionAgent — Claude stream-json forwarding (Phase 10)', () =>
     }, {
       buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
     });
+
+    await waitForSpawn();
 
     child.stdout.emit('data', Buffer.from(`${JSON.stringify({
       type: 'assistant',

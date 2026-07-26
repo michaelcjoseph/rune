@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
+import { isExecutionCheckpoint } from '../intent/execution-failure.js';
 import { writeFileAtomic } from '../intent/backlog-write-lock.js';
 
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
@@ -55,6 +56,7 @@ function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCurs
     Array.isArray(position.completedTaskIds) &&
     position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
     (position.currentTaskId === null || typeof position.currentTaskId === 'string') &&
-    (position.nextTaskId === null || typeof position.nextTaskId === 'string')
+    (position.nextTaskId === null || typeof position.nextTaskId === 'string') &&
+    (cursor.executionCheckpoint === undefined || isExecutionCheckpoint(cursor.executionCheckpoint))
   );
 }

@@ -65,6 +65,31 @@ function activeRun(
 }
 
 describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
+  it('projects structured terminal trigger and parked disposition', () => {
+    const id = 'terminal-trigger-001';
+    mkdirSync(join(dir, id), { recursive: true });
+    const trigger = { kind: 'failure', reason: 'coder failed at provider' };
+    const disposition = { kind: 'parked', reason: 'WIP preserved', wipSha: 'deadbeef' };
+    writeFileSync(join(dir, id, 'summary.json'), JSON.stringify({
+      id, project: '02-growth', product: 'aura', outcome: 'failed',
+      reason: trigger.reason,
+      exit: { exitCode: 1, signal: null, cancelled: false, durationMs: 10, exitFact: 'clean-exit' },
+      workProduct: { commitCount: 0, commitShas: [], filesChanged: [], diffstat: '', dirty: false,
+        untracked: false, transitions: { tasksNewlyChecked: 0, tasksRemaining: 1, tasksAdded: 0, tasksRemoved: 0 } },
+      baseSha: 'base', branch: 'rune-work/demo', startedAt: '2026-07-22T00:00:00.000Z',
+      endedAt: '2026-07-22T00:00:01.000Z', transcriptPath: '', forensicsPath: '',
+      trigger, disposition,
+    }));
+    writeFileSync(indexFile, `${JSON.stringify({
+      id, project: '02-growth', outcome: 'failed', durationMs: 10,
+      startedAt: '2026-07-22T00:00:00.000Z', endedAt: '2026-07-22T00:00:01.000Z',
+    })}\n`);
+
+    expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
+      outcome: 'failed', trigger, disposition,
+    });
+  });
+
   it('projects an active run that is absent from index.jsonl, with live lastOutput + startedAt', () => {
     const id = 'aaaaaaaa-1111-2222-3333-444444444444';
     seedTranscript(id, [

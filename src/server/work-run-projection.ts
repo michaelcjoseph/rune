@@ -115,6 +115,7 @@ function buildProjection(
   outcome: WorkRunOutcome | null,
   reason: string | null,
   startedAt: string,
+  terminal?: Pick<NonNullable<ReturnType<typeof readWorkRunSummary>>, 'trigger' | 'disposition'>,
 ): WorkRunProjection {
   const transcriptPath = join(dir, id, 'transcript.jsonl');
   const hasTranscript = existsSync(transcriptPath);
@@ -125,6 +126,8 @@ function buildProjection(
     lastOutput: hasTranscript ? readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES) : [],
     startedAt,
     transcriptUrl: hasTranscript ? `/api/work-runs/${id}/transcript` : null,
+    ...(terminal?.trigger !== undefined ? { trigger: terminal.trigger } : {}),
+    ...(terminal?.disposition !== undefined ? { disposition: terminal.disposition } : {}),
   };
 }
 
@@ -177,6 +180,7 @@ export function readWorkRunProjections(
       summary?.outcome ?? row.outcome ?? null,
       summary?.reason ?? null,
       summary?.startedAt ?? row.startedAt ?? '',
+      summary ?? undefined,
     );
   }
   // Layer in-flight runs over the terminal index rows. An active run has no

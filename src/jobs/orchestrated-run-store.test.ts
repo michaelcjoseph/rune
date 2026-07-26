@@ -211,6 +211,26 @@ describe('orchestrated run store', () => {
     await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toEqual(runCursor);
   });
 
+  it('round-trips an execution checkpoint while continuing to accept legacy cursors without one', async () => {
+    const legacy = cursor();
+    await store.writeOrchestratedRunCursor!(tmpDir, 'mut-orch-1', legacy);
+    await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toEqual(legacy);
+
+    const checkpointed = cursor({
+      executionCheckpoint: {
+        taskId: 'task-one',
+        role: 'coder',
+        provider: 'openai',
+        format: 'codex',
+        model: 'gpt-test',
+        workflowStage: 'coder-implementation',
+        checkpointedAt: '2026-07-22T00:00:00.000Z',
+      },
+    });
+    await store.writeOrchestratedRunCursor!(tmpDir, 'mut-orch-1', checkpointed);
+    await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toEqual(checkpointed);
+  });
+
   it('does not return a cursor unless the on-disk marker is explicitly resumable for that run', async () => {
     expect(typeof store.readOrchestratedRunCursor).toBe('function');
 

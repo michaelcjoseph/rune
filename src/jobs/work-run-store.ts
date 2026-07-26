@@ -25,6 +25,12 @@ import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 import { readJsonlTail } from './jsonl-tail.js';
 import type { WorkRunTarget } from '../intent/run-target.js';
 import type { OperationCancellation } from '../cancellation.js';
+import {
+  isExecutionTerminalDisposition,
+  isExecutionTerminalTrigger,
+  type ExecutionTerminalDisposition,
+  type ExecutionTerminalTrigger,
+} from '../intent/execution-failure.js';
 
 const log = createLogger('work-run-store');
 
@@ -86,6 +92,9 @@ export interface WorkRunSummary {
   gateHeldReason?: string;
   /** Durable correlation for a nested team-role cancellation. */
   cancellation?: WorkRunCancellation;
+  /** Immutable cause plus separate cleanup result. Absent on legacy summaries. */
+  trigger?: ExecutionTerminalTrigger;
+  disposition?: ExecutionTerminalDisposition;
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */
@@ -176,6 +185,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const s = parsed as Partial<WorkRunSummary>;
   const rawTarget = (parsed as Record<string, unknown>)['target'];
   const rawCancellation = (parsed as Record<string, unknown>)['cancellation'];
+  const rawTrigger = (parsed as Record<string, unknown>)['trigger'];
+  const rawDisposition = (parsed as Record<string, unknown>)['disposition'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -189,13 +200,15 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     ((rawTarget as Record<string, unknown>)['slug'] as string).trim() !== ''
   );
   const cancellationValid = rawCancellation === undefined || cancellation !== undefined;
+  const triggerValid = rawTrigger === undefined || isExecutionTerminalTrigger(rawTrigger);
+  const dispositionValid = rawDisposition === undefined || isExecutionTerminalDisposition(rawDisposition);
   if (
     s.id === id &&
     typeof s.product === 'string' &&
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
     targetValid &&
-    cancellationValid
+    cancellationValid && triggerValid && dispositionValid
   ) {
     const summary = {
       ...s,

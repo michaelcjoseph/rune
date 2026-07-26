@@ -868,8 +868,12 @@
       const reason = wr.reason
         ? ` <span class="workrun-reason">${escHtml(wr.reason)}</span>`
         : '';
+      const disposition = wr.disposition && wr.disposition.kind
+        ? ` <span class="workrun-reason">· ${escHtml(wr.disposition.kind)}` +
+          `${wr.disposition.wipSha ? ` · WIP ${escHtml(wr.disposition.wipSha)}` : ''}</span>`
+        : '';
       return `<div class="cockpit-workrun">` +
-        `<div class="cockpit-workrun-line"><span class="${escHtml(cls)}">${escHtml(wr.outcome)}</span>${reason}${link}</div>` +
+        `<div class="cockpit-workrun-line"><span class="${escHtml(cls)}">${escHtml(wr.outcome)}</span>${reason}${disposition}${link}</div>` +
         `</div>`;
     }
     // Active: elapsed since start + last-N output lines. `running · ` is a

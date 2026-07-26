@@ -59,6 +59,13 @@ import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  sanitizeExecutionDiagnostic,
+  type ExecutionAttempt,
+  type ExecutionCheckpoint,
+  type ExecutionFailure,
+  type ExecutionFailureStage,
+} from '../intent/execution-failure.js';
 
 const log = createLogger('execution-agent');
 const NON_CREDENTIAL_ENV_KEYS = new Set<string>([
@@ -94,10 +101,14 @@ export interface SpawnAgentResult {
   output: string;
   error: string | null;
   cancellation?: OperationCancellation;
+  /** Structured adapter outcome. Legacy injected seams may omit these; their
+   * errors are conservatively treated as retryable provider failures. */
+  failureStage?: Extract<ExecutionFailureStage, 'environment' | 'spawn' | 'timeout' | 'cancellation' | 'provider' | 'executor-exit'>;
+  retryable?: boolean;
 }
 
 export type ExecutionAgentStreamEvent =
-  | { kind: 'activity'; data?: Record<string, never> }
+  | { kind: 'activity'; data?: Record<string, unknown> }
   | { kind: 'output'; data: { line: string } };
 
 /** Injectable IO seam — tests fake the spawn and env, keep real git. */
@@ -121,6 +132,9 @@ export interface ExecutionAgentIO {
     opts: { productsConfigPath: string; executor?: 'claude' | 'codex' },
   ) => Promise<ArtifactMcpConfig | null> | ArtifactMcpConfig | null;
   onActivity?: (event: ExecutionAgentStreamEvent) => void;
+  delay: (ms: number) => Promise<void>;
+  random: () => number;
+  cancellationDuringBackoff?: () => OperationCancellation | undefined;
 }
 
 export interface ExecutionAgentOpts {
@@ -144,22 +158,29 @@ export interface ExecutionAgentOpts {
   timeoutMs?: number;
   /** Optional activity stream for orchestrated-run observability/heartbeat. */
   emit?: (event: ExecutionAgentStreamEvent) => void;
+  /** Durable attribution supplied by the task workflow. */
+  taskId?: string;
+  workflowStage?: string;
+  /** Exact checkpoint already persisted by the workflow before this call. */
+  checkpoint?: ExecutionCheckpoint;
 }
 
 export type ExecutionAgentResult =
   | { ok: true; diff: string; output: string }
-  | { ok: false; error: string; cancellation?: OperationCancellation };
+  | { ok: false; failure: ExecutionFailure; cancellation?: OperationCancellation };
 
 const defaultIo: ExecutionAgentIO = {
   spawnAgent: defaultSpawnAgent,
   runGit: defaultRunGit,
   buildEnv: buildSandboxEnv,
   buildArtifactMcp: buildArtifactMcpConfig,
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  random: Math.random,
 };
 
 /**
  * Run one artifact-role session and capture its work product as a git diff.
- * Never throws — every failure path returns `{ok:false, error}` so the
+ * Never throws — every failure path returns `{ok:false, failure}` so the
  * team-task workflow surfaces structured `failed` evidence instead of an
  * unhandled rejection.
  */
@@ -167,7 +188,10 @@ export async function runExecutionAgent(
   opts: ExecutionAgentOpts,
   io: Partial<ExecutionAgentIO> = {},
 ): Promise<ExecutionAgentResult> {
-  const { spawnAgent, runGit, buildEnv, buildArtifactMcp, onActivity } = {
+  const {
+    spawnAgent, runGit, buildEnv, buildArtifactMcp, onActivity,
+    delay, random, cancellationDuringBackoff,
+  } = {
     ...defaultIo,
     ...io,
   };
@@ -175,68 +199,273 @@ export async function runExecutionAgent(
   const timeoutMs = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const emit = composeActivityEmit(opts.emit, onActivity);
 
-  let artifactMcp: ArtifactMcpConfig | null = null;
   let credentialValues: string[] = [];
-  try {
-    // Resolve the required MCP before other product configuration so every
-    // configured-policy/setup failure uses the structured registration error.
-    try {
-      artifactMcp = opts.role === 'qa' || opts.role === 'coder'
-        ? await buildArtifactMcp(opts.sandbox, {
-            productsConfigPath: opts.productsConfigPath,
-            executor: opts.model.format,
-          })
-        : null;
-    } catch (err) {
-      return {
-        ok: false,
-        error: `rune-kb not registered: ${sanitize((err as Error).message)}`,
-      };
-    }
-    const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
-    credentialValues = productCredentialValues(env);
-    const { output, error, cancellation } = await spawnAgent({
-      prompt: opts.prompt,
-      ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
-      model: opts.model,
+  const checkpoint: ExecutionCheckpoint = opts.checkpoint ?? {
+    taskId: opts.taskId ?? opts.sandbox.project,
+    role: opts.role,
+    provider: opts.model.provider,
+    format: opts.model.format,
+    model: opts.model.alias,
+    workflowStage: opts.workflowStage ?? opts.role,
+    checkpointedAt: new Date().toISOString(),
+  };
+  const attempts: ExecutionAttempt[] = [];
+  const recordAttempt = (
+    attempt: number,
+    startedAt: string,
+    stage: ExecutionFailureStage,
+    diagnostic: unknown,
+    retryable: boolean,
+    cleanupDiagnostic?: unknown,
+  ): void => {
+    const record = attemptRecord(
+      attempt,
+      startedAt,
+      stage,
+      diagnostic,
+      retryable,
+      credentialValues,
+      cleanupDiagnostic,
+    );
+    const priorIndex = attempts.findIndex((item) => item.attempt === attempt);
+    if (priorIndex >= 0) attempts[priorIndex] = record;
+    else attempts.push(record);
+    emit?.({ kind: 'activity', data: {
+      event: 'execution-attempt-failed',
+      attempt,
       role: opts.role,
-      product: opts.sandbox.product,
-      cwd,
-      env,
-      timeoutMs,
-      ...(artifactMcp !== null ? { artifactMcp } : {}),
-      ...(emit !== undefined ? { emit } : {}),
-    });
-    if (error !== null) {
-      return {
-        ok: false,
-        error: sanitize(error, credentialValues),
-        ...(cancellation !== undefined ? { cancellation } : {}),
-      };
+      failureStage: stage,
+      retryable,
+      line: `execution attempt ${attempt} failed at ${stage}: ${record.diagnostic}`,
+    } });
+  };
+
+  const failed = (
+    stage: ExecutionFailureStage,
+    diagnostic: unknown,
+    retryable: boolean,
+    disposition: ExecutionFailure['retryDisposition'],
+    cancellation?: OperationCancellation,
+  ): ExecutionAgentResult => {
+    const failure: ExecutionFailure = {
+      ...checkpoint,
+      failureStage: stage,
+      diagnostic: sanitizeExecutionDiagnostic(diagnostic, credentialValues),
+      retryable,
+      attempts: [...attempts],
+      retryDisposition: disposition,
+      ...(cancellation !== undefined ? { cancellation } : {}),
+    };
+    return { ok: false, failure, ...(cancellation !== undefined ? { cancellation } : {}) };
+  };
+  const finishAttempt = (
+    attempt: number,
+    startedAt: string,
+    stage: ExecutionFailureStage,
+    diagnostic: unknown,
+    retryable: boolean,
+    disposition: ExecutionFailure['retryDisposition'],
+    cancellation?: OperationCancellation,
+    cleanupDiagnostic?: unknown,
+  ): ExecutionAgentResult => {
+    recordAttempt(
+      attempt,
+      startedAt,
+      stage,
+      diagnostic,
+      retryable,
+      cleanupDiagnostic,
+    );
+    return failed(stage, diagnostic, retryable, disposition, cancellation);
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const startedAt = new Date().toISOString();
+    let beforeTree: string;
+    try {
+      beforeTree = await snapshotTree(runGit, cwd);
+    } catch (err) {
+      return finishAttempt(attempt, startedAt, 'git-stage', err, false, 'not-eligible');
     }
-    // Stage-then-diff so new files are part of the captured work product.
-    await runGit(['add', '-A'], { cwd });
-    const { stdout } = await runGit(['diff', 'HEAD'], { cwd });
-    // Defense-in-depth: a credential a misbehaving tool call wrote into the
-    // worktree must not propagate upstream through TaskEvidence, and host-
-    // absolute paths must not leave the process toward external providers —
-    // mirror the work-run pipeline's diffstat scrubbing.
+
+    let artifactMcp: ArtifactMcpConfig | null = null;
+    let spawnResult: SpawnAgentResult;
+    let artifactStopError: unknown;
+    try {
+      try {
+        artifactMcp = opts.role === 'qa' || opts.role === 'coder'
+          ? await buildArtifactMcp(opts.sandbox, {
+              productsConfigPath: opts.productsConfigPath,
+              executor: opts.model.format,
+            })
+          : null;
+      } catch (err) {
+        return finishAttempt(
+          attempt,
+          startedAt,
+          'artifact-mcp',
+          `rune-kb not registered: ${sanitizeExecutionDiagnostic(err)}`,
+          false,
+          'not-eligible',
+        );
+      }
+
+      let env: NodeJS.ProcessEnv;
+      try {
+        env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
+        credentialValues = productCredentialValues(env);
+      } catch (err) {
+        return finishAttempt(attempt, startedAt, 'environment', err, false, 'not-eligible');
+      }
+
+      try {
+        spawnResult = await spawnAgent({
+          prompt: opts.prompt,
+          ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+          model: opts.model,
+          role: opts.role,
+          product: opts.sandbox.product,
+          cwd,
+          env,
+          timeoutMs,
+          ...(artifactMcp !== null ? { artifactMcp } : {}),
+          ...(emit !== undefined ? { emit } : {}),
+        });
+      } catch (err) {
+        spawnResult = { output: '', error: sanitizeExecutionDiagnostic(err), failureStage: 'spawn', retryable: true };
+      }
+    } finally {
+      if (artifactMcp !== null) {
+        try {
+          await artifactMcp.stop();
+        } catch (err) {
+          artifactStopError = err;
+          log.warn('failed to stop artifact MCP broker', { error: sanitizeExecutionDiagnostic(err) });
+        }
+      }
+    }
+
+    if (spawnResult.error !== null) {
+      const stage = spawnResult.failureStage ?? (spawnResult.cancellation ? 'cancellation' : 'provider');
+      const retryable = spawnResult.retryable ?? spawnResult.cancellation === undefined;
+      // Cleanup is a secondary diagnostic. It prevents a retry because the
+      // attempt environment did not close cleanly, but never replaces the
+      // child's original terminal cause.
+      if (artifactStopError !== undefined) {
+        return finishAttempt(
+          attempt,
+          startedAt,
+          stage,
+          spawnResult.error,
+          false,
+          'not-eligible',
+          spawnResult.cancellation,
+          `artifact MCP cleanup failed: ${sanitizeExecutionDiagnostic(artifactStopError)}`,
+        );
+      }
+      if (!retryable || spawnResult.cancellation !== undefined) {
+        return finishAttempt(
+          attempt,
+          startedAt,
+          stage,
+          spawnResult.error,
+          false,
+          spawnResult.cancellation ? 'cancelled' : 'not-eligible',
+          spawnResult.cancellation,
+        );
+      }
+      recordAttempt(attempt, startedAt, stage, spawnResult.error, true);
+
+      let afterTree: string;
+      try {
+        afterTree = await snapshotTree(runGit, cwd);
+      } catch (err) {
+        return finishAttempt(attempt, startedAt, 'git-diff', err, false, 'not-eligible');
+      }
+      if (beforeTree !== afterTree) {
+        return failed(stage, spawnResult.error, true, 'worktree-changed');
+      }
+      if (attempt === 2) return failed(stage, spawnResult.error, true, 'exhausted');
+
+      emit?.({ kind: 'activity', data: {
+        event: 'execution-retry', attempt, nextAttempt: attempt + 1, role: opts.role,
+        failureStage: stage,
+        line: `execution attempt ${attempt} failed at ${stage}; retrying with a fresh process`,
+      } });
+      const backoffMs = 1_000 + Math.floor(Math.max(0, Math.min(0.999, random())) * 1_001);
+      for (let waited = 0; waited < backoffMs; waited += 100) {
+        const cancellation = cancellationDuringBackoff?.();
+        if (cancellation !== undefined) {
+          return failed('cancellation', 'cancelled during execution retry backoff', false, 'cancelled', cancellation);
+        }
+        await delay(Math.min(100, backoffMs - waited));
+      }
+      continue;
+    }
+
+    if (artifactStopError !== undefined) {
+      const cleanupDiagnostic = `artifact MCP cleanup failed: ${sanitizeExecutionDiagnostic(artifactStopError)}`;
+      return finishAttempt(
+        attempt,
+        startedAt,
+        'artifact-mcp',
+        cleanupDiagnostic,
+        false,
+        'not-eligible',
+      );
+    }
+
+    try {
+      await runGit(['add', '-A'], { cwd });
+    } catch (err) {
+      return finishAttempt(attempt, startedAt, 'git-stage', err, false, 'not-eligible');
+    }
+    let stdout: string;
+    try {
+      stdout = (await runGit(['diff', 'HEAD'], { cwd })).stdout;
+    } catch (err) {
+      return finishAttempt(attempt, startedAt, 'git-diff', err, false, 'not-eligible');
+    }
     return {
       ok: true,
       diff: redactSecrets(scrubPathsInText(stdout), credentialValues),
-      output: sanitize(output, credentialValues),
+      output: sanitize(spawnResult.output, credentialValues),
     };
-  } catch (err) {
-    return { ok: false, error: sanitize((err as Error).message, credentialValues) };
-  } finally {
-    if (artifactMcp !== null) {
-      try {
-        await artifactMcp.stop();
-      } catch (err) {
-        log.warn('failed to stop artifact MCP broker', { error: (err as Error).message });
-      }
-    }
   }
+
+  return failed('orchestration-adjacent', 'execution attempt loop exhausted unexpectedly', false, 'exhausted');
+}
+
+function attemptRecord(
+  attempt: number,
+  startedAt: string,
+  failureStage: ExecutionFailureStage,
+  diagnostic: unknown,
+  retryable: boolean,
+  exactValues: readonly string[],
+  cleanupDiagnostic?: unknown,
+): ExecutionAttempt {
+  return {
+    attempt,
+    startedAt,
+    endedAt: new Date().toISOString(),
+    failureStage,
+    diagnostic: sanitizeExecutionDiagnostic(diagnostic, exactValues),
+    retryable,
+    ...(cleanupDiagnostic === undefined
+      ? {}
+      : { cleanupDiagnostic: sanitizeExecutionDiagnostic(cleanupDiagnostic, exactValues) }),
+  };
+}
+
+/**
+ * Snapshot the Git-visible worktree state used by the retry safety gate.
+ * `git add -A` + `write-tree` intentionally excludes ignored files and Git
+ * metadata: executor work product must live in the repository's visible tree.
+ */
+async function snapshotTree(runGit: GitRunner, cwd: string): Promise<string> {
+  await runGit(['add', '-A'], { cwd });
+  return (await runGit(['write-tree'], { cwd })).stdout.trim();
 }
 
 /** Executor stderr / error text can carry host-absolute paths and (in the
@@ -336,10 +565,19 @@ async function defaultSpawnAgent(args: {
         };
     const result = await runCodex(codexPrompt, codexOpts);
     const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues));
+    const codexFailure = result.error === null || result.cancellation !== undefined
+      ? undefined
+      : classifyAdapterFailure(result.error, result.failureKind ?? 'provider');
     return {
       output,
       error: result.error === null ? null : sanitize(result.error, credentialValues),
       ...(result.cancellation !== undefined ? { cancellation: result.cancellation } : {}),
+      ...(result.error !== null ? {
+        failureStage: result.cancellation !== undefined
+          ? 'cancellation' as const
+          : codexFailure?.stage ?? 'provider' as const,
+        retryable: result.cancellation === undefined && (codexFailure?.retryable ?? true),
+      } : {}),
     };
   }
   return spawnClaudeAgent(args);
@@ -446,7 +684,7 @@ function spawnClaudeAgent(args: {
         },
       );
     } catch (err) {
-      finish({ output: '', error: (err as Error).message });
+      finish({ output: '', error: (err as Error).message, failureStage: 'spawn', retryable: true });
       return;
     }
 
@@ -535,18 +773,18 @@ function spawnClaudeAgent(args: {
       const cancellation = getCancellation(op.opId);
       if (cancellation !== undefined) {
         unregisterOp(op.opId, 'cancelled', 'Cancelled by user');
-        finish({ output: stdout, error: 'Cancelled by user', cancellation });
+        finish({ output: stdout, error: 'Cancelled by user', cancellation, failureStage: 'cancellation', retryable: false });
         return;
       }
       if (spawnError !== null) {
         const error = sanitize(spawnError, credentialValues);
         unregisterOp(op.opId, 'error', error);
-        finish({ output: stdout, error });
+        finish({ output: stdout, error, failureStage: 'spawn', retryable: true });
         return;
       }
       if (timedOut) {
         unregisterOp(op.opId, 'error', `execution agent timed out after ${args.timeoutMs}ms`);
-        finish({ output: stdout, error: `execution agent timed out after ${args.timeoutMs}ms` });
+        finish({ output: stdout, error: `execution agent timed out after ${args.timeoutMs}ms`, failureStage: 'timeout', retryable: true });
         return;
       }
       if (code === 0) {
@@ -558,8 +796,25 @@ function spawnClaudeAgent(args: {
         stderr.trim() || `execution agent exited with code ${code}`,
         credentialValues,
       );
+      const classified = classifyAdapterFailure(error, 'executor-exit');
       unregisterOp(op.opId, 'error', error);
-      finish({ output: stdout, error });
+      finish({ output: stdout, error, failureStage: classified.stage, retryable: classified.retryable });
     });
   });
+}
+
+function classifyAdapterFailure(
+  diagnostic: string,
+  fallback: Extract<ExecutionFailureStage, 'spawn' | 'timeout' | 'provider' | 'executor-exit'> = 'provider',
+): {
+  stage: Extract<ExecutionFailureStage, 'environment' | 'spawn' | 'timeout' | 'provider' | 'executor-exit'>;
+  retryable: boolean;
+} {
+  if (/\b(?:unauthenticated|unauthorized|forbidden|authentication|log(?:ged)?\s*in|credential)\b/i.test(diagnostic)) {
+    return { stage: 'provider', retryable: false };
+  }
+  if (/\b(?:sandbox(?:-exec)?|seatbelt|configuration|invalid config)\b/i.test(diagnostic)) {
+    return { stage: 'environment', retryable: false };
+  }
+  return { stage: fallback, retryable: true };
 }

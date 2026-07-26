@@ -601,6 +601,8 @@ describe('TelegramSender', () => {
           pendingCheck: 'Run the interactive Codex check and confirm the result',
           command: 'npm run codex-check',
           reason: 'needs a human at the keyboard',
+          trigger: { kind: 'failure', reason: 'coder failed at provider' },
+          disposition: { kind: 'parked', reason: 'WIP preserved after failure', wipSha: 'deadbeef' },
           // Underlying classification — must NOT be the headline for a parked run.
           outcome: 'noop',
           workProduct: noopWorkProduct,
@@ -617,6 +619,9 @@ describe('TelegramSender', () => {
       // Carries the pending check + the un-scrubbed operator path so Michael can act.
       expect(text).toContain('Run the interactive Codex check and confirm the result');
       expect(text).toContain('/tmp/worktrees/rune/demo');
+      expect(text).toContain('coder failed at provider');
+      expect(text).toContain('WIP preserved after failure');
+      expect(text).toContain('deadbeef');
       // The Release button's callback id routes through the shared release runtime.
       const button = opts.reply_markup!.inline_keyboard[0]![0]!;
       expect(button.callback_data).toMatch(/^work-run-release:/);
