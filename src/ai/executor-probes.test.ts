@@ -71,6 +71,9 @@ describe('centralized executor probes', () => {
       expect(JSON.stringify(result)).not.toContain('/Users/operator');
       expect(result.ok ? '' : result.diagnostic).toContain('<host-path>');
       expect(result.ok ? '' : result.diagnostic).toContain('unknown model fixture-model');
+      expect(result.ok ? '' : result.diagnostic).toContain(
+        'runtime: binary=executable, cwd=usable, home=usable, tmpdir=unset, claude-config=unset',
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

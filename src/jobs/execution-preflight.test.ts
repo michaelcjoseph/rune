@@ -210,6 +210,21 @@ describe('preflightExecution', () => {
     });
   });
 
+  it('points Bun ENOENT failures at the service runtime rather than model access', async () => {
+    const seams = io({
+      probeModel: vi.fn(async (binding) => binding.alias === 'gpt-coder'
+        ? { ok: false, code: 'nonzero-exit' as const, diagnostic: 'ENOENT: Bun could not find a file' }
+        : { ok: true }),
+    });
+
+    const result = await preflightExecution(args(), seams);
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      remediation: 'inspect the Rune service Claude runtime directories reported above, then retry the run',
+    });
+  });
+
   it('probes each shared executor and shared model binding only once', async () => {
     const seams = io();
 

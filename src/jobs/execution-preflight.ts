@@ -318,18 +318,27 @@ function failure(
     model: group.model,
     prerequisite,
     diagnostic,
-    remediation: remediationFor(group.format, prerequisite),
+    remediation: remediationFor(group.format, prerequisite, diagnostic),
   });
 }
 
-function remediationFor(format: ExecutionPreflightFormat, prerequisite: ExecutionPreflightPrerequisite): string {
+function remediationFor(
+  format: ExecutionPreflightFormat,
+  prerequisite: ExecutionPreflightPrerequisite,
+  diagnostic: string,
+): string {
   if (prerequisite === 'binary') return `install the ${format} CLI and ensure it is executable on Rune's PATH`;
   if (prerequisite === 'authentication') {
     return format === 'codex'
       ? 'run `codex login` as the Rune service user, then retry the run'
       : 'run `claude auth login` as the Rune service user, then retry the run';
   }
-  if (prerequisite === 'model-call') return 'verify the resolved model id and account access, then retry the run';
+  if (prerequisite === 'model-call') {
+    if (/\bENOENT\b.*\bBun\b|\bBun\b.*\bENOENT\b/i.test(diagnostic)) {
+      return 'inspect the Rune service Claude runtime directories reported above, then retry the run';
+    }
+    return 'verify the resolved model id and account access, then retry the run';
+  }
   return 'repair the product artifact-MCP, Seatbelt, relay, or executor-auth configuration, then retry the run';
 }
 

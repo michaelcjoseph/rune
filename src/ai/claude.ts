@@ -1,5 +1,14 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFile, appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import {
+  accessSync,
+  appendFile,
+  appendFileSync,
+  constants as fsConstants,
+  existsSync,
+  readFileSync,
+  renameSync,
+  statSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -83,6 +92,51 @@ function safeProbeStderr(stderr: string, env: NodeJS.ProcessEnv): string | undef
   return value || undefined;
 }
 
+type ProbePathState = 'unset' | 'missing' | 'not-directory' | 'inaccessible' | 'usable';
+
+/** Report only capability state, never a host path or environment value. */
+function probeDirectoryState(path: string | undefined): ProbePathState {
+  if (!path) return 'unset';
+  try {
+    if (!statSync(path).isDirectory()) return 'not-directory';
+  } catch {
+    return 'missing';
+  }
+  try {
+    accessSync(path, fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK);
+    return 'usable';
+  } catch {
+    return 'inaccessible';
+  }
+}
+
+function probeBinaryState(path: string): 'missing' | 'not-file' | 'executable' {
+  try {
+    if (!statSync(path).isFile()) return 'not-file';
+    accessSync(path, fsConstants.X_OK);
+    return 'executable';
+  } catch {
+    return 'missing';
+  }
+}
+
+/** This state is deliberately appended only to failed probes. It identifies
+ * service-environment drift without exposing path values or credentials. */
+function probeRuntimeState(opts: ClaudeExecutorProbeOpts): string {
+  const binary = opts.binaryPath ?? CLAUDE_BIN;
+  return [
+    `binary=${probeBinaryState(binary)}`,
+    `cwd=${probeDirectoryState(opts.cwd)}`,
+    `home=${probeDirectoryState(opts.env.HOME)}`,
+    `tmpdir=${probeDirectoryState(opts.env.TMPDIR)}`,
+    `claude-config=${probeDirectoryState(opts.env.CLAUDE_CONFIG_DIR)}`,
+  ].join(', ');
+}
+
+function withProbeRuntimeState(diagnostic: string | undefined, opts: ClaudeExecutorProbeOpts): string {
+  return `${diagnostic ?? 'Claude CLI exited without stderr'} [runtime: ${probeRuntimeState(opts)}]`;
+}
+
 function boundedClaudeProbe(
   args: string[],
   opts: ClaudeExecutorProbeOpts,
@@ -114,7 +168,7 @@ export async function probeClaudeAuthentication(
     return {
       ok: false,
       code: 'not-authenticated',
-      ...(diagnostic !== undefined ? { diagnostic } : {}),
+      diagnostic: withProbeRuntimeState(diagnostic, opts),
     };
   }
   try {
@@ -145,7 +199,7 @@ export async function probeClaudeModelCall(
   if (result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
   if (result.exitCode !== 0) {
     const diagnostic = safeProbeStderr(result.stderr, opts.env);
-    return { ok: false, code: 'nonzero-exit', ...(diagnostic !== undefined ? { diagnostic } : {}) };
+    return { ok: false, code: 'nonzero-exit', diagnostic: withProbeRuntimeState(diagnostic, opts) };
   }
   return result.stdout.trim() === 'OK'
     ? { ok: true }
