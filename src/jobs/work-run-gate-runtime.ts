@@ -47,6 +47,7 @@ import { scrubPathsInText } from '../ai/tool-labels.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import config, { PROJECT_ROOT } from '../config.js';
+import { resolveValidationCwd } from './task-validation.js';
 
 const log = createLogger('work-run-gate-runtime');
 
@@ -70,6 +71,9 @@ export interface GateRuntimeOpts {
   /** Product `validationCommands` from policies/products.json. Empty/absent →
    *  fail-closed `missing-validation-command`. */
   validationCommands: string[];
+  /** Optional repository-relative command directory, revalidated inside the
+   * throwaway integration worktree before the hard gate executes commands. */
+  validationCwd?: string;
   /** Original tasks still unchecked (computed from the work product). */
   tasksRemaining: number;
   /** Another run owns the same product / base branch right now (lock state). */
@@ -379,7 +383,13 @@ function defaultRunValidationCommand(
 
 export type ValidationCommandListResult =
   | { ok: true }
-  | { ok: false; command: string; result: ValidationCommandResult };
+  | {
+      ok: false;
+      command: string;
+      /** Structured argv when the caller constructed the command directly. */
+      argv?: readonly string[];
+      result: ValidationCommandResult;
+    };
 
 function parseGitPathList(raw: string): string[] {
   return raw
@@ -514,18 +524,27 @@ export async function runGate(
       const status = await runGit(['status', '--porcelain'], { cwd: opts.integrationWorktree });
       treeClean = status.stdout.trim() === '';
 
-      // Run validation commands in the integration worktree. testsGreen = all
-      // exited 0; validationTimedOut = the first red command exceeded budget.
-      const validation = await runValidationCommands(
-        opts.validationCommands,
+      const validationCwd = resolveValidationCwd(
         opts.integrationWorktree,
-        opts.commandTimeoutMs,
-        runValidationCommand,
-        opts.validationArtifactsDir,
+        opts.validationCwd,
       );
-      if (!validation.ok) {
-        validationTimedOut = validation.result.timedOut;
-        testsGreen = validation.result.exitCode === 0 && !validation.result.timedOut;
+      if (!validationCwd.ok) {
+        testsGreen = false;
+      } else {
+        // Run validation commands in the validated integration-worktree
+        // subdirectory. testsGreen = all exited 0; validationTimedOut = the
+        // first red command exceeded budget.
+        const validation = await runValidationCommands(
+          opts.validationCommands,
+          validationCwd.cwd,
+          opts.commandTimeoutMs,
+          runValidationCommand,
+          opts.validationArtifactsDir,
+        );
+        if (!validation.ok) {
+          validationTimedOut = validation.result.timedOut;
+          testsGreen = validation.result.exitCode === 0 && !validation.result.timedOut;
+        }
       }
     }
 

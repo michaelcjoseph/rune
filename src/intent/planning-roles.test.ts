@@ -639,6 +639,70 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
 });
 
 describe('planning-roles — tech-lead self-review in runDownstreamPlan (project 20 test-plan §3)', () => {
+  it('round-trips explicit validation policy through the tech-lead self-review parser and defaults legacy omissions to required', async () => {
+    mockRunSelfReview.mockImplementationOnce(async (input: {
+      artifact: TechLeadResult;
+      render?: (artifact: TechLeadResult) => string;
+      parse?: (reply: string) => TechLeadResult;
+    }) => {
+      expect(input.render?.(input.artifact)).toContain('"validationPolicy"');
+      const parsed = input.parse?.([
+        '```self-review-artifact',
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'p1-core',
+              text: 'Implement core',
+              testStrategy: 'code-tests-required',
+              validationPolicy: 'required',
+              designerNeeded: false,
+              roles: ['qa', 'coder'],
+            },
+            {
+              id: 'p2-docs',
+              text: 'Document API',
+              testStrategy: 'docs-or-config-only',
+              validationPolicy: 'reviewed-no-validation',
+              designerNeeded: false,
+              roles: ['qa', 'coder', 'reviewer'],
+            },
+            {
+              id: 'p3-legacy',
+              text: 'Legacy-shaped task',
+              testStrategy: 'code-tests-required',
+              designerNeeded: false,
+              roles: ['qa', 'coder'],
+            },
+          ],
+        }),
+        '```',
+        '```self-review-tech-spec',
+        'Reviewed tech spec.',
+        '```',
+      ].join('\n'));
+      if (!parsed) throw new Error('self-review parser was not provided');
+      return { artifact: parsed, revised: true };
+    });
+
+    const artifact = await (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+      deps: makeDeps({
+        techLeadBreakdown: async () => ({
+          techSpec: 'Initial tech spec.',
+          tasks: [
+            { ...SIZED_TASKS[0]!, validationPolicy: 'required' },
+            { ...SIZED_TASKS[2]!, validationPolicy: 'reviewed-no-validation' },
+          ],
+        }),
+        pmReviewMatch: async () => ({ match: true, mismatches: [] }),
+        critiquePlan: async (plan) => ({ plan, codexSkipped: false }),
+      }),
+    });
+
+    expect(artifact.tasks).toContain('Validation policy: `required`');
+    expect(artifact.tasks).toContain('Validation policy: `reviewed-no-validation`');
+    expect(artifact.tasks.match(/Validation policy: `required`/g)).toHaveLength(2);
+  });
+
   it('runs tech-lead self-review after breakdown and before PM review, and hands the revised artifact downstream', async () => {
     const calls: string[] = [];
     const reviewedTasks: SizedTask[] = [

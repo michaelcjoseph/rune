@@ -131,6 +131,7 @@ const task: SizedTask = {
   id: 'qa-redaction-retry',
   text: 'Write tests for redaction of token-shaped secrets',
   testStrategy: 'code-tests-required',
+  validationPolicy: 'reviewed-no-validation',
   designerNeeded: false,
   roles: ['qa', 'tech-lead', 'coder', 'reviewer'],
 };
@@ -275,11 +276,15 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
       if (role === 'reviewer') {
         return ['```reviewer-verdict', '{"pass": true, "objections": []}', '```'].join('\n');
       }
+      if (role === 'qa') {
+        return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
+      }
       return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
     };
 
     const seams: Partial<TeamTaskSeams> = {
       judgmentCall,
+      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
       runExecution: async (opts) => {
         executionCalls += 1;
         if (executionCalls <= 2) {
@@ -440,11 +445,16 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
         return ['```reviewer-verdict', '{"pass": true, "objections": []}', '```'].join('\n');
       }
 
+      if (call.role === 'qa') {
+        return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
+      }
+
       return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
     };
 
     const seams: Partial<TeamTaskSeams> = {
       judgmentCall,
+      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
       runExecution: async (opts) => {
         executionCalls += 1;
         if (executionCalls <= 2) {

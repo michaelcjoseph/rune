@@ -30,6 +30,7 @@ import type {
   SpecMatchResult,
   TechLeadResult,
   TestStrategy,
+  ValidationPolicy,
   PerProjectExemplars,
 } from './planning-roles.js';
 import {
@@ -266,7 +267,7 @@ const TECH_LEAD_INSTRUCTION = [
   'keeping it in its own fence means it needs no escaping. Emit the JSON first,',
   'the tech spec last, and nothing after it:',
   '```tech-breakdown',
-  '{"tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}], "perProjectExemplars": {"qa": "<markdown exemplar for this project, if useful>"}}',
+  '{"tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "validationPolicy": "required|reviewed-no-validation", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}], "perProjectExemplars": {"qa": "<markdown exemplar for this project, if useful>"}}',
   '```',
   '```tech-spec',
   '<markdown technical spec: interfaces, contracts, data shapes, sequencing>',
@@ -277,6 +278,8 @@ const TECH_LEAD_INSTRUCTION = [
   'when the approved spec\'s Definition of Done requires real operator/browser/',
   'integration verification that the automated suite cannot prove; make that task',
   'an explicit release gate instead of pretending automated tests satisfy it.',
+  'Set validationPolicy to `required` unless the reviewed task genuinely has no',
+  'usable mechanical validation; only then use `reviewed-no-validation`.',
   'Include',
   '`perProjectExemplars` only for roles that would benefit from a project-specific',
   'example of good output; keys must be role slugs and values must be markdown.',
@@ -342,11 +345,16 @@ function parseSizedTask(raw: unknown, index: number): SizedTask {
   const testStrategy = TEST_STRATEGIES.includes(t['testStrategy'] as TestStrategy)
     ? (t['testStrategy'] as TestStrategy)
     : 'code-tests-required';
+  const validationPolicy: ValidationPolicy =
+    t['validationPolicy'] === 'reviewed-no-validation'
+      ? 'reviewed-no-validation'
+      : 'required';
   const phase = typeof t['phase'] === 'string' && t['phase'].trim() ? t['phase'].trim() : undefined;
   return {
     id,
     text: t['text'],
     testStrategy,
+    validationPolicy,
     designerNeeded: t['designerNeeded'] === true,
     roles: isStringArray(t['roles']) ? t['roles'] : [],
     ...(phase ? { phase } : {}),
@@ -376,7 +384,7 @@ const PM_REVIEW_INSTRUCTION = [
   '```',
   'When the tech plan drifts from the product intent but you can repair it:',
   '```pm-review',
-  '{"match": false, "mismatches": ["<each concrete gap>"], "repairSummary": "<what you changed>", "repairedTasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable|manual-live-gate", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
+  '{"match": false, "mismatches": ["<each concrete gap>"], "repairSummary": "<what you changed>", "repairedTasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable|manual-live-gate", "validationPolicy": "required|reviewed-no-validation", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
   '```',
   '```pm-repaired-tech-spec',
   '<repaired markdown technical spec>',
@@ -456,10 +464,11 @@ const CRITIQUE_INSTRUCTION = [
   'three fenced blocks, the JSON first and nothing after the last block. Keep each task object shaped',
   'like the input tasks (id, text, optional phase, testStrategy one of',
   'code-tests-required|docs-or-config-only|tests-as-deliverable|manual-live-gate, designerNeeded boolean, roles array).',
+  'Preserve validationPolicy exactly (`required` or explicit `reviewed-no-validation`).',
   'Preserve `manual-live-gate` tasks, and add one if real-user usability depends',
   'on live/operator/browser/integration verification that automated tests cannot prove:',
   '```critique-tasks',
-  '{"tasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
+  '{"tasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required", "validationPolicy": "required", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
   '```',
   '```critique-spec',
   '<revised product spec markdown>',
@@ -532,7 +541,7 @@ export function parseCritiqueReply(text: string, fallback: PlanCritique): PlanCr
   if (tasksJson && typeof tasksJson === 'object' && Array.isArray((tasksJson as { tasks?: unknown }).tasks)) {
     try {
       const parsed = (tasksJson as { tasks: unknown[] }).tasks.map(parseSizedTask);
-      if (parsed.length > 0) tasks = parsed;
+      if (parsed.length > 0) tasks = preserveCritiqueValidationPolicies(parsed, fallback.tasks);
     } catch {
       // Malformed task objects → keep the fallback tasks rather than dropping them.
       tasks = fallback.tasks;
@@ -543,6 +552,22 @@ export function parseCritiqueReply(text: string, fallback: PlanCritique): PlanCr
     techSpec: techSpec ?? fallback.techSpec,
     tasks,
   };
+}
+
+/** A critique may rewrite plan text and add tasks, but it is not a new human
+ * review gate. Preserve already-reviewed policies by stable task id and make
+ * every critique-added task required regardless of model-provided metadata. */
+function preserveCritiqueValidationPolicies(
+  parsed: readonly SizedTask[],
+  reviewed: readonly SizedTask[],
+): SizedTask[] {
+  const reviewedPolicies = new Map(
+    reviewed.map((task) => [task.id, task.validationPolicy ?? 'required'] as const),
+  );
+  return parsed.map((task) => ({
+    ...task,
+    validationPolicy: reviewedPolicies.get(task.id) ?? 'required',
+  }));
 }
 
 /** Injectable critique model seams (tests fake these; production uses the live

@@ -69,6 +69,7 @@ export function sizedTasksToMarkdown(tasks: readonly SizedTask[]): string {
       const manualGate = t.testStrategy === 'manual-live-gate' ? ` ${MANUAL_LIVE_GATE_MARKER}` : '';
       lines.push(`- [ ] **${t.id}** — ${t.text}${designer}${manualGate}`);
       lines.push(`  - Test strategy: \`${t.testStrategy}\``);
+      lines.push(`  - Validation policy: \`${t.validationPolicy ?? 'required'}\``);
       if (t.roles.length > 0) {
         lines.push(`  - Roles: ${t.roles.join(', ')}`);
       }

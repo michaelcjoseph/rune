@@ -392,6 +392,61 @@ describe('readProductsConfig — closeoutValidationStrategy', () => {
   });
 });
 
+describe('readProductsConfig — validationCwd', () => {
+  it('preserves an optional repository-relative validation directory', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      assay: {
+        repoPath: '/fake/workspace/assay',
+        validationCwd: 'harness',
+        validationCommands: ['uv run pytest'],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['assay']!.validationCwd).toBe('harness');
+  });
+
+  it('leaves validationCwd absent so existing products validate from the worktree root', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        validationCommands: ['npm test'],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['aura']).not.toHaveProperty('validationCwd');
+  });
+
+  it.each([42, true, {}, ['harness']])(
+    'fails closed when configured validationCwd is non-string: %j',
+    (validationCwd) => {
+      const configPath = writeProductsJson(tmpDir, {
+        assay: {
+          repoPath: '/fake/workspace/assay',
+          validationCwd,
+          validationCommands: ['uv run pytest'],
+        },
+      });
+
+      expect(() => readProductsConfig(configPath)).toThrow(
+        /product 'assay'.*invalid validationCwd.*expected a relative string/i,
+      );
+    },
+  );
+
+  it('the real Assay policy runs all required Python checks from harness/', () => {
+    const configPath = fileURLToPath(new URL('../../policies/products.json', import.meta.url));
+    const assay = readProductsConfig(configPath)['assay']!;
+
+    expect(assay.validationCwd).toBe('harness/');
+    expect(assay.validationCommands).toEqual([
+      'uv sync --all-groups',
+      'uv run pytest',
+      'uv run ruff check .',
+      'uv run assay --help',
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // readProductsConfig — product policy schema (project 19, W2 Phase 4)
 //

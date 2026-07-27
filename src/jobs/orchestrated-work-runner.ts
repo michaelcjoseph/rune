@@ -33,7 +33,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
   createWorktree as defaultCreateWorktree,
@@ -65,7 +65,8 @@ import { appendTerminalBugsToBacklog } from '../intent/terminal-bug-backlog.js';
 import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
-import type { TaskEvidence } from '../intent/team-task-workflow.js';
+import type { ReviewSurfaceFailure, TaskEvidence } from '../intent/team-task-workflow.js';
+import type { TaskValidationFailure } from '../intent/task-validation.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
@@ -140,7 +141,16 @@ import {
   runGate as defaultRunGate,
   runValidationCommandArgv as defaultRunValidationCommandArgv,
   runValidationCommands as defaultRunValidationCommands,
+  type ValidationCommandListResult,
 } from './work-run-gate-runtime.js';
+import {
+  taskValidationCommandFailure,
+  validateTaskValidationAdmission,
+} from './task-validation.js';
+import {
+  captureCanonicalReviewState,
+  defaultRunCanonicalGit,
+} from './canonical-git.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
@@ -235,6 +245,7 @@ export interface OrchestratedRecoveryPreflightDeps {
   readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
   worktreeExists: (path: string) => boolean;
   runGit: GitRunner;
+  runCanonicalGit?: GitRunner;
   resolveProduct: (product: string) => { repoPath: string; baseBranch: string };
   resolveWorktreePath: (product: string, project: string) => string;
 }
@@ -921,9 +932,11 @@ function buildOrchestrationDeps(args: {
   branch: string;
   baseBranch: string;
   validationCommands: string[];
+  validationCwd?: string;
   closeoutValidationStrategy: CloseoutValidationStrategy;
   workRunsDir: string;
   runGit: GitRunner;
+  runCanonicalGit?: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
   cancel?: () => boolean;
@@ -943,6 +956,7 @@ function buildOrchestrationDeps(args: {
     productsConfigPath: config.PRODUCTS_CONFIG_FILE,
     modelPolicyPath: config.MODEL_POLICY_FILE,
     validationCommands: args.validationCommands,
+    ...(args.validationCwd !== undefined ? { validationCwd: args.validationCwd } : {}),
     cap: ORCHESTRATED_ROUND_CAP,
     persistExecutionCheckpoint: async (executionCheckpoint) => {
       const cursor = readOrchestratedRunCursor(args.workRunsDir, descriptor.id);
@@ -951,6 +965,22 @@ function buildOrchestrationDeps(args: {
         ...cursor,
         executionCheckpoint,
       });
+    },
+    persistTaskValidationFailure: async (failure) => {
+      appendDurableValidationFailure(
+        args.workRunsDir,
+        descriptor.id,
+        'task-validation-failures.jsonl',
+        failure,
+      );
+    },
+    persistReviewSurfaceFailure: async (failure) => {
+      appendDurableValidationFailure(
+        args.workRunsDir,
+        descriptor.id,
+        'review-surface-failures.jsonl',
+        failure,
+      );
     },
     ...(args.cancel !== undefined ? {
       cancellationDuringBackoff: () => args.cancel?.()
@@ -1032,50 +1062,129 @@ function buildOrchestrationDeps(args: {
 
     // Task-scoped closeout checks use the product policy's short-budget
     // strategy. The project-level finalizer independently owns the full gate.
-    runCloseoutChecks: async (task) => {
+    runCloseoutChecks: async (task, evidence) => {
       const runDir = join(args.workRunsDir, descriptor.id);
       const diagnosticDir = join(runDir, 'validation-diagnostics');
-      const validation = args.closeoutValidationStrategy === 'vitest-related'
-        ? await (async () => {
-            const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
-            if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
-              return defaultRunValidationCommands(
-                args.validationCommands,
-                sandbox.worktree,
-                config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-                undefined,
-                diagnosticDir,
-              );
-            }
-            // Vitest's `related` subcommand does not honor `--` as a path
-            // terminator. Prefix leading-dash filenames so they remain paths,
-            // never CLI options, while preserving ordinary relative paths.
-            const pathArgs = changedPaths.map((path) => path.startsWith('-') ? `./${path}` : path);
-            const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
-            const result = await defaultRunValidationCommandArgv(
-              argv,
-              sandbox.worktree,
-              config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-              diagnosticDir,
-            );
-            return result.timedOut || result.exitCode !== 0
-              ? { ok: false as const, command: argv.map((arg) => JSON.stringify(arg)).join(' '), result }
-              : { ok: true as const };
-          })()
-        : await defaultRunValidationCommands(
+      const scrub = (text: string): string =>
+        redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
+      const validationCwdLabel = scrub(args.validationCwd?.trim() || '.');
+      const admission = validateTaskValidationAdmission({
+        policy: task.validationPolicy ?? 'required',
+        commands: args.validationCommands,
+        worktree: sandbox.worktree,
+        ...(args.validationCwd !== undefined ? { validationCwd: args.validationCwd } : {}),
+      });
+      if (!admission.ok) {
+        appendDurableValidationFailure(
+          args.workRunsDir,
+          descriptor.id,
+          'task-validation-failures.jsonl',
+          admission.failure,
+        );
+        return {
+          ok: false,
+          failure: {
+            command: admission.failure.command,
+            exitCode: null,
+            timedOut: false,
+            outputTail: admission.failure.diagnostics,
+            validationCwd: validationCwdLabel,
+            validationFailure: admission.failure,
+          },
+        };
+      }
+      let validation: ValidationCommandListResult;
+      if (task.validationPolicy === 'reviewed-no-validation') {
+        validation = { ok: true };
+      } else if (args.closeoutValidationStrategy === 'vitest-related') {
+        const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
+        if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
+          validation = await defaultRunValidationCommands(
             args.validationCommands,
-            sandbox.worktree,
+            admission.cwd,
             config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
             undefined,
             diagnosticDir,
           );
-      if (validation.ok) return { ok: true };
-      const scrub = (text: string): string => redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
+        } else {
+          // Paths from Git are worktree-relative, while Vitest runs from the
+          // validated product directory. Rebase them before argv construction.
+          // Vitest related has no `--` terminator, so prefix a leading dash.
+          const pathArgs = changedPaths
+            .map((path) => relative(admission.cwd, resolve(sandbox.worktree, path)).replaceAll('\\', '/'))
+            .map((path) => path.startsWith('-') ? `./${path}` : path);
+          const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
+          const result = await defaultRunValidationCommandArgv(
+            argv,
+            admission.cwd,
+            config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+            diagnosticDir,
+          );
+          validation = result.timedOut || result.exitCode !== 0
+            ? {
+                ok: false,
+                command: argv.map((arg) => JSON.stringify(arg)).join(' '),
+                argv,
+                result,
+              }
+            : { ok: true };
+        }
+      } else {
+        validation = await defaultRunValidationCommands(
+          args.validationCommands,
+          admission.cwd,
+          config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+          undefined,
+          diagnosticDir,
+        );
+      }
+      if (validation.ok) {
+        const approvedHash = evidence.reviewSurfaceHash;
+        if (approvedHash === undefined) return { ok: true };
+        const canonicalGit = args.runCanonicalGit ?? runGit;
+        const canonical = await captureCanonicalReviewState(canonicalGit, sandbox.worktree);
+        if (canonical.hash === approvedHash) return { ok: true };
+        const reviewSurfaceFailure: ReviewSurfaceFailure = {
+          kind: 'candidate-mismatch',
+          canonicalHash: canonical.hash,
+          candidateHash: approvedHash,
+          changedPaths: canonical.changedPaths,
+        };
+        appendDurableValidationFailure(
+          args.workRunsDir,
+          descriptor.id,
+          'review-surface-failures.jsonl',
+          reviewSurfaceFailure,
+        );
+        return {
+          ok: false,
+          failure: {
+            command: 'git diff HEAD review-surface verification',
+            exitCode: null,
+            timedOut: false,
+            outputTail: reviewSurfaceFailure.changedPaths.join('\n').slice(-8_000),
+            validationCwd: validationCwdLabel,
+            reviewSurfaceFailure,
+          },
+        };
+      }
       const command = scrub(validation.command);
       const outputHead = scrub(validation.result.outputHead ?? '');
       const outputTail = scrub(validation.result.outputTail);
       const diagnosticArtifacts = validation.result.diagnosticArtifacts ?? [];
       const outcome = validation.result.timedOut ? 'timed out' : `exit ${validation.result.exitCode}`;
+      const validationFailure = taskValidationCommandFailure(
+        command,
+        validation.result,
+        [outputHead, outputTail].filter(Boolean).join('\n').slice(-8_000),
+        validation.argv,
+      );
+      appendDurableValidationFailure(
+        args.workRunsDir,
+        descriptor.id,
+        'task-validation-failures.jsonl',
+        validationFailure,
+      );
       // Durable artifact in the run dir — the worktree (and with it the diff
       // that caused the red suite) is GC'd, so this file is the only place the
       // failing output survives. Best-effort: never blocks the red verdict.
@@ -1129,6 +1238,8 @@ function buildOrchestrationDeps(args: {
           exitCode: validation.result.exitCode,
           timedOut: validation.result.timedOut,
           outputTail,
+          validationCwd: validationCwdLabel,
+          validationFailure,
         },
       };
     },
@@ -1195,6 +1306,23 @@ function readFileSafe(path: string): string {
 const TREE_STATE_FILES_MAX_CHARS = 8_000;
 const TREE_STATE_STAT_MAX_CHARS = 8_000;
 const TREE_STATE_DIFF_MAX_CHARS = 20_000;
+
+function appendDurableValidationFailure(
+  workRunsDir: string,
+  runId: string,
+  file: string,
+  failure: TaskValidationFailure | ReviewSurfaceFailure,
+): void {
+  const runDir = join(workRunsDir, runId);
+  mkdirSync(runDir, { recursive: true });
+  const scrubbed = redactSecrets(
+    scrubAbsolutePaths(scrubPathsInText(JSON.stringify({
+      recordedAt: new Date().toISOString(),
+      ...failure,
+    }))),
+  );
+  appendFileSync(join(runDir, file), scrubbed + '\n', 'utf8');
+}
 
 async function appendBranchTreeStateEvidence(
   contextMd: string,
@@ -1765,11 +1893,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let baseBranch = 'main';
       let repoPath = runSandbox.worktree;
       let validationCommands: string[] = [];
+      let validationCwd: string | undefined;
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
         baseBranch = productConfig.baseBranch;
         repoPath = productConfig.repoPath;
         validationCommands = productConfig.validationCommands ?? [];
+        validationCwd = productConfig.validationCwd;
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
       } catch (err) {
         if ((err as Error).message.includes('invalid closeoutValidationStrategy')) {
@@ -1820,9 +1950,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch: recovery?.baseBranch ?? baseBranch,
         validationCommands,
+        ...(validationCwd !== undefined ? { validationCwd } : {}),
         closeoutValidationStrategy,
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
+        runCanonicalGit: defaultRunCanonicalGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         cancel: ctx.cancel,
         cancelReason: ctx.cancelReason,
@@ -1998,6 +2130,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   branch,
                   integrationWorktree,
                   validationCommands,
+                  ...(validationCwd !== undefined ? { validationCwd } : {}),
                   tasksRemaining: gateTasksRemaining,
                   concurrentRun: hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

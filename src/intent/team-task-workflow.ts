@@ -23,6 +23,7 @@
  */
 
 import type { SizedTask } from './planning-roles.js';
+import type { TaskValidationFailure } from './task-validation.js';
 import type { DispatchProvider } from './dispatch.js';
 import type { RoleName } from '../roles/loader.js';
 import type { OperationCancellation } from '../cancellation.js';
@@ -219,6 +220,16 @@ export interface CoderResult {
   handoffNotes: string[];
 }
 
+/** Evidence that the coder/self-review artifact was not the complete current
+ * Git review surface. Only hashes and relative changed paths are durable; raw
+ * diffs remain transient. */
+export interface ReviewSurfaceFailure {
+  kind: 'candidate-mismatch';
+  canonicalHash: string;
+  candidateHash: string;
+  changedPaths: string[];
+}
+
 /** What the reviewer receives — artifacts only, never coder hidden reasoning. */
 export interface ReviewerInput {
   diff: string;
@@ -290,6 +301,14 @@ export interface TeamTaskDeps {
     spec: string;
     context: string;
   }) => Promise<{ approved: boolean; notes?: string }>;
+  /** Stage all Git-visible work and compare the complete canonical `diff HEAD`
+   * with the coder/self-review artifact before any downstream judgment role. */
+  captureCanonicalReviewDiff?: (
+    candidateDiff: string,
+  ) => Promise<
+    | { ok: true; diff: string; hash?: string }
+    | { ok: false; failure: ReviewSurfaceFailure }
+  >;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
     task: SizedTask;
@@ -364,6 +383,12 @@ export interface TaskEvidence {
   executionPreflight?: ExecutionPreflightFailure;
   /** Typed durable failure from a role executor or its orchestration boundary. */
   executionFailure?: ExecutionFailure;
+  /** Missing/unusable/failed mechanical validation evidence. */
+  taskValidationFailure?: TaskValidationFailure;
+  /** Fail-closed review-surface mismatch; never carries raw diff content. */
+  reviewSurfaceFailure?: ReviewSurfaceFailure;
+  /** Scrubbed canonical review-surface hash approved by downstream roles. */
+  reviewSurfaceHash?: string;
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
@@ -645,6 +670,7 @@ async function runGated(
   let previousMaxOpenSeverity: ObjectionSeverity | undefined;
   let flatMaxOpenSeverityRounds = 0;
   let continueConvergingPastConfiguredCap = false;
+  let approvedReviewSurfaceHash: string | undefined;
   let coderSelfReviewDone = false;
   const findingsLedger: FindingsLedgerEntry[] = [];
   const explicitNonReversibleFindingIds = new Set<string>();
@@ -676,35 +702,51 @@ async function runGated(
         context: input.contextMd,
         tests,
       });
-      if (reviewed.revised && diffBehaviorChanged(coder.diff, reviewed.artifact.diff)) {
-        const qaDiffReview = await revalidateQaDiff(deps, {
-          task,
-          qa,
-          diff: reviewed.artifact.diff,
-          spec: input.spec,
-          context: input.contextMd,
-        });
-        if (!qaDiffReview.approved) {
-          const reason = qaDiffReview.notes?.trim() ||
-            'QA test intent no longer matches the self-reviewed implementation diff';
-          const feedback = buildGateRejectionFeedback({
-            rejectingRole: 'qa',
-            counterpartRole: 'coder',
-            artifact: 'implementation-diff',
-            reason,
-          });
-          await recordGateRejection(deps, feedback);
-          emitGateRejection(input, feedback);
-          return block(task, roles, handoffNotes, {
-            blockedReason: reason,
-            rejectionFeedback: feedback,
-            findingsLedger,
-            loopExitReason: 'operational',
-            noCodeTestRationale,
-          });
-        }
-      }
       coder = reviewed.artifact;
+    }
+
+    const reviewSurface = deps.captureCanonicalReviewDiff === undefined
+      ? { ok: true as const, diff: coder.diff }
+      : await deps.captureCanonicalReviewDiff(coder.diff);
+    if (!reviewSurface.ok) {
+      return {
+        ...fail(task, roles, handoffNotes, {
+          failureReason: 'review surface mismatch: coder artifact does not match canonical git diff HEAD',
+          findingsLedger,
+          loopExitReason: 'operational',
+          noCodeTestRationale,
+        }),
+        reviewSurfaceFailure: reviewSurface.failure,
+      };
+    }
+    coder = { ...coder, diff: reviewSurface.diff };
+    approvedReviewSurfaceHash = reviewSurface.hash;
+
+    const qaDiffReview = await revalidateQaDiff(deps, {
+      task,
+      qa,
+      diff: coder.diff,
+      spec: input.spec,
+      context: input.contextMd,
+    });
+    if (!qaDiffReview.approved) {
+      const reason = qaDiffReview.notes?.trim() ||
+        'QA test intent no longer matches the canonical implementation diff';
+      const feedback = buildGateRejectionFeedback({
+        rejectingRole: 'qa',
+        counterpartRole: 'coder',
+        artifact: 'implementation-diff',
+        reason,
+      });
+      await recordGateRejection(deps, feedback);
+      emitGateRejection(input, feedback);
+      return block(task, roles, handoffNotes, {
+        blockedReason: reason,
+        rejectionFeedback: feedback,
+        findingsLedger,
+        loopExitReason: 'operational',
+        noCodeTestRationale,
+      });
     }
     handoffNotes.push(...coder.handoffNotes);
     const roundFeedback: GateRejectionFeedback[] = [];
@@ -894,6 +936,9 @@ async function runGated(
         loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes,
+        ...(approvedReviewSurfaceHash !== undefined
+          ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+          : {}),
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
       };
     }
@@ -931,6 +976,9 @@ async function runGated(
           loopExitReason: 'stagnation',
           objectionOpen: false,
           handoffNotes,
+          ...(approvedReviewSurfaceHash !== undefined
+            ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+            : {}),
           ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
         };
       }
@@ -981,6 +1029,9 @@ async function runGated(
       loopExitReason: 'hard-budget',
       objectionOpen: false,
       handoffNotes,
+      ...(approvedReviewSurfaceHash !== undefined
+        ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+        : {}),
       ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
     };
   }
@@ -1135,14 +1186,6 @@ async function revalidateQaDiff(
     return { approved: true };
   }
   return deps.qaRevalidateDiff(input);
-}
-
-function diffBehaviorChanged(before: string, after: string): boolean {
-  return normalizeDiffForBehavior(before) !== normalizeDiffForBehavior(after);
-}
-
-function normalizeDiffForBehavior(diff: string): string {
-  return diff.replace(/\r\n?/g, '\n').trim();
 }
 
 export function buildGateRejectionFeedback(input: {

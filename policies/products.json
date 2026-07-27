@@ -39,6 +39,13 @@
       "codeload.github.com",
       "objects.githubusercontent.com",
       "registry.npmjs.org"
+    ],
+    "validationCwd": "harness/",
+    "validationCommands": [
+      "uv sync --all-groups",
+      "uv run pytest",
+      "uv run ruff check .",
+      "uv run assay --help"
     ]
   },
   "rune": {

@@ -358,6 +358,9 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             branch,
             integrationWorktree,
             validationCommands: product.validationCommands ?? [],
+            ...(product.validationCwd !== undefined
+              ? { validationCwd: product.validationCwd }
+              : {}),
             tasksRemaining: gateTasksRemaining,
             concurrentRun: false,
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

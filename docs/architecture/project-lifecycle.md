@@ -16,9 +16,10 @@ Role→model bindings are policy-declared in `policies/model-policy.json` (`role
 
 Charters load via `composeRoleContext(role, instruction)` (`src/roles/loader.ts`): `agents/<role>/SOUL.md` → system channel (authority), `agents/<role>/memory.md` + exemplars → a low-authority fenced reference in the first user turn. SOUL wins on conflict.
 
-Two structural facts to hold onto:
+Three structural facts to hold onto:
 
-- **Validation runs at three layers** — the coder self-gate in-loop runs the product's complete `validationCommands` and iterates fix → re-run until green; per-task closeout (C3) runs the product's configured `closeoutValidationStrategy`; the final merge gate (D3) runs the complete `validationCommands` again. Rune and Rune-MCP use task-scoped Vitest related tests at C3, while products without an explicit strategy preserve the full product-command closeout. C3 and D3 remain mechanical gates; the final full-suite gate is unchanged.
+- **Validation is fail-closed by task policy** — every planned task carries `validationPolicy`. Missing/legacy metadata means `required`; only the explicit, planning-reviewed `reviewed-no-validation` value exempts a task. Required tasks must pass admission before QA/coder dispatch, then the distinct pre-closeout mechanical gate (C3), while the final merge gate (D3) still runs the complete product command list.
+- **Reviewers see the complete Git surface** — after coder self-review, Rune stages tracked and untracked changes and compares the scrubbed canonical `git diff HEAD` with the coder artifact. Only an exact match advances; that canonical diff is what QA, reviewer, tech lead, and designer receive, and its hash is rechecked after mechanical validation.
 - **Exactly one human gate** in the whole lifecycle: `/approve` (A5). Everything downstream of it is automated and adds zero approval points (project-20 invariant, asserted in tests). The manual live-release gate some project `tasks.md` files carry is a Definition-of-Done note, not a pipeline gate.
 
 ---
@@ -44,6 +45,8 @@ One interactive session, split around the `/approve` gate. Pre-approval is a liv
 
 Downstream order (A6→A12) is fixed: breakdown → tech-lead self-review → `pmReviewMatch` → Claude critique → Codex critique → context seed → scaffold. The critique reads forward into both the seed and the human-visible surface. The agent writes `spec.md`/`tasks.md`/`test-plan.md`/`index.md`; `tech-spec.md`, `context.md`, and `examples/<role>.md` are written deterministically by `writeRoleArtifacts`, not the agent.
 
+The tech-lead breakdown, PM repair, both critique passes, and deterministic `tasks.md` rendering preserve each task's `validationPolicy`. Critique parsing reconciles policy by stable task ID: an existing task keeps its already-reviewed policy even if a critic tries to change it, while every critic-added task is forced to `required`. Other parsers default omitted or malformed legacy values to `required`; `tasks.md` records the policy immediately under its task checkbox so `selectNextTask` can carry it into runtime admission.
+
 ---
 
 # Phase B — Dispatch & sandbox (orchestrated `/work` begins)
@@ -63,11 +66,13 @@ The branch is `rune-work/<slug>` cut at the repo HEAD `baseSha`. Dependency prov
 `selectNextTask` returns the first unchecked `- [ ]` line in document order; id = slug of the task text (stable across line moves). Every unchecked line is a real task that enters the per-task role workflow; test-first behavior is handled inside C2b, where QA authors required tests before coder work.
 
 ## C1 — Task selection
-`src/intent/orch-task-select.ts` `selectNextTask`, driven by the loop in `project-orchestrator.ts` `runProjectOrchestration`. Loop is bounded by `taskCount+1` so a closeout that fails to tick can't spin. Cancellation is checked before each selection and before the finalizer.
+`src/intent/orch-task-select.ts` `selectNextTask`, driven by the loop in `project-orchestrator.ts` `runProjectOrchestration`. Selection reads the task's adjacent `Validation policy` metadata and defaults older tasks to `required`. The loop is bounded by `taskCount+1` so a closeout that fails to tick can't spin. Cancellation is checked before each selection and before the finalizer.
 
 ## C2 — Per-task role workflow (`src/intent/team-task-workflow.ts` `runGated`)
 
-The production runner first resolves all role models and, before dependency construction or the first role call, executes the run-scoped executor preflight: executable CLIs, persisted subscription authentication from the effective product executor state, and one bounded built-in-tools-disabled live call per unique exact model binding. Claude and Codex probes stay behind their centralized AI spawn boundaries; Codex additionally uses a private auth/runtime, official execution-feature disabling, and a macOS Seatbelt sensitive-host-read denial. When artifact MCP is configured, each distinct QA/coder format is built in a temporary scratch worktree, authenticated through its generated profile/runtime, and must complete a live relay/broker MCP `initialize` + exact `tools/list` handshake before cleanup. A success is transcripted once and cached for later tasks/closeout retries in the same run. A failure is a bounded, scrubbed, typed `blocked` terminal with no raw probe output, no invoked roles, and unchanged tracked, staged, and untracked product-worktree state; failed checks are retried rather than cached. Manual/live release-gate tasks bypass this automated-executor gate.
+Before model-policy resolution, executor preflight, dependency construction, or any QA/coder call, the production runner admits the task's validation contract. A required task must have at least one parseable shell-free command, a worktree-contained real `validationCwd` (repository root by default), and every referenced executable available on the launchd-safe toolchain path. Missing commands, malformed commands, missing executables, invalid/missing directories, and symlink escapes return blocked `TaskValidationFailure` evidence and append a scrubbed `task-validation-failures.jsonl` record. Only explicit `reviewed-no-validation` tasks bypass this admission; `runValidationCommands([])` retains its legacy pass behavior outside this orchestrated boundary.
+
+After admission, the production runner resolves all role models and executes the run-scoped executor preflight before dependency construction or the first role call: executable CLIs, persisted subscription authentication from the effective product executor state, and one bounded built-in-tools-disabled live call per unique exact model binding. Claude and Codex probes stay behind their centralized AI spawn boundaries; Codex additionally uses a private auth/runtime, official execution-feature disabling, and a macOS Seatbelt sensitive-host-read denial. When artifact MCP is configured, each distinct QA/coder format is built in a temporary scratch worktree, authenticated through its generated profile/runtime, and must complete a live relay/broker MCP `initialize` + exact `tools/list` handshake before cleanup. A success is transcripted once and cached for later tasks/closeout retries in the same run. A failure is a bounded, scrubbed, typed `blocked` terminal with no raw probe output, no invoked roles, and unchanged tracked, staged, and untracked product-worktree state; failed checks are retried rather than cached. Manual/live release-gate tasks bypass this automated-executor gate.
 
 After preflight, each role call first persists a durable execution checkpoint naming task, role, provider, CLI format, exact model, and workflow stage. A failed checkpoint write blocks before spawn; successful task closeout clears the current checkpoint, and old cursors without the optional field remain readable. Executor or unexpected role-boundary failures carry a typed `ExecutionFailure` through `TaskEvidence.executionFailure` (with `failureReason` retained as a compatibility summary). This structure—not diagnostic wording—selects the operational route; policy/preflight blocks, findings, ordinary gate rejection, and cancellation remain distinct.
 
@@ -82,10 +87,11 @@ After preflight, a single task runs through these ordered sub-gates. Verdicts em
 | c | tech-lead test-intent | tech-lead | **`test-intent`** | verdict `approved===true`; FAIL → tech-lead **repair** first (once per task, unless `repairable:false`), then loop back to QA (≤ cap) then `block` |
 | d | coder implements | coder | — | diff produced to satisfy the QA tests AND drive the product `validationCommands` green in the worktree (coder self-gate, prompt-enforced); typed executor failure → operational `held` |
 | e | coder self-review | coder | — | **exactly one** fix-it pass over its own diff (`runSelfReview`); unexpected boundary failure → checkpoint-attributed operational `held` |
-| f | QA re-validate (conditional) | qa | `implementation-diff` | only if self-review changed diff behavior; `approved===true` else terminal `block` |
-| g | reviewer review | reviewer (cross-provider) | **`reviewer-verdict`** | max finding severity ≤ low (`low`→pass-with-warnings; `medium/high/critical`→fail→objection loop); malformed verdict → terminal `failed` |
-| h | tech-lead diff review | tech-lead | **`implementation-diff`** | pass/pass-with-warnings; runs **every** round regardless of reviewer outcome; fail → objection loop |
-| i | designer review (conditional) | designer | **`design-review`** | only if `task.designerNeeded` — production `toSizedTask` hardcodes this **false**, so the stage is inert in the orchestrated path today |
+| f | canonical review capture | Rune | — | `git add -A` includes tracked + untracked work; scrubbed canonical `git diff HEAD` exactly matches the coder/self-review artifact. Mismatch persists only hashes + changed paths and fails before downstream review |
+| g | QA re-validate | qa | `implementation-diff` | QA always receives the canonical diff; `approved===true` else terminal `block` |
+| h | reviewer review | reviewer (cross-provider) | **`reviewer-verdict`** | reviewer receives the canonical diff; max finding severity ≤ low (`low`→pass-with-warnings; `medium/high/critical`→fail→objection loop); malformed verdict → terminal `failed` |
+| i | tech-lead diff review | tech-lead | **`implementation-diff`** | tech lead receives the canonical diff; pass/pass-with-warnings; runs **every** round regardless of reviewer outcome; fail → objection loop |
+| j | designer review (conditional) | designer | **`design-review`** | designer receives the canonical diff only if `task.designerNeeded` — production `toSizedTask` hardcodes this **false**, so the stage is inert in the orchestrated path today |
 | — | round-exit decision | orchestrator | — | all gates pass + all prior ledger findings verified + open severity ≤ low → `ready-for-closeout` |
 
 **Test-intent repair (gate c FAIL path):** on the FIRST rejection the tech-lead patches the tests itself instead of bouncing an unfixable state back to the same QA agent (`deps.techLeadRepairTests`, production: an `execute('tech-lead')` worktree session). Mechanics are fail-safe: the repair delta is computed against a pre-repair `git write-tree` snapshot; any path outside `*.test.ts(x)` is reverted on disk (the allowlist is deliberately NOT widened to QA's diff paths — a QA stray into product source must not license a tech-lead edit of the same source); then **confirm-red** runs the product `validationCommands` — a green or timed-out run rolls the patch back (`not-repaired` → QA bounce), a red run threads its output tail into the re-review as `Confirm-red evidence` so the tech-lead judges red-for-the-right-reason. A `repairable:false` verdict (structural rework / spec ambiguity) skips the repair entirely; every internal failure degrades to the QA bounce, never a task-fatal throw. Evidence lands as `TaskEvidence.testIntentRepair`; the attempt emits a `test-repair` activity event.
@@ -94,19 +100,28 @@ After preflight, a single task runs through these ordered sub-gates. Verdicts em
 
 **Objection loop:** findings above `low` thread back as `rejectionFeedback` (+ a severity-sorted findings ledger) into the next coder round, up to 3 rounds (`ORCHESTRATED_ROUND_CAP`; hard budget 4). Terminals: `all-low` or stagnation (severity flat ≥3 rounds, no non-reversible high/critical) → closeout; a non-reversible high/critical residue at cap → **held**; unresolved reversible feedback at cap → **block**. Every rejection also drafts a best-effort gate-learning lesson into the counterpart role's `agents/<role>/memory.md` (never blocks the retry). There is no per-task human park and no PM-wrapup call from `runGated` — per-task terminals are machine-owned `ready-for-closeout` / `block` / `failed`.
 
-## C3 — Per-task closeout (`project-orchestrator.ts` `performCloseout`, Rune-owned)
+## C3 — Pre-closeout mechanical validation (`runCloseoutChecks`, Rune-owned)
 
-Ordered so every commit is finalizer-ready:
+This gate runs after a task reaches `ready-for-closeout` but before `performCloseout`, context transformation, checkbox mutation, or a closeout commit. Explicit `reviewed-no-validation` tasks pass without commands. Required tasks are re-admitted against the current worktree, then run the product's `closeoutValidationStrategy`, bounded by `WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS` (default 120s):
 
-1. Compute **both** the context update and the checkbox tick (`markSelectedTaskComplete`, ticks exactly the selected task by text+section, refuses a stale match) **before** writing either.
-2. **`runCloseoutChecks`** — run the product's `closeoutValidationStrategy`, bounded by `WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS` (default 120s). `product-commands` (the default when absent) runs the configured `validationCommands`. `vitest-related` collects tracked changed paths against `HEAD` plus untracked files, excludes deletions, normalizes/deduplicates them, then argv-spawns `npx vitest related --run --passWithNoTests <paths>` in the worktree; Rune and Rune-MCP opt into this strategy. On failure the run dir gets `closeout-validation-failure.txt` with bounded output head + tail while the scrubbed tail feeds back to the coder as `GateRejectionFeedback` (qa→coder, `implementation-diff`) for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs. A timeout first requests Node diagnostic reports with `SIGUSR2`, sanitizes them, and stores them with a command/head/tail artifact under `<run>/validation-diagnostics/` before the normal process-group reap.
-3. Persist context, then the tick.
-4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
-5. `verifyCleanWorktree` — `git status --porcelain` empty.
+- `product-commands` (the default when absent) runs the configured `validationCommands` from validated `validationCwd`.
+- `vitest-related` collects tracked changed paths against `HEAD` plus untracked files, excludes deletions, normalizes/deduplicates them, rebases them from the worktree root to `validationCwd`, then argv-spawns `npx vitest related --run --passWithNoTests <paths>` there. Rune and Rune-MCP opt into this strategy; deletion or global-config changes fall back to the complete command list.
+- After commands pass, Rune stages again and requires the canonical review-diff hash to equal the hash approved by QA/reviewer/tech lead/designer. A post-review or validation-time mutation fails closed with durable `ReviewSurfaceFailure` hashes and changed paths; raw diff content is never persisted.
 
-Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json` without the now-completed role checkpoint. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → bounded coder repair loop** (2 re-runs with the failing output tail as gate feedback), still red after 3 attempts → best-effort WIP commit (`rune(<product>): WIP — closeout blocked — <task>`) + **parked** (`blocked-on-human`; branch + worktree preserved, releasable via the standard release path — release cold-finalizes and removes the worktree so a later Start can re-dispatch); worktree not clean → **hold**.
+Admission or command failures append bounded, scrubbed `TaskValidationFailure` evidence with the exact command/prerequisite, exit status or timeout, and diagnostics. A red gate feeds its scrubbed output tail back to the coder as `GateRejectionFeedback` for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs. A timeout first requests Node diagnostic reports with `SIGUSR2`, sanitizes them, and stores them with a command/head/tail artifact under `<run>/validation-diagnostics/` before process-group reap. Exhaustion best-effort WIP-commits and parks `blocked-on-human`; no context write, task tick, or closeout commit has occurred.
 
-## C4 — Advance / loop
+## C4 — Mutation closeout (`project-orchestrator.ts` `performCloseout`, Rune-owned)
+
+Only a task that passed C3 enters this ordered sequence:
+
+1. Compute **both** the context update and checkbox tick (`markSelectedTaskComplete`, exact task text+section, stale match refused) before writing either.
+2. Persist context, then the tick.
+3. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
+4. `verifyCleanWorktree` — `git status --porcelain` empty.
+
+Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json` without the now-completed role checkpoint. Failure dispositions: context-rejected/stale-tick or a dirty post-commit worktree → operational **hold**.
+
+## C5 — Advance / loop
 Re-read `tasks.md`; ticked task skipped, next selected. No `- [ ]` remaining = **branch-complete** → Phase D.
 
 ---
@@ -117,7 +132,7 @@ Re-read `tasks.md`; ticked task skipped, next selected. No `- [ ]` remaining = *
 |---|---|---|---|---|---|
 | D1 | Finalizer handoff | `runFinalizerHandoff` → `finalize` adapter (gated-merge mode) | an unavailable adapter returns `held` — never self-merges | adapter returns `{finalized, outcome}` | `jobs/finalizer-handoff.ts` |
 | D2 | Classify + transcript flush | `runGatedMerge` | re-runs `classify()` (diff vs `baseSha` → outcome, sets `tasksRemaining`); a hold-signal terminal → operational hold, no merge | `outcome === 'branch-complete'` | `work-run-finalizer.ts` |
-| D3 | **Hard merge gate** | `runGate` (under per-product base-branch lock) | first-failure-wins: validation-present → no concurrent run → **clean dry-merge** → **zero tasks remaining** → clean tree → complete product `validationCommands` green, each bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` (default 10 min). Unchanged by the C3 closeout strategy. | `{ok:true}` | `jobs/work-run-gate-runtime.ts` `runGate`; `work-run-gate.ts` `evaluateGate`; `work-run-merge-lock.ts` `withBaseBranchLock` |
+| D3 | **Hard merge gate** | `runGate` (under per-product base-branch lock) | first-failure-wins: validation-present → no concurrent run → **clean dry-merge** → **zero tasks remaining** → clean tree → validated `validationCwd` → complete product `validationCommands` green there, each bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` (default 10 min). Unchanged by the C3 closeout strategy. | `{ok:true}` | `jobs/work-run-gate-runtime.ts` `runGate`; `work-run-gate.ts` `evaluateGate`; `work-run-merge-lock.ts` `withBaseBranchLock` |
 | D4 | Merge → mark done → push → delete | `runGatedMerge` | merge-conflict on the real merge → abort + operational hold | `git merge --no-ff` → `markProjectDone` flips the project Done in `index.md` → write summary/index → **push before delete** → remove worktree → `git branch -d` | `work-run-finalizer.ts` |
 | D5 | Terminal trigger + teardown disposition | applier | captures immutable success/failure/cancellation trigger, resolves removed/preserved/parked cleanup, appends terminal facts through the still-open transcript, then writes summary + terminal mutation/supervision state | trigger truth and cleanup disposition are both durable before publication | `orchestrated-work-runner.ts` |
 

@@ -54,6 +54,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 import type { ExecutionFailure } from '../intent/execution-failure.js';
 import { defaultRunGit } from './sandbox-runtime.js';
+import { defaultRunCanonicalGit } from './canonical-git.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -84,7 +85,7 @@ function makeSandbox(): SandboxSpec {
   return {
     product: 'rune',
     project: 'demo',
-    worktree: '/tmp/fake-worktree',
+    worktree: tmpdir(),
     egressAllowlist: [],
     resumed: false,
   } as SandboxSpec;
@@ -98,7 +99,14 @@ const sizedTask: SizedTask = {
   roles: ['qa', 'coder', 'reviewer', 'tech-lead'],
 };
 
-const selectedTask: SelectedTask = { id: 'demo-task', text: 'demo task', section: 'Phase 1' };
+const selectedTask: SelectedTask = {
+  id: 'demo-task',
+  text: 'demo task',
+  section: 'Phase 1',
+  // Most pre-existing factory tests isolate role wiring, not product
+  // validation admission. New admission tests override this to `required`.
+  validationPolicy: 'reviewed-no-validation',
+};
 
 /** A green judgment reply: contains every fenced verdict block, so each
  *  seam's parser finds its own tag regardless of which role is asked. */
@@ -169,6 +177,26 @@ function failedExecution(
 const GATE_VERDICT_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 
 function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeams> {
+  let latestDiff = greenExecution().then((result) => result.ok ? result.diff : '');
+  const runExecution = overrides.runExecution ?? greenExecution;
+  const runGit = overrides.runGit ?? (async (args: string[]) => {
+    if (args[0] === 'add') return { stdout: '', stderr: '' };
+    if (args[0] === 'diff' && args[1] === 'HEAD') {
+      return { stdout: await latestDiff, stderr: '' };
+    }
+    if (args[0] === 'diff' && args[1] === '--name-only' && args[2] === 'HEAD') {
+      return { stdout: 'src/x.test.ts\n', stderr: '' };
+    }
+    throw new Error('runGit not injected in this fixture');
+  });
+  const runCanonicalGit = overrides.runCanonicalGit ?? overrides.runGit ?? (async (args: string[]) => {
+    if (args.includes('add')) return { stdout: '', stderr: '' };
+    if (args.includes('diff') && args.includes('--name-only')) {
+      return { stdout: 'src/x.test.ts\n', stderr: '' };
+    }
+    if (args.includes('diff')) return { stdout: await latestDiff, stderr: '' };
+    throw new Error('runCanonicalGit not injected in this fixture');
+  });
   return {
     preflightExecution: async () => ({
       status: 'success',
@@ -177,14 +205,17 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
       artifactFormats: [],
     }),
     judgmentCall: greenJudgment,
-    runExecution: greenExecution,
+    ...overrides,
+    runExecution: async (opts) => {
+      const result = await runExecution(opts);
+      if (result.ok) latestDiff = Promise.resolve(result.diff);
+      return result;
+    },
     // Fail-deterministic: a fixture that doesn't inject runGit must never
     // reach the real git CLI — the test-intent repair path degrades to
     // not-repaired (the legacy QA bounce) instead of touching the host.
-    runGit: async () => {
-      throw new Error('runGit not injected in this fixture');
-    },
-    ...overrides,
+    runGit,
+    runCanonicalGit,
   };
 }
 
@@ -679,6 +710,8 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
         productsConfigPath: '/nonexistent/products.json',
         models: resolveTeamRoleModels(loadRealPolicy()),
         validationCommands: ['npm run build', 'npm test'],
+        validationCommandCwd: '/validated/worktree/harness',
+        validationCwdLabel: 'harness/',
       },
       makeSeams({
         runExecution: async (opts) => {
@@ -693,6 +726,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(captured).toHaveLength(1);
     const { systemPrompt, prompt } = captured[0]!;
     expect(prompt).toContain('## Validation commands');
+    expect(prompt).toContain('run all from `harness/` relative to the worktree');
     expect(prompt).toContain('npm run build');
     expect(prompt).toContain('npm test');
     const lower = systemPrompt.toLowerCase();
@@ -1579,6 +1613,177 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
 // ---------------------------------------------------------------------------
 
 describe('no-stub regression (Phase 8)', () => {
+  it('blocks a required task with absent validation commands before preflight or any role dispatch', async () => {
+    const preflightExecution = vi.fn(makeSeams().preflightExecution!);
+    const judgmentCall = vi.fn(greenJudgment);
+    const runExecution = vi.fn(greenExecution);
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        validationCommands: [],
+      },
+      makeSeams({ preflightExecution, judgmentCall, runExecution }),
+    );
+
+    const evidence = await run(
+      { ...selectedTask, validationPolicy: 'required' },
+      { handoff: 'bounded handoff', contextMd: 'ctx' },
+    );
+
+    expect(preflightExecution).not.toHaveBeenCalled();
+    expect(judgmentCall).not.toHaveBeenCalled();
+    expect(runExecution).not.toHaveBeenCalled();
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      rolesInvoked: [],
+      taskValidationFailure: {
+        kind: 'missing-commands',
+        prerequisite: 'validationCommands',
+      },
+    });
+    expect(evidence.blockedReason).toMatch(/required validationCommands/i);
+  });
+
+  it('allows an explicit reviewed-no-validation task through empty-command admission', async () => {
+    const runExecution = vi.fn(greenExecution);
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        validationCommands: [],
+        cap: 1,
+      },
+      makeSeams({
+        runExecution,
+      }),
+    );
+
+    const evidence = await run(
+      { ...selectedTask, validationPolicy: 'reviewed-no-validation' },
+      { handoff: 'bounded handoff', contextMd: 'ctx' },
+    );
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(runExecution).toHaveBeenCalledTimes(2);
+    expect(evidence).not.toHaveProperty('taskValidationFailure');
+  });
+
+  it('names the exact missing executable and command before dispatching a required task', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'validation-admission-binary-'));
+    const runExecution = vi.fn(greenExecution);
+    const judgmentCall = vi.fn(greenJudgment);
+    try {
+      const missingExecutable = 'rune-validator-that-does-not-exist-7491';
+      const command = `${missingExecutable} --check`;
+      const run = createProductionTaskWorkflowRunner(
+        {
+          sandbox: { ...makeSandbox(), worktree },
+          productsConfigPath: '/nonexistent/products.json',
+          modelPolicyPath: REAL_POLICY_PATH,
+          validationCommands: [command],
+        },
+        makeSeams({ runExecution, judgmentCall }),
+      );
+
+      const evidence = await run(
+        { ...selectedTask, validationPolicy: 'required' },
+        { handoff: 'h', contextMd: 'c' },
+      );
+
+      expect(runExecution).not.toHaveBeenCalled();
+      expect(judgmentCall).not.toHaveBeenCalled();
+      expect(evidence).toMatchObject({
+        outcome: 'blocked',
+        rolesInvoked: [],
+        taskValidationFailure: {
+          kind: 'missing-executable',
+          command,
+          prerequisite: 'executable',
+          executable: missingExecutable,
+        },
+      });
+      expect(evidence.blockedReason).toContain(missingExecutable);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    '   ',
+    '"unterminated',
+    'uv sync && uv run pytest',
+  ])('rejects malformed required validation command %j before role dispatch', async (command) => {
+    const runExecution = vi.fn(greenExecution);
+    const judgmentCall = vi.fn(greenJudgment);
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        validationCommands: [command],
+      },
+      makeSeams({ runExecution, judgmentCall }),
+    );
+
+    const evidence = await run(
+      { ...selectedTask, validationPolicy: 'required' },
+      { handoff: 'h', contextMd: 'c' },
+    );
+
+    expect(runExecution).not.toHaveBeenCalled();
+    expect(judgmentCall).not.toHaveBeenCalled();
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      rolesInvoked: [],
+      taskValidationFailure: {
+        kind: 'malformed-command',
+        command,
+        prerequisite: 'validationCommands',
+      },
+    });
+  });
+
+  it('names validationCwd as the prerequisite when the configured directory is missing or escapes the worktree', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'validation-admission-cwd-'));
+    try {
+      for (const validationCwd of ['missing-harness', '../outside-worktree']) {
+        const runExecution = vi.fn(greenExecution);
+        const run = createProductionTaskWorkflowRunner(
+          {
+            sandbox: { ...makeSandbox(), worktree },
+            productsConfigPath: '/nonexistent/products.json',
+            modelPolicyPath: REAL_POLICY_PATH,
+            validationCommands: ['node --version'],
+            ...({ validationCwd } as Record<string, unknown>),
+          },
+          makeSeams({ runExecution }),
+        );
+
+        const evidence = await run(
+          { ...selectedTask, validationPolicy: 'required' },
+          { handoff: 'h', contextMd: 'c' },
+        );
+
+        expect(runExecution).not.toHaveBeenCalled();
+        expect(evidence).toMatchObject({
+          outcome: 'blocked',
+          rolesInvoked: [],
+          taskValidationFailure: {
+            kind: 'invalid-validation-cwd',
+            prerequisite: 'validationCwd',
+            validationCwd,
+          },
+        });
+        expect(evidence.blockedReason).toContain(validationCwd);
+      }
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
   it.each(['qa', 'tech-lead', 'coder', 'reviewer'] as const)(
     'preserves structured %s cancellation across production role bindings',
     async (cancelledRole) => {
@@ -1943,6 +2148,55 @@ describe('no-stub regression (Phase 8)', () => {
   });
 });
 
+describe('canonical reviewer diff production seam', () => {
+  it('stages tracked and untracked task changes and captures deterministic git diff HEAD', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'canonical-review-diff-'));
+    try {
+      const git = (gitArgs: string[]) => defaultRunGit(gitArgs, { cwd: worktree });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(worktree, 'tracked.ts'), 'baseline\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+      await writeFile(join(worktree, 'tracked.ts'), 'tracked change\n');
+      await writeFile(join(worktree, 'new-untracked.ts'), 'untracked change\n');
+
+      // Compute the exact artifact a truthful coder would return, then restore
+      // the mixed tracked/untracked state so the production seam must stage it.
+      await git(['add', '-A']);
+      const expected = (await git(['diff', 'HEAD', '--'])).stdout;
+      await git(['reset']);
+
+      const deps = buildProductionTeamTaskDeps(
+        {
+          sandbox: { ...makeSandbox(), worktree },
+          productsConfigPath: '/nonexistent/products.json',
+          models: resolveTeamRoleModels(loadRealPolicy()),
+        },
+        makeSeams({
+          runGit: defaultRunGit,
+          runCanonicalGit: defaultRunCanonicalGit,
+        }),
+      );
+      const capture = deps.captureCanonicalReviewDiff;
+
+      expect(capture).toBeTypeOf('function');
+      if (!capture) throw new Error('canonical review diff seam is missing');
+      const result = await capture(expected);
+
+      expect(result).toMatchObject({ ok: true, diff: expected });
+      if (!result.ok) throw new Error('expected canonical diff match');
+      expect(result.diff).toContain('tracked.ts');
+      expect(result.diff).toContain('new-untracked.ts');
+      expect(result.diff).toContain('new file mode');
+      expect((await git(['status', '--porcelain'])).stdout).toContain('A  new-untracked.ts');
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Test-intent repair — the production techLeadRepairTests seam
 // ---------------------------------------------------------------------------
@@ -2089,6 +2343,102 @@ describe('techLeadRepairTests (production seam)', () => {
     expect(executions[0]?.prompt).toContain('src/x.test.ts');
     expect(executions[0]?.systemPrompt).toContain('Edit ONLY test files');
     expect(executions[0]?.model).toMatchObject({ alias: 'fable', provider: 'anthropic' });
+  });
+
+  it('runs tech-lead confirm-red validation from the already-validated harness cwd', async () => {
+    const validationCommandCwd = '/validated/worktree/harness';
+    const validationCalls: Array<{
+      commands: readonly string[];
+      cwd: string;
+      timeoutMs: number;
+    }> = [];
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+      diffHead: '+++ b/src/x.test.ts\n+patched assertion\n',
+    });
+    const deps = buildProductionTeamTaskDeps(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        validationCommands: ['uv run pytest'],
+        validationCommandCwd,
+        validationCwdLabel: 'harness/',
+      },
+      makeSeams({
+        runGit: git.runGit,
+        resolveValidationCwd: () => ({ ok: true, cwd: validationCommandCwd }),
+        runRepairValidation: async (commands, cwd, timeoutMs) => {
+          validationCalls.push({ commands, cwd, timeoutMs });
+          return {
+            ok: false,
+            command: 'uv run pytest',
+            result: { exitCode: 1, timedOut: false, outputTail: 'expected red test' },
+          };
+        },
+      }),
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({ kind: 'repaired' });
+    expect(validationCalls).toEqual([{
+      commands: ['uv run pytest'],
+      cwd: validationCommandCwd,
+      timeoutMs: 600_000,
+    }]);
+  });
+
+  it('revalidates the harness cwd immediately before confirm-red and skips execution after a symlink escape', async () => {
+    const runRepairValidation = vi.fn();
+    const git = makeRepairGitFake({
+      delta: [{ status: 'M', path: 'src/x.test.ts' }],
+      diffHead: '+++ b/src/x.test.ts\n+patched assertion\n',
+    });
+    const deps = buildProductionTeamTaskDeps(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        validationCommands: ['uv run pytest'],
+        validationCommandCwd: '/validated/worktree/harness',
+        validationCwdLabel: 'harness/',
+      },
+      makeSeams({
+        runGit: git.runGit,
+        resolveValidationCwd: () => ({
+          ok: false,
+          failure: {
+            kind: 'invalid-validation-cwd',
+            command: '',
+            prerequisite: 'validationCwd',
+            validationCwd: 'harness/',
+            exitCode: null,
+            timedOut: false,
+            diagnostics: '',
+          },
+        }),
+        runRepairValidation,
+      }),
+    );
+
+    const result = await deps.techLeadRepairTests!({
+      task: sizedTask,
+      spec: 'spec',
+      qa: repairQa,
+      rejection: repairRejection,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'not-repaired',
+      reason: expect.stringMatching(/validation directory became invalid/i),
+    });
+    expect(runRepairValidation).not.toHaveBeenCalled();
   });
 
   it('reverts a product-source write from the delta and proceeds with the surviving test patch', async () => {

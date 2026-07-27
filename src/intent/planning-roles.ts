@@ -45,6 +45,11 @@ export type TestStrategy =
   | 'tests-as-deliverable'
   | 'manual-live-gate';
 
+/** Whether the task must execute the product's mechanical validation contract.
+ * Legacy tasks default to `required`; the exemption must be explicit in the
+ * reviewed planning artifact. */
+export type ValidationPolicy = 'required' | 'reviewed-no-validation';
+
 /** One sized task from the tech lead's breakdown. `designerNeeded` is the
  *  EXPLICIT front-end / designer-needed flag (spec req 7) so designer routing
  *  (req 24) is deterministic, not inferred at runtime. */
@@ -55,6 +60,9 @@ export interface SizedTask {
   text: string;
   /** Test strategy for this task. */
   testStrategy: TestStrategy;
+  /** Mechanical validation policy. Planning parsers populate the default even
+   * though this remains optional for older programmatic fixtures. */
+  validationPolicy?: ValidationPolicy;
   /** Explicit front-end / designer-needed flag. */
   designerNeeded: boolean;
   /** Roles the tech lead sized into this task. */
@@ -632,6 +640,9 @@ function parseSelfReviewedTask(raw: unknown, index: number): SizedTask {
   const testStrategy = isTestStrategy(task['testStrategy'])
     ? task['testStrategy']
     : 'code-tests-required';
+  const validationPolicy = isValidationPolicy(task['validationPolicy'])
+    ? task['validationPolicy']
+    : 'required';
   const roles = Array.isArray(task['roles'])
     ? task['roles'].filter((role): role is string => typeof role === 'string')
     : [];
@@ -642,10 +653,15 @@ function parseSelfReviewedTask(raw: unknown, index: number): SizedTask {
     id,
     text: task['text'].trim(),
     testStrategy,
+    validationPolicy,
     designerNeeded: task['designerNeeded'] === true,
     roles,
     ...(phase ? { phase } : {}),
   };
+}
+
+function isValidationPolicy(value: unknown): value is ValidationPolicy {
+  return value === 'required' || value === 'reviewed-no-validation';
 }
 
 function isTestStrategy(value: unknown): value is TestStrategy {

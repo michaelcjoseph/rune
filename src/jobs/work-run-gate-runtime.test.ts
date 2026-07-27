@@ -207,9 +207,89 @@ describe('runGate — test before mutating main (P1.5)', () => {
     expect(baseState()).toEqual(before);
     expect(existsSync(integrationWorktree)).toBe(false);
   });
+
+  it('runs final gate commands from integrationWorktree/validationCwd', async () => {
+    git(repoPath, 'checkout', '-q', BRANCH);
+    mkdirSync(join(repoPath, 'harness'));
+    writeFileSync(join(repoPath, 'harness', 'pyproject.toml'), '[project]\nname="fixture"\n');
+    git(repoPath, 'add', 'harness/pyproject.toml');
+    git(repoPath, 'commit', '-q', '-m', 'add validation harness');
+    git(repoPath, 'checkout', '-q', BASE);
+    const runValidationCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      outputTail: '',
+    }));
+
+    const result = await runGate(
+      gateOpts({ validationCwd: 'harness' }),
+      { runGit: defaultRunGit, runValidationCommand },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(runValidationCommand).toHaveBeenCalledWith(
+      'npm test',
+      join(integrationWorktree, 'harness'),
+      600_000,
+      undefined,
+    );
+    expect(existsSync(integrationWorktree)).toBe(false);
+  });
+
+  it.each(['missing-harness', '../outside'])(
+    'fails closed without running commands when final gate validationCwd is invalid: %s',
+    async (validationCwd) => {
+      const runValidationCommand = vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        outputTail: '',
+      }));
+
+      const result = await runGate(
+        gateOpts({ validationCwd }),
+        { runGit: defaultRunGit, runValidationCommand },
+      );
+
+      expect(result).toEqual({ ok: false, reason: 'tests-red' });
+      expect(runValidationCommand).not.toHaveBeenCalled();
+      expect(existsSync(integrationWorktree)).toBe(false);
+    },
+  );
+
+  it('fails closed when final gate validationCwd is a symlink escaping the integration worktree', async () => {
+    const outside = join(tmpRoot, 'outside-harness');
+    mkdirSync(outside);
+    git(repoPath, 'checkout', '-q', BRANCH);
+    symlinkSync(outside, join(repoPath, 'harness'), 'dir');
+    git(repoPath, 'add', 'harness');
+    git(repoPath, 'commit', '-q', '-m', 'add escaping harness link');
+    git(repoPath, 'checkout', '-q', BASE);
+    const runValidationCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      outputTail: '',
+    }));
+
+    const result = await runGate(
+      gateOpts({ validationCwd: 'harness' }),
+      { runGit: defaultRunGit, runValidationCommand },
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'tests-red' });
+    expect(runValidationCommand).not.toHaveBeenCalled();
+    expect(existsSync(integrationWorktree)).toBe(false);
+  });
 });
 
 describe('runValidationCommands', () => {
+  it('keeps an empty command list backward compatible for intentional legacy callers', async () => {
+    const runValidationCommand = vi.fn();
+    await expect(
+      runValidationCommands([], tmpRoot, 1_000, runValidationCommand),
+    ).resolves.toEqual({ ok: true });
+    expect(runValidationCommand).not.toHaveBeenCalled();
+  });
+
   it('collects modified and untracked task paths while excluding deletions', async () => {
     writeFileSync(join(repoPath, 'deleted.txt'), 'remove me\n');
     git(repoPath, 'add', 'deleted.txt');

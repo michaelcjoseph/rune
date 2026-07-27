@@ -657,11 +657,13 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         let baseBranch = 'main';
         let repoPath = '';
         let validationCommands: string[] = [];
+        let validationCwd: string | undefined;
         try {
           const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
           baseBranch = productConfig.baseBranch;
           repoPath = productConfig.repoPath;
           validationCommands = productConfig.validationCommands ?? [];
+          validationCwd = productConfig.validationCwd;
         } catch (err) {
           log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
             id: descriptor.id,
@@ -872,6 +874,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 branch,
                 integrationWorktree,
                 validationCommands,
+                ...(validationCwd !== undefined ? { validationCwd } : {}),
                 tasksRemaining: gateTasksRemaining,
                 // Live read inside the lock — accurate at gate time, not a stale
                 // finalize-setup snapshot.

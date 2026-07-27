@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import config, { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
@@ -60,6 +61,7 @@ import {
   type GateVerdict,
   type GateOutcome,
   type ReviewerVerdict,
+  type ReviewSurfaceFailure,
   type TaskEvidence,
   type CoderResult,
   type TeamTaskDeps,
@@ -69,6 +71,12 @@ import {
 } from '../intent/team-task-workflow.js';
 import type { ExecutionPreflightFailure } from '../intent/execution-preflight.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import {
+  canonicalReviewDiffHash,
+  captureCanonicalReviewState,
+  defaultRunCanonicalGit,
+  normalizeCanonicalReviewDiff,
+} from './canonical-git.js';
 import { runValidationCommands } from './work-run-gate-runtime.js';
 import {
   runExecutionAgent,
@@ -90,7 +98,6 @@ import { redactSecrets } from './work-run-transcript.js';
 import { getBaseEnv } from './credential-injector.js';
 import { createLogger } from '../utils/logger.js';
 import { formatProtectedLocalServicesWarning } from '../utils/protected-local-services.js';
-import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import {
   boundExecutionPreflightText,
   preflightExecution,
@@ -98,6 +105,11 @@ import {
   type ExecutionPreflightResult,
   type PreflightExecutionArgs,
 } from './execution-preflight.js';
+import {
+  resolveValidationCwd,
+  validateTaskValidationAdmission,
+} from './task-validation.js';
+import type { TaskValidationFailure } from '../intent/task-validation.js';
 
 export type {
   ExecutionPreflightFailure,
@@ -224,10 +236,19 @@ export interface TeamTaskSeams {
     opts: ExecutionAgentOpts,
     io?: Partial<ExecutionAgentIO>,
   ) => Promise<ExecutionAgentResult>;
-  /** Git runner for the test-intent repair's snapshot/delta/guard mechanics. */
+  /** Legacy test seam retained for fixture compatibility. Product-influenced
+   * repair staging uses `runCanonicalGit`. */
   runGit: GitRunner;
+  /** Credential-stripped/network-denied Git for product-influenced staging. */
+  runCanonicalGit: GitRunner;
   /** Validation-command runner for the post-repair confirm-red check. */
   runRepairValidation: typeof runValidationCommands;
+  /** Revalidate the configured command directory immediately before a command
+   * run so role writes cannot turn a previously safe path into a symlink escape. */
+  resolveValidationCwd: typeof resolveValidationCwd;
+  /** Test seam for canonical review-surface capture. Production leaves this
+   * undefined so the factory stages and reads the real worktree. */
+  captureCanonicalReviewDiff?: NonNullable<TeamTaskDeps['captureCanonicalReviewDiff']>;
 }
 
 /** Production judgment call: SOUL on the system channel, one throwaway
@@ -290,7 +311,9 @@ const defaultSeams: TeamTaskSeams = {
   judgmentCall: defaultJudgmentCall,
   runExecution: runExecutionAgent,
   runGit: defaultRunGit,
+  runCanonicalGit: defaultRunCanonicalGit,
   runRepairValidation: runValidationCommands,
+  resolveValidationCwd,
 };
 
 // ---------------------------------------------------------------------------
@@ -790,6 +813,10 @@ export interface BuildTeamTaskDepsArgs {
    *  so fixture callers compile; absent/empty ⇒ no validation section in the
    *  coder body (prior behavior). */
   validationCommands?: string[];
+  /** Already boundary-validated directory used by mechanical command runners. */
+  validationCommandCwd?: string;
+  /** Worktree-relative label rendered in the coder prompt. */
+  validationCwdLabel?: string;
   /** Optional activity sink; production uses this to attribute artifact
    * executor output with the invoking role/model before it reaches the
    * mutation stream. */
@@ -797,6 +824,9 @@ export interface BuildTeamTaskDepsArgs {
   /** Persisted before each artifact-role child is invoked. A failed write
    * blocks before spawn so restart attribution never lies. */
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  /** Durable evidence sink for a canonical-diff mismatch. The record contains
+   * hashes and changed paths only, never raw diff content. */
+  persistReviewSurfaceFailure?: (failure: ReviewSurfaceFailure) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
@@ -1018,6 +1048,8 @@ export function buildProductionTeamTaskDeps(
   const seams: TeamTaskSeams = { ...defaultSeams, ...seamOverrides };
   const { sandbox, productsConfigPath, models } = args;
   const validationCommands = args.validationCommands ?? [];
+  const validationCommandCwd = args.validationCommandCwd ?? sandbox.worktree;
+  const validationCwdLabel = args.validationCwdLabel?.trim() || '.';
   const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
   const judge = makeJudge(
     seams,
@@ -1190,7 +1222,7 @@ export function buildProductionTeamTaskDeps(
 
     techLeadRepairTests: async ({ task, spec, qa, rejection }) => {
       const cwd = sandbox.worktree;
-      const git = (gitArgs: string[]) => seams.runGit(gitArgs, { cwd });
+      const git = (gitArgs: string[]) => seams.runCanonicalGit(gitArgs, { cwd });
       const notRepaired = (reason: string): TechLeadTestRepairResult => ({
         kind: 'not-repaired',
         reason,
@@ -1295,9 +1327,23 @@ export function buildProductionTeamTaskDeps(
         if (validationCommands.length === 0) {
           redCheck = { kind: 'skipped', reason: 'no validation commands configured' };
         } else {
+          let commandCwd = validationCommandCwd;
+          if (args.validationCwdLabel !== undefined) {
+            const refreshed = seams.resolveValidationCwd(
+              sandbox.worktree,
+              validationCwdLabel === '.' ? undefined : validationCwdLabel,
+            );
+            if (!refreshed.ok) {
+              await revertEntries(preTree, surviving);
+              return notRepaired(
+                `validation directory became invalid: ${refreshed.failure.validationCwd ?? validationCwdLabel}`,
+              );
+            }
+            commandCwd = refreshed.cwd;
+          }
           const validation = await seams.runRepairValidation(
             validationCommands,
-            cwd,
+            commandCwd,
             config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
           );
           if (validation.ok) {
@@ -1357,7 +1403,7 @@ export function buildProductionTeamTaskDeps(
         ...(validationCommands.length > 0
           ? [
               '',
-              '## Validation commands (run all from the worktree root; drive green before handback)\n\n' +
+              `## Validation commands (run all from \`${validationCwdLabel}\` relative to the worktree; drive green before handback)\n\n` +
                 validationCommands.join('\n'),
             ]
           : []),
@@ -1414,6 +1460,28 @@ export function buildProductionTeamTaskDeps(
         throw new Error(`coder self-review failed: ${(err as Error).message}`);
       }
     },
+
+    captureCanonicalReviewDiff: seams.captureCanonicalReviewDiff ?? (async (candidateDiff) => {
+      const cwd = sandbox.worktree;
+      const canonical = await captureCanonicalReviewState(seams.runCanonicalGit, cwd);
+      const normalizedCanonical = normalizeCanonicalReviewDiff(canonical.diff);
+      const normalizedArtifact = normalizeCanonicalReviewDiff(candidateDiff);
+      if (normalizedCanonical === normalizedArtifact) {
+        return {
+          ok: true as const,
+          diff: canonical.diff,
+          hash: canonical.hash,
+        };
+      }
+      const failure: ReviewSurfaceFailure = {
+        kind: 'candidate-mismatch',
+        canonicalHash: canonical.hash,
+        candidateHash: canonicalReviewDiffHash(candidateDiff),
+        changedPaths: canonical.changedPaths,
+      };
+      await args.persistReviewSurfaceFailure?.(failure);
+      return { ok: false as const, failure };
+    }),
 
     qaRevalidateDiff: async ({ task, qa, diff, spec, context }) => {
       const qaBlock = qa.kind === 'tests-written'
@@ -1527,11 +1595,15 @@ export interface TaskWorkflowRunnerArgs {
    *  the coder drives the full suite green before handback. Production passes
    *  the list `buildOrchestrationDeps` already resolved for closeout. */
   validationCommands?: string[];
+  /** Optional worktree-relative command directory from products.json. */
+  validationCwd?: string;
   /** Inner per-task round cap; defaults to {@link DEFAULT_ROUND_CAP}. */
   cap?: number;
   /** Optional live activity sink forwarded into runTeamTaskWorkflow. */
   emit?: (event: WorkflowActivityEvent) => void;
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  persistTaskValidationFailure?: (failure: TaskValidationFailure) => Promise<void>;
+  persistReviewSurfaceFailure?: (failure: ReviewSurfaceFailure) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
@@ -1544,6 +1616,7 @@ function toSizedTask(task: SelectedTask): SizedTask {
     id: task.id,
     text: task.text,
     testStrategy: manualLiveGate ? 'manual-live-gate' : 'code-tests-required',
+    validationPolicy: task.validationPolicy ?? 'required',
     designerNeeded: false,
     roles: manualLiveGate ? ['human'] : ['qa', 'tech-lead', 'coder', 'reviewer'],
   };
@@ -1553,6 +1626,7 @@ function blockedEvidence(
   task: SelectedTask,
   reason: string,
   executionPreflight?: ExecutionPreflightFailure,
+  taskValidationFailure?: TaskValidationFailure,
 ): TaskEvidence {
   return {
     taskId: task.id,
@@ -1562,9 +1636,26 @@ function blockedEvidence(
     handoffNotes: [],
     blockedReason: reason,
     ...(executionPreflight !== undefined ? { executionPreflight } : {}),
+    ...(taskValidationFailure !== undefined ? { taskValidationFailure } : {}),
     findingsLedger: [],
     loopExitReason: 'operational',
   };
+}
+
+function formatTaskValidationBlockedReason(failure: TaskValidationFailure): string {
+  switch (failure.kind) {
+    case 'missing-commands':
+      return 'needs-validation: required validationCommands are absent or empty';
+    case 'malformed-command':
+      return `needs-validation: malformed command \`${failure.command}\` (prerequisite: ${failure.prerequisite})`;
+    case 'invalid-validation-cwd':
+      return `needs-validation: invalid validation directory \`${failure.validationCwd ?? '.'}\``;
+    case 'missing-executable':
+      return `needs-validation: required executable \`${failure.executable ?? 'unknown'}\` is unavailable for \`${failure.command}\``;
+    case 'command-failed':
+    case 'timeout':
+      return `needs-validation: \`${failure.command}\` ${failure.timedOut ? 'timed out' : `exited ${failure.exitCode ?? 'unknown'}`}`;
+  }
 }
 
 function isManualLiveGateTask(task: SelectedTask): boolean {
@@ -1671,6 +1762,22 @@ export function createProductionTaskWorkflowRunner(
       return manualLiveGateEvidence(task);
     }
 
+    const validationAdmission = validateTaskValidationAdmission({
+      policy: task.validationPolicy ?? 'required',
+      commands: args.validationCommands ?? [],
+      worktree: args.sandbox.worktree,
+      ...(args.validationCwd !== undefined ? { validationCwd: args.validationCwd } : {}),
+    });
+    if (!validationAdmission.ok) {
+      await args.persistTaskValidationFailure?.(validationAdmission.failure);
+      return blockedEvidence(
+        task,
+        formatTaskValidationBlockedReason(validationAdmission.failure),
+        undefined,
+        validationAdmission.failure,
+      );
+    }
+
     let policy: ModelPolicy | null;
     try {
       policy = loadModelPolicy(args.modelPolicyPath);
@@ -1731,11 +1838,16 @@ export function createProductionTaskWorkflowRunner(
         ...(args.validationCommands !== undefined
           ? { validationCommands: args.validationCommands }
           : {}),
+        validationCommandCwd: validationAdmission.cwd,
+        validationCwdLabel: args.validationCwd ?? '.',
         ...(args.emit !== undefined ? { emit: args.emit } : {}),
         persistExecutionCheckpoint: async (checkpoint) => {
           await args.persistExecutionCheckpoint?.(checkpoint);
           latestCheckpoint = checkpoint;
         },
+        ...(args.persistReviewSurfaceFailure !== undefined
+          ? { persistReviewSurfaceFailure: args.persistReviewSurfaceFailure }
+          : {}),
         ...(args.cancellationDuringBackoff !== undefined
           ? { cancellationDuringBackoff: args.cancellationDuringBackoff }
           : {}),

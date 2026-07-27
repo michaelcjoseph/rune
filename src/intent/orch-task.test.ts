@@ -61,6 +61,39 @@ describe('orch-task-select — selection', () => {
     if (a.kind !== 'task' || b.kind !== 'task') throw new Error('expected tasks');
     expect(a.task.id).toBe(b.task.id);
   });
+
+  it('defaults legacy tasks without validation metadata to required', () => {
+    const sel = selectNextTask(TASKS_MD);
+    if (sel.kind !== 'task') throw new Error('expected a task');
+    expect(sel.task.validationPolicy).toBe('required');
+  });
+
+  it('preserves an explicit reviewed-no-validation exemption from tasks.md', () => {
+    const md = [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] **docs-only** — Explain the public API',
+      '  - Test strategy: `docs-or-config-only`',
+      '  - Validation policy: `reviewed-no-validation`',
+      '  - Roles: qa, coder, reviewer',
+    ].join('\n');
+    const sel = selectNextTask(md);
+    if (sel.kind !== 'task') throw new Error('expected a task');
+    expect(sel.task.validationPolicy).toBe('reviewed-no-validation');
+  });
+
+  it('fails closed to required when validation metadata is unknown or malformed', () => {
+    for (const policyLine of [
+      '  - Validation policy: `skip`',
+      '  - Validation policy: reviewed-no-validation',
+      '  - Validation policy: ``',
+    ]) {
+      const sel = selectNextTask(`# Tasks\n- [ ] task\n${policyLine}\n`);
+      if (sel.kind !== 'task') throw new Error('expected a task');
+      expect(sel.task.validationPolicy).toBe('required');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

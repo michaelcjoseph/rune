@@ -38,6 +38,9 @@ const GREEN_JUDGMENT_REPLY = [
   '```tl-test-review',
   '{"approved": true}',
   '```',
+  '```qa-diff-revalidation',
+  '{"approved": true}',
+  '```',
   '```reviewer-verdict',
   '{"outcome": "pass", "findings": []}',
   '```',
@@ -143,6 +146,7 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
           artifactMcp: 'not-required',
           artifactFormats: [],
         }),
+        captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
         judgmentCall,
         runExecution,
       },
@@ -151,6 +155,7 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
       id: 'orchestration-protected-service-prompt',
       text: 'Runtime team-task prompts include the protected-service invariant.',
       section: 'Phase 5A',
+      validationPolicy: 'reviewed-no-validation',
     };
 
     const evidence = await run(task, {
@@ -163,8 +168,18 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
     expect(judgmentPrompts.map((call) => call.role)).toEqual(
       expect.arrayContaining(['tech-lead', 'reviewer']),
     );
-    // Judgment roles run on anthropic Claude models: tech-lead → fable, reviewer → opus.
-    expect(judgmentPrompts.every((call) => ['opus', 'fable'].includes(call.model))).toBe(true);
+    // Review judgments keep their policy bindings: tech-lead/reviewer use
+    // Anthropic, while canonical-diff revalidation returns to the QA binding.
+    expect(
+      judgmentPrompts
+        .filter((call) => call.role !== 'qa')
+        .every((call) => ['opus', 'fable'].includes(call.model)),
+    ).toBe(true);
+    expect(
+      judgmentPrompts
+        .filter((call) => call.role === 'qa')
+        .every((call) => call.model === 'gpt-5.6-terra'),
+    ).toBe(true);
 
     for (const call of artifactPrompts) {
       expect(call.systemPrompt).toContain('static role charter with no localhost listener safety rules');

@@ -19,7 +19,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,6 +90,7 @@ vi.mock('../config.js', () => ({
 // ---------------------------------------------------------------------------
 
 let repoDir: string;
+const originalTelegramToken = process.env['TELEGRAM_BOT_TOKEN'];
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -103,6 +111,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalTelegramToken === undefined) delete process.env['TELEGRAM_BOT_TOKEN'];
+  else process.env['TELEGRAM_BOT_TOKEN'] = originalTelegramToken;
   rmSync(repoDir, { recursive: true, force: true });
 });
 
@@ -193,8 +203,8 @@ function makeControlledChild() {
 }
 
 async function waitForSpawn(): Promise<void> {
-  for (let i = 0; i < 20 && mockSpawn.mock.calls.length === 0; i++) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < 100 && mockSpawn.mock.calls.length === 0; i++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -762,7 +772,7 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
       runGit: async (args) => {
         calls += 1;
         if (args[0] === 'write-tree') return { stdout: 'tree-before\n', stderr: '' };
-        if (args[0] === 'diff') throw new Error('diff capture failed');
+        if (args.includes('diff')) throw new Error('diff capture failed');
         return { stdout: '', stderr: '' };
       },
     });
@@ -771,6 +781,31 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
       ok: false,
       failure: { failureStage: 'git-diff', retryDisposition: 'not-eligible' },
     });
+  });
+
+  it('rejects a product-controlled clean filter before the first post-agent stage can inherit Rune secrets', async () => {
+    const leak = join(repoDir, 'leak.txt');
+    const filter = join(repoDir, 'filter.sh');
+    writeFileSync(
+      filter,
+      '#!/bin/sh\nprintf "%s" "${TELEGRAM_BOT_TOKEN-}" > "$1"\ncat\n',
+      'utf8',
+    );
+    chmodSync(filter, 0o755);
+    writeFileSync(join(repoDir, '.gitattributes'), 'payload.txt filter=probe\n', 'utf8');
+    writeFileSync(join(repoDir, 'payload.txt'), 'payload\n', 'utf8');
+    git(['config', '--local', 'filter.probe.clean', `${filter} ${leak}`], repoDir);
+    process.env['TELEGRAM_BOT_TOKEN'] = 'rune-parent-secret';
+    const spawnAgent = vi.fn(async () => ({ output: '', error: null }));
+
+    const result = await runExecutionAgent(makeOpts(), makeIo(spawnAgent));
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { failureStage: 'git-stage', retryDisposition: 'not-eligible' },
+    });
+    expect(spawnAgent).not.toHaveBeenCalled();
+    expect(existsSync(leak)).toBe(false);
   });
 
   it('retries one unchanged-tree transient failure with a fresh child and fresh MCP environment', async () => {

@@ -15,7 +15,7 @@
  * See: docs/projects/14-product-team-agents/test-plan.md §4
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import * as teamTaskWorkflow from './team-task-workflow.js';
 import {
@@ -1869,7 +1869,7 @@ describe('team-task-workflow — coder diff self-review', () => {
     ]);
   });
 
-  it('does not re-validate QA test intent when coder self-review explicitly confirms the diff unchanged', async () => {
+  it('re-validates QA test intent against the canonical diff even when self-review confirms it unchanged', async () => {
     const order: string[] = [];
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
@@ -1920,7 +1920,7 @@ describe('team-task-workflow — coder diff self-review', () => {
     );
 
     expect(ev.outcome).toBe('ready-for-closeout');
-    expect(revalidateCalled).toBe(false);
+    expect(revalidateCalled).toBe(true);
     expect(reviewerDiffs).toEqual(['diff confirmed by self-review']);
     expect(techLeadDiffs).toEqual(['diff confirmed by self-review']);
     expect(designerDiffs).toEqual(['diff confirmed by self-review']);
@@ -1970,6 +1970,111 @@ describe('team-task-workflow — coder diff self-review', () => {
     expect(reviewerCalled).toBe(false);
     expect(techLeadDiffCalled).toBe(false);
     expect(designerCalled).toBe(false);
+  });
+
+  it('captures the canonical staged HEAD diff and gives that complete surface to every downstream review', async () => {
+    const completeDiff = [
+      'diff --git a/src/tracked.ts b/src/tracked.ts',
+      '+tracked change',
+      'diff --git a/src/new-untracked.ts b/src/new-untracked.ts',
+      'new file mode 100644',
+      '+untracked change',
+    ].join('\n');
+    const captureCanonicalReviewDiff = vi.fn(async (candidateDiff: string) => ({
+      ok: true as const,
+      diff: candidateDiff,
+    }));
+    const qaDiffs: string[] = [];
+    const reviewerDiffs: string[] = [];
+    const techLeadDiffs: string[] = [];
+    const designerDiffs: string[] = [];
+    const deps = makeDeps({
+      ...({ captureCanonicalReviewDiff } as Record<string, unknown>),
+      coder: async () => ({ diff: completeDiff, handoffNotes: [] }),
+      coderSelfReview: async ({ artifact }) => ({ artifact, revised: true }),
+      qaRevalidateDiff: async ({ diff }) => {
+        qaDiffs.push(diff);
+        return { approved: true };
+      },
+      reviewer: async ({ diff }) => {
+        reviewerDiffs.push(diff);
+        return cleanVerdict;
+      },
+      techLeadReviewDiff: async ({ diff }) => {
+        techLeadDiffs.push(diff);
+        return { pass: true };
+      },
+      designer: async ({ diff }) => {
+        designerDiffs.push(diff);
+        return { pass: true };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(captureCanonicalReviewDiff).toHaveBeenCalledOnce();
+    expect(captureCanonicalReviewDiff).toHaveBeenCalledWith(completeDiff);
+    for (const [role, diffs] of [
+      ['qa', qaDiffs],
+      ['reviewer', reviewerDiffs],
+      ['tech-lead', techLeadDiffs],
+      ['designer', designerDiffs],
+    ] as const) {
+      expect(diffs, `${role} must receive the canonical diff`).toEqual([completeDiff]);
+      expect(diffs[0]).toContain('src/tracked.ts');
+      expect(diffs[0]).toContain('src/new-untracked.ts');
+    }
+  });
+
+  it('fails closed on a narrowed or rewritten coder diff without invoking reviewer, tech lead, or designer', async () => {
+    const reviewer = vi.fn(async () => cleanVerdict);
+    const techLeadReviewDiff = vi.fn(async () => ({ pass: true }));
+    const designer = vi.fn(async () => ({ pass: true }));
+    const failure = {
+      kind: 'candidate-mismatch' as const,
+      candidateHash: 'candidate-sha256',
+      canonicalHash: 'canonical-sha256',
+      changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
+    };
+    const captureCanonicalReviewDiff = vi.fn(async () => ({
+      ok: false as const,
+      failure,
+    }));
+    const deps = makeDeps({
+      ...({ captureCanonicalReviewDiff } as Record<string, unknown>),
+      coder: async () => ({
+        diff: 'diff --git a/src/tracked.ts b/src/tracked.ts\n+only the tracked subset',
+        handoffNotes: [],
+      }),
+      coderSelfReview: async () => ({
+        artifact: {
+          diff: 'diff --git a/src/tracked.ts b/src/tracked.ts\n+rewritten narrow subset',
+          handoffNotes: [],
+        },
+        revised: true,
+      }),
+      qaRevalidateDiff: async () => ({ approved: true }),
+      reviewer,
+      techLeadReviewDiff,
+      designer,
+    });
+
+    const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(captureCanonicalReviewDiff).toHaveBeenCalledWith(
+      'diff --git a/src/tracked.ts b/src/tracked.ts\n+rewritten narrow subset',
+    );
+    expect(evidence).toMatchObject({
+      outcome: 'failed',
+      rolesInvoked: ['qa', 'tech-lead', 'coder'],
+      reviewSurfaceFailure: failure,
+    });
+    expect(evidence.failureReason).toMatch(/review surface|canonical diff|mismatch/i);
+    expect(reviewer).not.toHaveBeenCalled();
+    expect(techLeadReviewDiff).not.toHaveBeenCalled();
+    expect(designer).not.toHaveBeenCalled();
+    expect(JSON.stringify(evidence)).not.toContain('rewritten narrow subset');
   });
 });
 

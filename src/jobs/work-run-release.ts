@@ -494,6 +494,9 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
           branch,
           integrationWorktree,
           validationCommands,
+          ...(product.validationCwd !== undefined
+            ? { validationCwd: product.validationCwd }
+            : {}),
           tasksRemaining: productFacts.transitions.tasksRemaining,
           concurrentRun: hasConcurrentRunForProduct(run.product, run.id),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

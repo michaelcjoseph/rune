@@ -49,7 +49,8 @@ import {
   buildArtifactMcpConfig,
   type ArtifactMcpConfig,
 } from './artifact-mcp.js';
-import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import type { GitRunner } from './sandbox-runtime.js';
+import { defaultRunCanonicalGit } from './canonical-git.js';
 import {
   parseStreamJsonLine,
   redactSecrets,
@@ -171,7 +172,10 @@ export type ExecutionAgentResult =
 
 const defaultIo: ExecutionAgentIO = {
   spawnAgent: defaultSpawnAgent,
-  runGit: defaultRunGit,
+  // Every Git-visible snapshot stages product-controlled files. Use the
+  // credential-stripped, driver-rejecting boundary from the first snapshot,
+  // not only for the later reviewer capture.
+  runGit: defaultRunCanonicalGit,
   buildEnv: buildSandboxEnv,
   buildArtifactMcp: buildArtifactMcpConfig,
   delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -422,7 +426,10 @@ export async function runExecutionAgent(
     }
     let stdout: string;
     try {
-      stdout = (await runGit(['diff', 'HEAD'], { cwd })).stdout;
+      stdout = (await runGit(
+        ['--no-pager', 'diff', '--no-ext-diff', '--no-textconv', 'HEAD'],
+        { cwd },
+      )).stdout;
     } catch (err) {
       return finishAttempt(attempt, startedAt, 'git-diff', err, false, 'not-eligible');
     }

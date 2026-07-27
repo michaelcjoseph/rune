@@ -361,6 +361,58 @@ describe('planning-critique — production parser', () => {
     expect(out!.techSpec).toBe(BASE_PLAN.techSpec);
     expect(out!.tasks).toEqual(BASE_PLAN.tasks);
   });
+
+  it('preserves reviewed validation policies by task id and defaults critique-added tasks to required', () => {
+    const fallback: PlanCritique = {
+      ...BASE_PLAN,
+      tasks: [
+        { ...TASKS[0]!, validationPolicy: 'required' },
+        {
+          ...TASKS[0]!,
+          id: 'reviewed-exemption',
+          validationPolicy: 'reviewed-no-validation',
+        },
+      ],
+    };
+    const reply = [
+      '```critique-tasks',
+      JSON.stringify({
+        tasks: [
+          {
+            ...fallback.tasks[0],
+            validationPolicy: 'reviewed-no-validation',
+          },
+          {
+            ...fallback.tasks[1],
+            validationPolicy: 'required',
+          },
+          {
+            id: 'critic-added',
+            text: 'Critic-added task',
+            testStrategy: 'docs-or-config-only',
+            validationPolicy: 'reviewed-no-validation',
+            designerNeeded: false,
+            roles: ['coder'],
+          },
+        ],
+      }),
+      '```',
+      '```critique-spec',
+      'Revised spec',
+      '```',
+      '```critique-tech-spec',
+      'Revised tech spec',
+      '```',
+    ].join('\n');
+
+    const out = parseCritiqueReply(reply, fallback);
+
+    expect(out?.tasks.map((task) => [task.id, task.validationPolicy])).toEqual([
+      ['p1-core', 'required'],
+      ['reviewed-exemption', 'reviewed-no-validation'],
+      ['critic-added', 'required'],
+    ]);
+  });
 });
 
 describe('planning-critique — buildProductionCritiquePlan wiring', () => {

@@ -13,10 +13,10 @@ import {
 import type { PlanningRolesOutcome, SizedTask } from './planning-roles.js';
 
 const TASKS: SizedTask[] = [
-  { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
-  { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'code-tests-required', designerNeeded: true, roles: ['designer'] },
-  { id: 'p3-docs', text: 'README', phase: 'Phase 2 - UI', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: ['coder'] },
-  { id: 'p4-live-gate', text: 'Operator verifies the live streak card before release', phase: 'Phase 3 - Release', testStrategy: 'manual-live-gate', designerNeeded: false, roles: ['human'] },
+  { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', validationPolicy: 'required', designerNeeded: false, roles: ['qa', 'coder'] },
+  { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'code-tests-required', validationPolicy: 'required', designerNeeded: true, roles: ['designer'] },
+  { id: 'p3-docs', text: 'README', phase: 'Phase 2 - UI', testStrategy: 'docs-or-config-only', validationPolicy: 'reviewed-no-validation', designerNeeded: false, roles: ['coder'] },
+  { id: 'p4-live-gate', text: 'Operator verifies the live streak card before release', phase: 'Phase 3 - Release', testStrategy: 'manual-live-gate', validationPolicy: 'reviewed-no-validation', designerNeeded: false, roles: ['human'] },
 ];
 
 const PLANNED: Extract<PlanningRolesOutcome, { kind: 'planned' }> = {
@@ -57,6 +57,12 @@ describe('sizedTasksToMarkdown', () => {
     expect(md).toContain('Test strategy: `manual-live-gate`');
   });
 
+  it('renders each task validation policy into tasks.md for task selection to recover', () => {
+    const md = sizedTasksToMarkdown(TASKS);
+    expect(md).toContain('**p1-core** — Streak core\n  - Test strategy: `code-tests-required`\n  - Validation policy: `required`');
+    expect(md).toContain('**p3-docs** — README\n  - Test strategy: `docs-or-config-only`\n  - Validation policy: `reviewed-no-validation`');
+  });
+
   it('groups tasks into milestone sections by phase, in first-seen order', () => {
     const md = sizedTasksToMarkdown(TASKS);
     expect(md).toContain('## Phase 1 - Core');
@@ -72,8 +78,8 @@ describe('sizedTasksToMarkdown', () => {
 
   it('collapses unlabeled tasks into a single default phase', () => {
     const flat: SizedTask[] = [
-      { id: 'a', text: 'A', testStrategy: 'code-tests-required', designerNeeded: false, roles: [] },
-      { id: 'b', text: 'B', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: [] },
+      { id: 'a', text: 'A', testStrategy: 'code-tests-required', validationPolicy: 'required', designerNeeded: false, roles: [] },
+      { id: 'b', text: 'B', testStrategy: 'docs-or-config-only', validationPolicy: 'reviewed-no-validation', designerNeeded: false, roles: [] },
     ];
     const md = sizedTasksToMarkdown(flat);
     expect((md.match(/^## /gm) ?? []).length).toBe(1);

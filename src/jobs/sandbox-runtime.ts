@@ -109,6 +109,10 @@ export interface ProductConfig {
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
    *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
   validationCommands?: string[];
+  /** Optional repository-relative directory from which validation commands
+   * run. The concrete worktree path is realpath/boundary-validated before any
+   * orchestrated role is dispatched. */
+  validationCwd?: string;
   /** Per-task closeout policy. Absent config defaults to product commands. */
   closeoutValidationStrategy?: CloseoutValidationStrategy;
   /** Per-product orchestrated-work toggle (project 14, Phase 5). When set, it
@@ -265,6 +269,15 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
           `'${String(entry['artifactMcp'])}' in ${path} — expected 'rune-kb-readonly'`,
       );
     }
+    if (
+      Object.prototype.hasOwnProperty.call(entry, 'validationCwd') &&
+      typeof entry['validationCwd'] !== 'string'
+    ) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid validationCwd in ${path} — ` +
+          'expected a relative string',
+      );
+    }
     out[slug] = {
       ...(productClass ? { class: productClass } : {}),
       ...(entry['containerCapabilities'] !== undefined
@@ -285,6 +298,9 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       validationCommands: Array.isArray(entry['validationCommands'])
         ? (entry['validationCommands'] as unknown[]).map(String)
         : [],
+      ...(typeof entry['validationCwd'] === 'string'
+        ? { validationCwd: entry['validationCwd'] }
+        : {}),
       closeoutValidationStrategy,
       // Per-product orchestrated-work toggle (project 14). Only a real boolean
       // overrides the global default; anything else leaves it absent so the

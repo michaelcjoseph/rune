@@ -2154,6 +2154,153 @@ describe('project-orchestrator — finalizer handoff', () => {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — closeout repair loop', () => {
+  it('runs mechanical task validation before context transformation, checkbox mutation, or closeout commit', async () => {
+    const operations: string[] = [];
+    const h = makeHarness({}, '# Tasks\n- [ ] Validate this task\n');
+    Object.assign(h.deps, {
+      curateContext: () => {
+        operations.push('context:transform');
+        return { kind: 'neutral', sections: { 'Current State': 'task complete' } };
+      },
+      runCloseoutChecks: async () => {
+        operations.push('validation');
+        return { ok: true } as const;
+      },
+      writeContextMd: async (content) => {
+        operations.push('context:write');
+        h.state.contextMd = content;
+      },
+      writeTasksMd: async (content) => {
+        operations.push('tasks:write');
+        h.state.tasksMd = content;
+      },
+      commitCloseout: async (task) => {
+        operations.push('closeout:commit');
+        return { sha: `sha-${task.id}`, subject: 'closeout' };
+      },
+    } satisfies Partial<OrchestrationDeps>);
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result.kind).toBe('finalized');
+    expect(operations).toEqual([
+      'validation',
+      'context:transform',
+      'context:write',
+      'tasks:write',
+      'closeout:commit',
+    ]);
+  });
+
+  it('preserves WIP and durable TaskValidationFailure evidence when dependency installation exhausts repair', async () => {
+    const command = 'uv sync --all-groups';
+    const taskValidationFailure = {
+      kind: 'command-failed' as const,
+      command,
+      prerequisite: 'dependency-install',
+      executable: 'uv',
+      exitCode: 12,
+      timedOut: false,
+      diagnostics: 'Failed to resolve package group "test" from <repo>/harness/pyproject.toml',
+    };
+    const commitWip = vi.fn(async () => ({ sha: 'wip-validation-1234', subject: 'validation WIP' }));
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-commit',
+      subject: 'must not commit',
+    }));
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/assay/task-validation',
+      runCloseoutChecks: async () => ({
+        ok: false,
+        failure: {
+          command,
+          exitCode: 12,
+          timedOut: false,
+          outputTail: taskValidationFailure.diagnostics,
+          validationFailure: taskValidationFailure,
+        },
+      } as const),
+      commitWip,
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+    }, '# Tasks\n- [ ] Run the Assay harness\n  - Validation policy: `required`\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'blocked',
+      task: { validationPolicy: 'required' },
+      taskValidationFailure,
+      parked: {
+        status: 'blocked-on-human',
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
+    });
+    expect(commitWip).toHaveBeenCalledOnce();
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+    expect(h.state.tasksMd).toContain('- [ ] Run the Assay harness');
+    expect(JSON.stringify(result)).not.toContain('/Users/');
+  });
+
+  it('blocks a validation-mutated canonical review surface before any closeout transform and exposes hashes, never raw diff', async () => {
+    const rawMutatedDiff = 'diff --git a/src/secret.ts b/src/secret.ts\n+RAW-MUTATED-DIFF';
+    const reviewSurfaceFailure = {
+      kind: 'candidate-mismatch' as const,
+      canonicalHash: 'post-validation-hash',
+      candidateHash: 'reviewed-hash',
+      changedPaths: ['src/secret.ts'],
+    };
+    const curateContext = vi.fn(() => ({
+      kind: 'neutral' as const,
+      sections: { 'Current State': 'must not run' },
+    }));
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-commit',
+      subject: 'must not commit',
+    }));
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/assay/review-surface',
+      curateContext,
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+      commitWip: async () => ({ sha: 'wip-review-surface', subject: 'preserve WIP' }),
+      runCloseoutChecks: async () => ({
+        ok: false,
+        failure: {
+          command: 'git diff HEAD review-surface verification',
+          exitCode: null,
+          timedOut: false,
+          outputTail: 'src/secret.ts',
+          reviewSurfaceFailure,
+        },
+      }),
+    }, '# Tasks\n- [ ] Validate canonical review surface\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'blocked',
+      parked: { status: 'blocked-on-human', preserveWorktree: true },
+    });
+    expect(curateContext).not.toHaveBeenCalled();
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+    expect(h.state.tasksMd).toContain('- [ ] Validate canonical review surface');
+    expect(JSON.stringify(reviewSurfaceFailure)).toContain('post-validation-hash');
+    expect(JSON.stringify(result)).not.toContain(rawMutatedDiff);
+    expect(JSON.stringify(result)).not.toContain('RAW-MUTATED-DIFF');
+  });
+
   it('repairs a failed closeout by re-running the workflow with the failing output as coder feedback', async () => {
     const workflowCtxs: Array<{ taskId: string; feedback: GateRejectionFeedback | undefined }> = [];
     let closeoutCalls = 0;
@@ -2164,7 +2311,15 @@ describe('project-orchestrator — closeout repair loop', () => {
       },
       runCloseoutChecks: async () => {
         closeoutCalls++;
-        return closeoutCalls === 1 ? redCloseout() : ({ ok: true } as const);
+        return closeoutCalls === 1
+          ? {
+              ...redCloseout(),
+              failure: {
+                ...redCloseout().failure,
+                validationCwd: 'harness/',
+              },
+            }
+          : ({ ok: true } as const);
       },
     });
     const res = await runProjectOrchestration(h.deps);
@@ -2190,6 +2345,10 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(feedback?.reason).toContain('exited 1');
     expect(feedback?.reason).toContain('AssertionError: expected 3 to be 2');
     expect(feedback?.whatFailed).toContain('npm test');
+    expect(feedback?.actionableNotes).toContain(
+      'Re-run `npm test` from validation directory `harness/` relative to the worktree and drive it green before handing back.',
+    );
+    expect(feedback?.actionableNotes.join('\n')).not.toContain('from the worktree root');
     // Repair attempts surface as attempt-start events: task 1 attempts 1+2, task 2 attempt 1.
     const attemptNumbers = eventsByName(h.state.events, 'attempt-start')
       .map((event) => eventData(event)?.['attemptNumber']);

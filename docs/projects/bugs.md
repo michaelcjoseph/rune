@@ -1,26 +1,5 @@
 ## Active
 
-- [ ] **Orchestrated work can enter closeout without executable required validation, and reviewer evidence can be narrower than the task diff.**
-  - **What is broken.** Assay run `7bd0d9ba-30c5-45a0-b175-3991d4a2d8fb` advanced to `ready-for-closeout` although Task 1 required an installable `uv` Python 3.12 package, a committed lockfile, `pytest`, `ruff`, and an installed `assay` entry point. The agents reported that `uv`, `pytest`, `ruff`, and dependency installation were unavailable, then substituted parsing, compilation, and direct CLI checks. The reviewer also reported seeing only `harness/README.md` directly and accepted the substantive work from handoff notes.
-
-  - **Root cause.** `policies/products.json` configures Assay with no `validationCommands`. `readProductsConfig()` converts that absence to `[]`; the coder prompt explicitly tells the agent to skip validation when no commands are listed; and `runValidationCommands([])` returns `{ ok: true }` for task closeout. The hard merge gate would reject the empty command list later, but no per-task gate prevents a workflow from calling closeout. The reviewer contract accepts a caller-provided diff and has no independent completeness check against the worktree, so a narrowed review surface can still yield an all-low verdict.
-
-  - **Expected behavior.** A task whose declared acceptance requires a toolchain must not enter closeout until every required command has executed successfully in the worktree. Missing commands, missing executables, unavailable dependencies, and provisioning failures are explicit `blocked` or `needs-validation` outcomes that name the prerequisite and commands. Reviewers receive the complete selected-task diff and can reject an incomplete review surface.
-
-  - **Reproduction steps.**
-    1. Configure an orchestrated product with no `validationCommands`.
-    2. Start a task that requires a dependency manager and test/lint commands not present in the worktree.
-    3. Have the coder report that the commands cannot run while leaving a nonempty implementation diff.
-    4. Return passing role verdicts.
-    5. Observe `runCloseoutChecks()` invoke `runValidationCommands([])` and return success, allowing closeout to begin.
-
-  - **Acceptance criteria.**
-    - A product cannot start an orchestrated task without nonempty, executable validation commands, unless the task carries an explicit reviewed no-validation policy.
-    - Required validation commands run at the per-task gate and exit zero before context mutation, task ticking, or closeout commit.
-    - A missing command/tool/dependency produces a durable blocked or needs-validation state with the exact failed command and prerequisite, never `ready-for-closeout`.
-    - The Assay Python scaffold task declares and runs `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and an installed-entry-point check in a provisioned environment.
-    - A reviewer receives a deterministic complete diff (tracked and untracked selected-task changes) and fails closed when the supplied review artifact does not match it.
-    - Regression tests cover empty validation commands, command-not-found, dependency-install failure, and narrowed reviewer-diff detection.
 - [ ] **Context closeout rejects legacy project headings instead of safely migrating or reporting the exact repair, leaving reviewed work dirty and uncommitted.**
   - **What is broken.** The same Assay run stopped with `context update rejected: missing-section` after entering closeout. Its `context.md` used `Canonical Interfaces`; Rune's canonical contract requires `Interfaces & Contracts`. No context change, checkbox tick, or commit was made, so the reviewed implementation remained dirty and unrecorded.
 
@@ -751,3 +730,16 @@
     - New `src/jobs/registry-rebuild.ts`: scans `policies/products.json`, reads each product repo's `docs/projects/index.md` (lifecycle status) and each project's `tasks.md` (task progress), and writes a fresh registry.
     - Wired to run on daemon startup (`src/index.ts`) — so the "Restart server" button also refreshes the cockpit — and as a nightly step (`Registry rebuild` in `src/jobs/nightly.ts`, before the journal-intent producer).
     - The registry now carries per-project task progress (`RegistryProject.progress`), so the cockpit renders progress bars for **every** product, not just rune. `handleApiCockpit` overlays a live read of rune's own `tasks.md` so rune cards stay real-time.
+- [x] **Orchestrated work can enter closeout without executable required validation, and reviewer evidence can be narrower than the task diff.** _(Fixed 2026-07-25.)_
+  - **What was broken.** Assay run `7bd0d9ba-30c5-45a0-b175-3991d4a2d8fb` advanced to `ready-for-closeout` although Task 1 required an installable `uv` Python 3.12 package, a committed lockfile, `pytest`, `ruff`, and an installed `assay` entry point. The agents reported that `uv`, `pytest`, `ruff`, and dependency installation were unavailable, then substituted parsing, compilation, and direct CLI checks. The reviewer also reported seeing only `harness/README.md` directly and accepted the substantive work from handoff notes.
+
+  - **Root cause.** `policies/products.json` configured Assay with no `validationCommands`. `readProductsConfig()` converted that absence to `[]`; the coder prompt explicitly told the agent to skip validation when no commands were listed; and `runValidationCommands([])` returned `{ ok: true }` for task closeout. The hard merge gate would reject the empty command list later, but no per-task gate prevented a workflow from calling closeout. The reviewer contract accepted a caller-provided diff and had no independent completeness check against the worktree, so a narrowed review surface could still yield an all-low verdict.
+
+  - **Resolution.**
+    - Added a task-level `validationPolicy`, defaulting legacy tasks to `required` and allowing only the explicit planning-reviewed `reviewed-no-validation` exemption.
+    - Required tasks now fail closed before role dispatch when commands, executables, or the realpath-contained validation directory are unusable. Mechanical checks run in a distinct gate before context mutation, task ticking, or closeout commit; exhausted failures preserve WIP with durable, scrubbed `TaskValidationFailure` evidence.
+    - Assay now validates from `harness/` with `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and `uv run assay --help`.
+    - Reviewer input is a hardened canonical `git diff HEAD` captured after staging tracked and untracked changes. Rune compares its scrubbed hash with the coder/self-review artifact before reviewer invocation and rechecks it after validation; mismatches persist hashes and changed paths only.
+    - Follow-up review hardening routes the execution agent's first Git snapshot and tech-lead repair staging through the same credential-stripped canonical boundary, rejects compact shell operators, prevents critique passes from changing reviewed validation policies, rebases related-test paths to `validationCwd`, carries that directory into repair feedback, and preserves structured executable evidence.
+    - Added regression coverage for empty and malformed commands, missing executables, invalid directories and symlink escapes, dependency-install failure, validation ordering, policy round trips, Assay configuration, tracked/untracked reviewer coverage, narrowed diffs, and product-controlled Git filters.
+    - Verification (2026-07-26): `npm run build`; focused planning, task-selection, execution-agent, team-task, project-orchestrator, gate-runtime, sandbox, and orchestrated-runner suites; full suite `340` files / `5609` passing tests / `8` todos.

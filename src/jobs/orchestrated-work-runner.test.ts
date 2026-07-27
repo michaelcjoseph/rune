@@ -2066,6 +2066,7 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            validationCwd: 'harness',
             closeoutValidationStrategy: 'vitest-related',
           },
         }),
@@ -2073,7 +2074,9 @@ describe('orchestratedWorkApplier', () => {
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
       mockCollectTaskChangedPaths.mockResolvedValue([
-        'src/feature.ts', 'src/odd name.test.ts', '--config=malicious.ts',
+        'harness/src/feature.ts',
+        'harness/src/odd name.test.ts',
+        'harness/--config=malicious.ts',
       ]);
       mockRunValidationCommandArgv.mockImplementation(async () => {
         operations.push('validation');
@@ -2099,6 +2102,7 @@ describe('orchestratedWorkApplier', () => {
             '',
           ].join('\n'));
           writeValidProjectContext(dir);
+          mkdirSync(join(dir, 'harness'));
           wtDir = dir;
           return sandbox;
         },
@@ -2148,7 +2152,7 @@ describe('orchestratedWorkApplier', () => {
             'src/odd name.test.ts',
             './--config=malicious.ts',
           ],
-          wtDir,
+          join(wtDir!, 'harness'),
           120_000,
           join(artifactsDir, runId, 'validation-diagnostics'),
         );

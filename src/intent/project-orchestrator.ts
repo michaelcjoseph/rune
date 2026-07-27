@@ -65,6 +65,8 @@ import {
   type ExecutionCheckpoint,
   type ExecutionFailure,
 } from './execution-failure.js';
+import type { TaskValidationFailure } from './task-validation.js';
+import type { ReviewSurfaceFailure } from './team-task-workflow.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output' | 'progress';
@@ -87,6 +89,10 @@ export interface CloseoutCheckFailure {
   exitCode: number | null;
   timedOut: boolean;
   outputTail: string;
+  /** Scrubbed worktree-relative command directory (`.` = worktree root). */
+  validationCwd?: string;
+  validationFailure?: TaskValidationFailure;
+  reviewSurfaceFailure?: ReviewSurfaceFailure;
 }
 
 export type CloseoutCheckResult =
@@ -166,7 +172,10 @@ export interface OrchestrationDeps {
   curateContext: (current: string, evidence: TaskEvidence) => ContextUpdate;
   writeContextMd: (content: string) => Promise<void>;
   writeTasksMd: (content: string) => Promise<void>;
-  runCloseoutChecks: (task: SelectedTask) => Promise<CloseoutCheckResult>;
+  runCloseoutChecks: (
+    task: SelectedTask,
+    evidence: TaskEvidence,
+  ) => Promise<CloseoutCheckResult>;
   commitCloseout: (task: SelectedTask) => Promise<CloseoutCommit>;
   /** Optional best-effort WIP preservation commit when closeout repair exhausts.
    *  Returns null when there is nothing to commit or the commit fails. */
@@ -189,7 +198,14 @@ export type OrchestrationResult =
       preserveWorktree?: true;
       executionFailure?: ExecutionFailure;
     }
-  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun; executionFailure?: ExecutionFailure }
+  | {
+      kind: 'blocked';
+      reason: string;
+      task: SelectedTask;
+      parked?: ParkedTaskRun;
+      executionFailure?: ExecutionFailure;
+      taskValidationFailure?: TaskValidationFailure;
+    }
   | {
       kind: 'cancelled';
       reason: CancelReason;
@@ -284,8 +300,16 @@ async function runProjectOrchestrationImpl(
         return resolveNonCloseoutEvidence(deps, task, evidence, taskRecords);
       }
 
-      // --- Rune-owned closeout ---
-      closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
+      // Mechanical validation is a separate gate. Closeout itself is not
+      // entered until validation and post-validation review-surface checks pass.
+      const checks = await deps.runCloseoutChecks(task, evidence);
+      closeout = checks.ok
+        ? await performCloseout(deps, task, tasksMd, contextMd, evidence)
+        : {
+            kind: 'blocked',
+            reason: 'closeout checks failed',
+            closeoutFailure: checks.failure,
+          };
       if (closeout.kind === 'ok' || closeout.closeoutFailure === undefined) break;
       if (attempt === 1 + CLOSEOUT_REPAIR_CAP) break; // repair budget exhausted
       // Bounded coder repair: a failed check persists nothing (the check runs
@@ -307,9 +331,16 @@ async function runProjectOrchestrationImpl(
         // later worktree cleanup — the resume path checks the branch tip back out.
         const wip = await commitWipSafely(deps, task);
         const attempts = 1 + CLOSEOUT_REPAIR_CAP;
+        const validation = closeout.closeoutFailure.validationFailure;
+        const baseReason = `closeout checks failed after ${attempts} attempts` +
+          (validation === undefined
+            ? ''
+            : `; needs-validation: ${validation.kind}; ` +
+            `command \`${validation.command}\`; prerequisite \`` +
+            `${validation.executable ?? validation.validationCwd ?? validation.prerequisite}\``);
         const reason = wip === null
-          ? `closeout checks failed after ${attempts} attempts`
-          : `closeout checks failed after ${attempts} attempts; WIP preserved as ${wip.sha.slice(0, 7)}`;
+          ? baseReason
+          : `${baseReason}; WIP preserved as ${wip.sha.slice(0, 7)}`;
         // PARK (blocked-on-human), do not hold: a held terminal writes a
         // `completed` supervision row the release path cannot see, and its
         // preserved worktree stays git-registered — never swept by the orphan
@@ -326,6 +357,7 @@ async function runProjectOrchestrationImpl(
             kind: 'blocked',
             reason,
             task,
+            ...(validation !== undefined ? { taskValidationFailure: validation } : {}),
             parked: {
               status: 'blocked-on-human',
               branch: deps.branch,
@@ -457,10 +489,7 @@ type CloseoutResult =
   | { kind: 'ok'; commitSha: string; tasksMd: string }
   | { kind: 'blocked'; reason: string; closeoutFailure?: CloseoutCheckFailure };
 
-/** Perform the closeout sequence for one passed task. The order keeps the branch
- *  finalizer-ready: compute context/tick → closeout checks → persist context
- *  and tick exactly this task → commit → clean-worktree verify. Any failure
- *  blocks durably. */
+/** Perform the mutation-only closeout sequence for one validated task. */
 async function performCloseout(
   deps: OrchestrationDeps,
   task: SelectedTask,
@@ -470,7 +499,7 @@ async function performCloseout(
 ): Promise<CloseoutResult> {
   emitCloseoutStart(deps, task);
 
-  // 1. Compute BOTH the context update and the checkbox tick before writing
+  // Compute BOTH the context update and the checkbox tick before writing
   //    either — so a tick failure can't leave a half-advanced closeout (context
   //    written, task still unchecked) that a retry would then double-apply.
   const update = deps.curateContext(contextMd, evidence);
@@ -481,13 +510,6 @@ async function performCloseout(
   const tick = markSelectedTaskComplete(tasksMd, task);
   if (!tick.ok) {
     return { kind: 'blocked', reason: `closeout checkbox tick failed: ${tick.reason}` };
-  }
-
-  // 3. Task-scoped closeout checks. Run these before persisting the tick so a
-  // validation failure leaves the task visibly unchecked in the live worktree.
-  const checks = await deps.runCloseoutChecks(task);
-  if (!checks.ok) {
-    return { kind: 'blocked', reason: 'closeout checks failed', closeoutFailure: checks.failure };
   }
 
   // Both transforms succeeded and validation passed → persist them together
@@ -859,6 +881,9 @@ const CLOSEOUT_FEEDBACK_TAIL_CHARS = 4_000;
 function buildCloseoutRepairFeedback(failure: CloseoutCheckFailure): GateRejectionFeedback {
   const outcome = failure.timedOut ? 'timed out' : `exited ${failure.exitCode ?? 'unknown'}`;
   const tail = failure.outputTail.slice(-CLOSEOUT_FEEDBACK_TAIL_CHARS).trim();
+  const validationLocation = failure.validationCwd && failure.validationCwd !== '.'
+    ? `from validation directory \`${failure.validationCwd}\` relative to the worktree`
+    : 'from the worktree root';
   return buildGateRejectionFeedback({
     rejectingRole: 'qa',
     counterpartRole: 'coder',
@@ -867,7 +892,7 @@ function buildCloseoutRepairFeedback(failure: CloseoutCheckFailure): GateRejecti
       `closeout validation failed: \`${failure.command}\` ${outcome}.` +
       (tail !== '' ? `\nFailing output tail:\n${tail}` : ''),
     actionableNotes: [
-      `Re-run \`${failure.command}\` from the worktree root and drive it green before handing back.`,
+      `Re-run \`${failure.command}\` ${validationLocation} and drive it green before handing back.`,
       'Fix the implementation — do not delete or weaken a failing test without a TEST-REMOVED justification.',
     ],
   });

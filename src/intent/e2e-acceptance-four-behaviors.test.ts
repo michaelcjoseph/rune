@@ -120,6 +120,7 @@ const PLANNED_TASK: SizedTask = {
   text: 'Execute the acceptance task and prove the revised coder diff reaches review.',
   phase: 'Phase 1 - Acceptance',
   testStrategy: 'code-tests-required',
+  validationPolicy: 'reviewed-no-validation',
   designerNeeded: false,
   roles: ['qa', 'coder', 'reviewer', 'tech-lead'],
 };
@@ -514,7 +515,11 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
       productsConfigPath: '/tmp/nonexistent-products.json',
       models,
     },
-    { judgmentCall, runExecution },
+    {
+      judgmentCall,
+      runExecution,
+      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
+    },
   );
 
   const evidence = await runTeamTaskWorkflow(
