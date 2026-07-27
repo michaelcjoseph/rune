@@ -1,24 +1,5 @@
 ## Active
 
-- [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
-  - **What is broken.** Assay Task 1 required a new `uv`-managed Python package, but the assigned run had no `uv`, `pytest`, `ruff`, or `jsonschema`; outbound installation was blocked. The runtime provisions only the repository worktree and Node dependency link. It does not declare a Python runtime, package-manager availability, offline cache, or dependency-install authorization before the QA/coder workflow starts. The reported `uv.lock` therefore has no demonstrated provenance or resolvability.
-
-  - **Root cause.** Product configuration exposes Node-oriented `validationCommands` and an egress allowlist, but no toolchain/provisioning requirements. `createWorktree()` calls `linkWorktreeDeps()` only. The sandbox/agent environment carries a basic toolchain `PATH`, while validation networking is deliberately denied; there is no preflight that proves a declared package manager and dependency cache can satisfy the task before implementation starts.
-
-  - **Expected behavior.** A product can declare its required toolchain and provisioning path. Before task selection, Rune verifies the supported Python version, `uv`, and either an approved offline cache/prebuilt environment or authorized auditable dependency installation. If requirements are absent, the run is blocked before QA writes tests or the coder changes files.
-
-  - **Reproduction steps.**
-    1. Configure a product that has a Python scaffold task but no Python toolchain/provisioning declaration.
-    2. Run it in an environment without `uv`, `pytest`, and `ruff`, with external package downloads blocked.
-    3. Observe QA and coder reach the task and substitute partial local checks because `uv sync` and the declared suite cannot run.
-
-  - **Acceptance criteria.**
-    - Product config supports an explicit, validated Python toolchain requirement, including Python version, `uv`, required dependency groups, and an approved provisioning source.
-    - Preflight runs before QA/coder dispatch and either proves the declared commands are usable or blocks with `required tool missing`, `required packages unavailable`, or `installation blocked by environment policy`.
-    - The provisioning strategy is auditable: preinstalled toolchain, approved offline cache, prebuilt image, or explicitly authorized network install.
-    - In a provisioned Assay environment, `uv.lock` is generated or verified against `pyproject.toml`; `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and `uv run assay --help` succeed.
-    - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
-
 - [ ] **Planning tasks lose dependencies, role gates, and manual-runbook relationships between planning and runtime dispatch.**
   - **What is broken.** The planning model can describe roles and `manual-live-gate` tasks, but it has no structured dependency or runbook relationship. The rendered `tasks.md` is treated as the runtime source, and `src/jobs/team-task-deps.ts` reconstructs selected tasks with conservative fixed defaults. A runbook task can therefore be separated from its manual gate by task order alone, and role metadata can disappear before workflow dispatch.
   - **User impact.** A plan can promise a security review, a manual runbook prerequisite, or a task dependency that Rune never enforces. The operator receives no durable handoff for manual work, and an automated workflow can attempt work whose prerequisite was not completed.
@@ -80,7 +61,26 @@
 
 ## Loop-filed
 
-(empty)
+- [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
+  - **Tracked by.** [Project 24 — Cockpit Execution Profiles](24-execution-profiles/spec.md), culminating in the automated `python-provisioning-bug-regression-closeout` task after the Python/uv provisioner, uv fixture, and Assay profile implementation. This entry remains unresolved here until that task reads this contract, proves every acceptance criterion with implementation and automated test evidence, and moves it to `Done`.
+
+  - **What is broken.** Assay Task 1 required a new `uv`-managed Python package, but the assigned run had no `uv`, `pytest`, `ruff`, or `jsonschema`; outbound installation was blocked. The runtime provisions only the repository worktree and Node dependency link. It does not declare a Python runtime, package-manager availability, offline cache, or dependency-install authorization before the QA/coder workflow starts. The reported `uv.lock` therefore has no demonstrated provenance or resolvability.
+
+  - **Root cause.** Product configuration exposes Node-oriented `validationCommands` and an egress allowlist, but no toolchain/provisioning requirements. `createWorktree()` calls `linkWorktreeDeps()` only. The sandbox/agent environment carries a basic toolchain `PATH`, while validation networking is deliberately denied; there is no preflight that proves a declared package manager and dependency cache can satisfy the task before implementation starts.
+
+  - **Expected behavior.** A product can declare its required toolchain and provisioning path. Before task selection, Rune verifies the supported Python version, `uv`, and either an approved offline cache/prebuilt environment or authorized auditable dependency installation. If requirements are absent, the run is blocked before QA writes tests or the coder changes files.
+
+  - **Reproduction steps.**
+    1. Configure a product that has a Python scaffold task but no Python toolchain/provisioning declaration.
+    2. Run it in an environment without `uv`, `pytest`, and `ruff`, with external package downloads blocked.
+    3. Observe QA and coder reach the task and substitute partial local checks because `uv sync` and the declared suite cannot run.
+
+  - **Acceptance criteria.**
+    - Product config supports an explicit, validated Python toolchain requirement, including Python version, `uv`, required dependency groups, and an approved provisioning source.
+    - Preflight runs before QA/coder dispatch and either proves the declared commands are usable or blocks with `required tool missing`, `required packages unavailable`, or `installation blocked by environment policy`.
+    - The provisioning strategy is auditable: preinstalled toolchain, approved offline cache, prebuilt image, or explicitly authorized network install.
+    - In a provisioned Assay environment, `uv.lock` is generated or verified against `pyproject.toml`; `uv sync --all-groups`, `uv run pytest`, `uv run ruff check .`, and `uv run assay --help` succeed.
+    - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
 
 ## Done
 

@@ -104,6 +104,10 @@ Manual/live gates are recorded with operator evidence, not automated.
 ### Python, iOS, Android
 
 - [ ] 🔴 The Python provisioner selects prebuilt environment, then verified offline cache, then audited brokered bootstrap in that order; a missing uv yields a blocked-environment result with remediation.
+- [ ] 🔴 The Python provisioning bug closeout reads the complete loop-filed bug contract and maps every acceptance criterion to implementation plus automated regression evidence; configuration presence or agent narration alone cannot close it.
+- [ ] 🔴 Automated regression proves the validated Python version, uv, dependency groups, and approved provisioning source; distinguishes `required tool missing`, `required packages unavailable`, and `installation blocked by environment policy` before QA/coder dispatch; and records an auditable provisioning strategy without secrets or host paths.
+- [ ] 🔴 A provisioned uv fixture verifies `uv.lock` against `pyproject.toml`, passes `uv sync --all-groups`, pytest, Ruff, and the Assay CLI help check, and reaches normal role dispatch; a missing-uv fixture dispatches no QA or coder.
+- [ ] 🟡 The bug moves from `Loop-filed` to `Done` only after focused tests, `npm run build`, and the full suite pass; any missing evidence leaves it loop-filed and creates corrective Project 24 work.
 - [ ] 🔴 Android missing SDKs or emulator images are preflight blocked-environment results; a Gradle execution failure remains a provisioning failure (correct classification).
 - [ ] 🟡 iOS Xcode/CocoaPods probes and derived-data management run under a cache-dir lease with timeout cleanup, without requiring a full build.
 - [ ] 🟢 Reproducibility metadata (Python/uv/tool versions, input hashes) is captured for each provisioner.
