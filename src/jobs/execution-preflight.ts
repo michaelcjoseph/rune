@@ -127,9 +127,9 @@ function makeDefaultIo(timeoutMs: number): ExecutionPreflightIO {
           timeoutMs,
           model: binding.alias,
         };
-        return binding.format === 'claude'
+        return await (binding.format === 'claude'
           ? probeClaudeModelCall(opts)
-          : probeCodexModelCall(opts);
+          : probeCodexModelCall(opts));
       } finally {
         await rm(probeCwd, { recursive: true, force: true });
       }

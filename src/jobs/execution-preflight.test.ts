@@ -93,6 +93,9 @@ describe('preflightExecution', () => {
         "  printf '%s\\n' '{\"loggedIn\":true}'",
         'else',
         '  case "$*" in *"--safe-mode"*"--model opus"*) ;; *) exit 83 ;; esac',
+        '  probe_cwd=$(pwd -P)',
+        '  sleep 0.05',
+        '  [ -d "$probe_cwd" ] || exit 84',
         "  printf '%s\\n' 'OK'",
         'fi',
       ].join('\n'));
