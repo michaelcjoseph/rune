@@ -57,8 +57,6 @@
     - A selector depending on task tags includes an owning task and user surface for creating/persisting those tags.
     - Prompt and parser tests prove the PM, tech lead, and critique reject or repair representative incomplete plans.
 
-- [ ] Intermittent vitest hang unresolved — An intermittent open-handle vitest hang in Rune's orchestrated runs was diagnosed but not reproduced or fixed; the plan is to capture the handle stack the next time it fires. (journal 2026-07-08)
-
 ## Loop-filed
 
 - [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
