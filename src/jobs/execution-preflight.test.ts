@@ -194,6 +194,22 @@ describe('preflightExecution', () => {
     expect(seams.buildArtifactMcp).not.toHaveBeenCalled();
   });
 
+  it('surfaces a classified, sanitized CLI stderr excerpt for a failed model probe', async () => {
+    const seams = io({
+      probeModel: vi.fn(async (binding) => binding.alias === 'gpt-coder'
+        ? { ok: false, code: 'nonzero-exit' as const, diagnostic: 'unknown model gpt-coder' }
+        : { ok: true }),
+    });
+
+    const result = await preflightExecution(args(), seams);
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      prerequisite: 'model-call',
+      diagnostic: 'codex model availability error: unknown model gpt-coder',
+    });
+  });
+
   it('probes each shared executor and shared model binding only once', async () => {
     const seams = io();
 

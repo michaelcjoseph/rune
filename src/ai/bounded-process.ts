@@ -18,7 +18,7 @@ export type AiExecutorProbeFailureCode =
 
 export type AiExecutorProbeResult =
   | { ok: true }
-  | { ok: false; code: AiExecutorProbeFailureCode };
+  | { ok: false; code: AiExecutorProbeFailureCode; diagnostic?: string };
 
 export interface BoundedProcessOpts {
   cwd: string;

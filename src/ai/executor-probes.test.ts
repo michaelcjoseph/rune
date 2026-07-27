@@ -47,13 +47,13 @@ describe('centralized executor probes', () => {
     }
   });
 
-  it('returns a stable Claude failure code without surfacing raw CLI output', async () => {
+  it('returns a sanitized, bounded Claude stderr diagnostic on model failure', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'claude-probe-diagnostic-'));
     const binary = join(dir, 'claude-fixture');
     try {
       await writeFile(binary, [
         '#!/bin/sh',
-        "printf '%s\\n' 'sk-raw-secret /Users/operator/private' >&2",
+        "printf '%s\\n' 'unknown model fixture-model; token=sk-raw-secret /Users/operator/private' >&2",
         'exit 7',
       ].join('\n'));
       await chmod(binary, 0o700);
@@ -61,14 +61,16 @@ describe('centralized executor probes', () => {
       const result = await probeClaudeModelCall({
         binaryPath: binary,
         cwd: dir,
-        env: { PATH: '/usr/bin:/bin', HOME: dir },
+        env: { PATH: '/usr/bin:/bin', HOME: dir, ANTHROPIC_API_KEY: 'sk-raw-secret' },
         timeoutMs: 2_000,
         model: 'fixture-model',
       });
 
-      expect(result).toEqual({ ok: false, code: 'nonzero-exit' });
+      expect(result).toMatchObject({ ok: false, code: 'nonzero-exit' });
       expect(JSON.stringify(result)).not.toContain('sk-raw-secret');
       expect(JSON.stringify(result)).not.toContain('/Users/operator');
+      expect(result.ok ? '' : result.diagnostic).toContain('<host-path>');
+      expect(result.ok ? '' : result.diagnostic).toContain('unknown model fixture-model');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

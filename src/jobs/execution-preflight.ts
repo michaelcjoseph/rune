@@ -360,7 +360,9 @@ async function safeProbe(run: () => Promise<ProbeResult>, fallback: string): Pro
 }
 
 function probeDiagnostic(format: ExecutionPreflightFormat, result: ProbeResult): string {
-  if (result.diagnostic) return result.diagnostic;
+  if (result.diagnostic) {
+    return `${format} ${classifyProbeDiagnostic(result.diagnostic)}: ${result.diagnostic}`;
+  }
   const messages: Record<AiExecutorProbeFailureCode, string> = {
     'not-authenticated': `${format} CLI reported no active subscription login`,
     timeout: `${format} probe exceeded its bounded timeout`,
@@ -373,6 +375,22 @@ function probeDiagnostic(format: ExecutionPreflightFormat, result: ProbeResult):
     'cleanup-failed': 'Codex preflight sandbox cleanup failed',
   };
   return result.code ? messages[result.code] : `${format} probe failed`;
+}
+
+function classifyProbeDiagnostic(diagnostic: string): string {
+  if (/api[_ -]?key|environment variable|config(?:uration)?/i.test(diagnostic)) {
+    return 'configuration error';
+  }
+  if (/model.{0,40}(?:not found|unsupported|invalid|unavailable)|unknown model/i.test(diagnostic)) {
+    return 'model availability error';
+  }
+  if (/rate limit|too many requests|overloaded|capacity/i.test(diagnostic)) {
+    return 'rate-limit error';
+  }
+  if (/permission|not authorized|forbidden|subscription|billing|credit|entitlement/i.test(diagnostic)) {
+    return 'account access error';
+  }
+  return 'CLI error';
 }
 
 function stableArtifactDiagnostic(err: unknown): string {

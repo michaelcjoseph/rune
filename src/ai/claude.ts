@@ -30,6 +30,9 @@ import {
   runBoundedProcess,
   type AiExecutorProbeResult,
 } from './bounded-process.js';
+import { scrubPathsInText } from './tool-labels.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 const log = createLogger('claude');
 
@@ -63,6 +66,23 @@ export interface ClaudeExecutorProbeOpts {
   sandboxProfilePath?: string;
 }
 
+const PROBE_STDERR_MAX_CHARS = 500;
+
+/** A bounded diagnostic may cross into a run transcript, unlike raw CLI output.
+ * Redact both Rune-process secrets and values present only in the child env. */
+function safeProbeStderr(stderr: string, env: NodeJS.ProcessEnv): string | undefined {
+  const value = redactSecrets(
+    scrubAbsolutePaths(scrubPathsInText(stderr))
+      // CLI errors can name an arbitrary host path, not only a configured Rune root.
+      .replace(/\/(?:Users|home|private|var|tmp)\/[A-Za-z0-9_./-]+/g, '<host-path>'),
+    Object.values(env).filter((item): item is string => typeof item === 'string'),
+  )
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, PROBE_STDERR_MAX_CHARS);
+  return value || undefined;
+}
+
 function boundedClaudeProbe(
   args: string[],
   opts: ClaudeExecutorProbeOpts,
@@ -89,7 +109,14 @@ export async function probeClaudeAuthentication(
   const result = await boundedClaudeProbe(['auth', 'status', '--json'], opts);
   if (result.status === 'timed-out') return { ok: false, code: 'timeout' };
   if (result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
-  if (result.exitCode !== 0) return { ok: false, code: 'not-authenticated' };
+  if (result.exitCode !== 0) {
+    const diagnostic = safeProbeStderr(result.stderr, opts.env);
+    return {
+      ok: false,
+      code: 'not-authenticated',
+      ...(diagnostic !== undefined ? { diagnostic } : {}),
+    };
+  }
   try {
     const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     return parsed['loggedIn'] === true
@@ -116,7 +143,10 @@ export async function probeClaudeModelCall(
   const result = await boundedClaudeProbe(args, opts);
   if (result.status === 'timed-out') return { ok: false, code: 'timeout' };
   if (result.status === 'spawn-error') return { ok: false, code: 'spawn-failed' };
-  if (result.exitCode !== 0) return { ok: false, code: 'nonzero-exit' };
+  if (result.exitCode !== 0) {
+    const diagnostic = safeProbeStderr(result.stderr, opts.env);
+    return { ok: false, code: 'nonzero-exit', ...(diagnostic !== undefined ? { diagnostic } : {}) };
+  }
   return result.stdout.trim() === 'OK'
     ? { ok: true }
     : { ok: false, code: 'invalid-response' };
