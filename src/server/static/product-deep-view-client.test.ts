@@ -1755,6 +1755,39 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/no-op/i);
   });
 
+  it('renders context-closeout repair and preservation details in run history', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-context-failure',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'failed',
+        endedAt: '2026-07-27T12:00:00.000Z',
+        contextFailure: {
+          reason: 'managed-heading-collision',
+          file: 'docs/projects/resolved-assay/context.md',
+          canonicalHeading: '## Interfaces & Contracts',
+          conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+          conflictingHeadingCount: 11,
+          proposedRepair: 'Merge the bodies and remove the legacy heading.',
+          checkpoint: { kind: 'committed', sha: 'abcdef1234567' },
+        },
+        disposition: {
+          kind: 'preserved',
+          reason: 'worktree preserved after context closeout failure',
+          wipSha: 'abcdef1234567',
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('docs/projects/resolved-assay/context.md');
+    expect(html).toContain('## Interfaces &amp; Contracts');
+    expect(html).toContain('11 conflicting headings');
+    expect(html).toContain('Merge the bodies and remove the legacy heading.');
+    expect(html).toContain('WIP abcdef1234567');
+    expect(html).toMatch(/Disposition preserved/i);
+  });
+
   it('labels the run roster as Agent activity, shows each agent model, and renders the classified terminal outcome from live state', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

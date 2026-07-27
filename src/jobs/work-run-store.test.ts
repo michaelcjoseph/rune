@@ -35,6 +35,7 @@ import {
   readWorkRunSummary,
 } from './work-run-store.js';
 import type { WorkRunSummary, WorkRunIndexRow } from './work-run-store.js';
+import type { ContextCloseoutFailure } from '../intent/context-closeout.js';
 import {
   EXECUTION_DIAGNOSTIC_MAX_CHARS,
   executionFailureSummary,
@@ -103,6 +104,36 @@ function makeIndexRow(overrides: Partial<WorkRunIndexRow> = {}): WorkRunIndexRow
   };
 }
 
+function makeContextFailureSummary(
+  id: string,
+  contextFailure: ContextCloseoutFailure,
+  overrides: Partial<WorkRunSummary> = {},
+): WorkRunSummary {
+  const wipSha = contextFailure.checkpoint.kind === 'committed'
+    ? contextFailure.checkpoint.sha
+    : undefined;
+  return makeSummary({
+    id,
+    outcome: 'failed',
+    reason: 'context update rejected',
+    exit: {
+      exitCode: 1,
+      signal: null,
+      cancelled: false,
+      durationMs: 1200,
+      exitFact: 'execution-failure',
+    },
+    trigger: { kind: 'failure', reason: 'context update rejected' },
+    disposition: {
+      kind: 'preserved',
+      reason: 'worktree preserved after context closeout failure',
+      ...(wipSha !== undefined ? { wipSha } : {}),
+    },
+    contextFailure,
+    ...overrides,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // §2 writeSummary — atomic temp-then-rename
 // ---------------------------------------------------------------------------
@@ -152,6 +183,205 @@ describe('writeSummary', () => {
     });
     writeSummary(join(tmpDir, summary.id), summary);
     expect(readWorkRunSummary(tmpDir, summary.id)).toEqual(summary);
+  });
+
+  it('round-trips actionable context-closeout failure evidence', () => {
+    const contextFailure = {
+      reason: 'managed-heading-collision' as const,
+      file: 'docs/projects/resolved-assay/context.md',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+      proposedRepair: 'Merge the bodies into the canonical section and remove the legacy heading.',
+      checkpoint: {
+        kind: 'committed' as const,
+        sha: 'abcdef1234567',
+      },
+    };
+    const summary = makeContextFailureSummary('mut-test-001', contextFailure);
+
+    writeSummary(join(tmpDir, summary.id), summary);
+
+    expect(readWorkRunSummary(tmpDir, summary.id)).toMatchObject({
+      trigger: { kind: 'failure' },
+      disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+      contextFailure,
+    });
+  });
+
+  it('round-trips a bounded conflict sample with its larger total count', () => {
+    const id = 'bounded-context-conflicts';
+    const checkpoint = { kind: 'committed' as const, sha: 'abcdef1234567' };
+    const contextFailure = {
+      reason: 'duplicate-managed-section' as const,
+      file: 'docs/projects/resolved-assay/context.md',
+      canonicalHeading: '## Known Risks',
+      conflictingHeadings: Array.from({ length: 10 }, () => '## Known Risks'),
+      conflictingHeadingCount: 11,
+      proposedRepair: 'Merge all competing bodies and retain one managed section.',
+      checkpoint,
+    };
+    const summary = makeContextFailureSummary(id, contextFailure);
+
+    writeSummary(join(tmpDir, id), summary);
+
+    expect(readWorkRunSummary(tmpDir, id)?.contextFailure).toEqual(contextFailure);
+  });
+
+  it.each([
+    {
+      name: 'successful outcome',
+      override: { outcome: 'branch-complete' as const },
+    },
+    {
+      name: 'success trigger',
+      override: { trigger: { kind: 'success' as const, reason: 'done' } },
+    },
+    {
+      name: 'non-execution-failure exit facts',
+      override: {
+        exit: {
+          exitCode: 0,
+          signal: null,
+          cancelled: false,
+          durationMs: 1200,
+          exitFact: 'clean-exit' as const,
+        },
+      },
+    },
+    {
+      name: 'missing exit facts',
+      override: {
+        exit: undefined,
+      },
+    },
+    {
+      name: 'removed disposition',
+      override: {
+        disposition: { kind: 'removed' as const, reason: 'worktree removed' },
+      },
+    },
+    {
+      name: 'mismatched disposition WIP SHA',
+      override: {
+        disposition: {
+          kind: 'preserved' as const,
+          reason: 'worktree preserved',
+          wipSha: 'deadbeef12345',
+        },
+      },
+    },
+  ])('rejects context failure with contradictory $name', ({ name, override }) => {
+    const id = `invalid-context-${name.replaceAll(' ', '-')}`;
+    const checkpoint = { kind: 'committed' as const, sha: 'abcdef1234567' };
+    const summary = makeContextFailureSummary(id, {
+      reason: 'managed-heading-collision',
+      file: 'docs/projects/resolved-assay/context.md',
+      proposedRepair: 'Merge the competing bodies.',
+      checkpoint,
+    }, override);
+
+    writeSummary(join(tmpDir, id), summary);
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
+
+  it('rejects unknown context reasons and canonicalizes displayed checkpoint fields', () => {
+    const runDir = join(tmpDir, 'context-shape-run');
+    const summary = makeContextFailureSummary('context-shape-run', {
+      reason: 'managed-heading-collision',
+      file: 'docs/projects/assay/context.md',
+      canonicalHeading: '## Interfaces & Contracts',
+      proposedRepair: 'Merge the bodies.',
+      checkpoint: { kind: 'committed', sha: 'abcdef1234567' },
+    });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...summary,
+      contextFailure: {
+        ...summary.contextFailure,
+        injectedHostPath: '/Users/operator/private',
+        checkpoint: {
+          ...summary.contextFailure!.checkpoint,
+          subject: '/Users/operator/private task',
+          injected: 'secret',
+        },
+      },
+    }));
+
+    const read = readWorkRunSummary(tmpDir, summary.id);
+    expect(read?.contextFailure).toEqual(summary.contextFailure);
+    expect(JSON.stringify(read?.contextFailure)).not.toContain('/Users/');
+
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...summary,
+      contextFailure: {
+        ...summary.contextFailure,
+        reason: 'invented-context-reason',
+      },
+    }));
+    expect(readWorkRunSummaryResult(tmpDir, summary.id)).toEqual({ status: 'invalid' });
+  });
+
+  it('scrubs host paths from every displayed context-failure string', () => {
+    const id = 'context-display-scrub';
+    const runDir = join(tmpDir, id);
+    const summary = makeContextFailureSummary(id, {
+      reason: 'managed-heading-collision',
+      file: 'docs/projects/assay/context.md',
+      proposedRepair: 'Repair the managed context sections.',
+      checkpoint: { kind: 'failed', diagnostic: 'git failed' },
+    });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...summary,
+      contextFailure: {
+        reason: 'managed-heading-collision',
+        file: 'docs/projects/assay//Users/operator/private/context.md',
+        canonicalHeading: '## Interfaces /Users/operator/private',
+        conflictingHeadings: ['## Canonical /Users/operator/private'],
+        proposedRepair: 'Repair /Users/operator/private/context.md.',
+        checkpoint: {
+          kind: 'failed',
+          diagnostic: 'git failed at /Users/operator/private/.git/index.lock',
+        },
+      },
+    }));
+
+    const read = readWorkRunSummary(tmpDir, id);
+
+    expect(read?.contextFailure).toBeDefined();
+    expect(JSON.stringify(read?.contextFailure)).not.toContain('/Users/');
+  });
+
+  it.each([
+    'missing-section',
+    'duplicate-managed-section',
+    'managed-heading-collision',
+    'embedded-section-header',
+    'over-budget',
+    'transcript-dump',
+    'needs-tech-lead-validation',
+    'needs-pm-validation',
+  ] as const)('accepts the exact durable context reason enum: %s', (reason) => {
+    const id = `context-reason-${reason}`;
+    const summary = makeContextFailureSummary(id, {
+      reason,
+      file: 'docs/projects/assay/context.md',
+      proposedRepair: 'Apply the bounded repair and retry closeout.',
+      checkpoint: { kind: 'already-clean' },
+    });
+
+    writeSummary(join(tmpDir, id), summary);
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toMatchObject({
+      status: 'found',
+      summary: {
+        contextFailure: {
+          reason,
+          checkpoint: { kind: 'already-clean' },
+        },
+      },
+    });
   });
 
   it('round-trips a trigger composed from a maximum-size execution diagnostic', () => {

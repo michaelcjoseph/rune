@@ -95,6 +95,7 @@ export interface WorkRunProjection {
   /** Structured terminal cause and cleanup result; absent for active/legacy runs. */
   trigger?: import('./execution-failure.js').ExecutionTerminalTrigger;
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
+  contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
 }
 
 /** One project as the cockpit presents it — lifecycle status and run-status side by side. */

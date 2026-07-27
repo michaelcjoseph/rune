@@ -11,6 +11,8 @@ type WorkRunFixture = {
   endedAt: string;
   startedAt?: string;
   transcriptExists?: boolean;
+  contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
+  disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
 };
 
 type ProductBacklogFixture = {
@@ -768,6 +770,44 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       },
     ]);
     expect(view.runs.some((row: any) => row.runId === 'run-other-product')).toBe(false);
+  });
+
+  it('preserves actionable context-closeout evidence in product run history', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const contextFailure = {
+      reason: 'managed-heading-collision' as const,
+      file: 'docs/projects/resolved-assay/context.md',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+      proposedRepair: 'Merge the bodies and remove the legacy heading.',
+      checkpoint: { kind: 'committed' as const, sha: 'abcdef1234567' },
+    };
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [{
+          runId: 'run-context-failure',
+          product: 'aura',
+          target: { kind: 'project', slug: '01-mvp' },
+          outcome: 'failed',
+          endedAt: '2026-06-23T11:45:00.000Z',
+          contextFailure,
+          disposition: {
+            kind: 'preserved',
+            reason: 'worktree preserved after context closeout failure',
+            wipSha: 'abcdef1234567',
+          },
+        }]),
+      }),
+    });
+
+    expect(view.runs[0]).toMatchObject({
+      runId: 'run-context-failure',
+      outcome: 'failed',
+      contextFailure,
+      disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+    });
   });
 
   it('projects per-project Start or Cancel controls from active work mutations only', async () => {

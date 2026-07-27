@@ -1123,6 +1123,8 @@ function readNewCockpitRecentWorkRuns(): ProductDeepViewWorkRun[] {
       outcome: summary?.outcome ?? row.outcome,
       endedAt: summary?.endedAt ?? row.endedAt,
       transcriptExists: Boolean(summary?.transcriptPath),
+      ...(summary?.contextFailure ? { contextFailure: summary.contextFailure } : {}),
+      ...(summary?.disposition ? { disposition: summary.disposition } : {}),
       ...(isWritingRun && summary?.branch ? { branch: summary.branch } : {}),
       ...(isWritingRun && summaryMetadata?.routePath ? { routePath: summaryMetadata.routePath } : {}),
       ...(isWritingRun && summaryMetadata?.writingStage ? { writingStage: summaryMetadata.writingStage } : {}),

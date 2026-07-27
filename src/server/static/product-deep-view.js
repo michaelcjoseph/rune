@@ -449,6 +449,13 @@ function renderActiveRun(activeRun, liveRuns = {}) {
   `</article>`;
 }
 
+function contextFailureWipSha(run) {
+  if (run.disposition?.wipSha) return run.disposition.wipSha;
+  return run.contextFailure?.checkpoint?.kind === 'committed'
+    ? run.contextFailure.checkpoint.sha
+    : '';
+}
+
 function renderRuns(view, liveRuns = {}) {
   const history = list(view.runs).map(run =>
     `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
@@ -461,6 +468,27 @@ function renderRuns(view, liveRuns = {}) {
         renderWritingRunMeta(run) +
         `<time>${escHtml(run.endedAt)}</time>` +
       `</div>` +
+      (run.contextFailure
+        ? `<div class="deep-run-meta deep-run-context-failure">` +
+            `<span>${escHtml(run.contextFailure.file || 'context.md')}</span>` +
+            (run.contextFailure.canonicalHeading
+              ? `<span>${escHtml(run.contextFailure.canonicalHeading)}</span>`
+              : '') +
+            (run.contextFailure.conflictingHeadingCount
+              ? `<span>${escHtml(run.contextFailure.conflictingHeadingCount)} conflicting headings</span>`
+              : '') +
+            `<span>Repair: ${escHtml(run.contextFailure.proposedRepair || 'repair the managed context sections')}</span>` +
+            (contextFailureWipSha(run)
+              ? `<span>WIP ${escHtml(contextFailureWipSha(run))}</span>`
+              : '') +
+            (run.contextFailure.checkpoint?.kind === 'failed'
+              ? `<span>Checkpoint failed: ${escHtml(run.contextFailure.checkpoint.diagnostic || 'unknown failure')}</span>`
+              : '') +
+            (run.disposition?.kind
+              ? `<span>Disposition ${escHtml(run.disposition.kind)}</span>`
+              : '') +
+          `</div>`
+        : '') +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +
     `</article>`
   ).join('');

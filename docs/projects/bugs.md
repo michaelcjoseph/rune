@@ -1,24 +1,5 @@
 ## Active
 
-- [ ] **Context closeout rejects legacy project headings instead of safely migrating or reporting the exact repair, leaving reviewed work dirty and uncommitted.**
-  - **What is broken.** The same Assay run stopped with `context update rejected: missing-section` after entering closeout. Its `context.md` used `Canonical Interfaces`; Rune's canonical contract requires `Interfaces & Contracts`. No context change, checkbox tick, or commit was made, so the reviewed implementation remained dirty and unrecorded.
-
-  - **Root cause.** `CONTEXT_SECTIONS` in `src/intent/project-context.ts` requires an exact `## Interfaces & Contracts` heading. `applyContextUpdate()` only appends a missing section when that section itself is updated; the neutral closeout update touched no sections and then failed its global required-section predicate. `performCloseout()` computes this document transform before validation and commit, and maps the typed reason to the opaque terminal string `context update rejected: missing-section`. There is no migration for known legacy headings, no error metadata naming the missing heading/file, and no recoverable checkpoint before optional bookkeeping.
-
-  - **Expected behavior.** Context update is an upsert: known legacy headings migrate to the canonical heading, and genuinely absent managed sections are created with a safe placeholder or structured update. If policy requires a human repair, the run blocks before closeout with the file path, missing heading, and proposed repair. Reviewed work is preserved with a WIP checkpoint when a non-code closeout mutation prevents completion.
-
-  - **Reproduction steps.**
-    1. Create a project `context.md` with `Current State`, `Key Decisions`, `Canonical Interfaces`, `Known Risks`, and `Next Task Handoff`.
-    2. Run a task whose evidence produces the current neutral context update.
-    3. Reach `performCloseout()`.
-    4. Observe `applyContextUpdate()` reject the document as `missing-section` and the run finish dirty-uncommitted.
-
-  - **Acceptance criteria.**
-    - A legacy `## Canonical Interfaces` heading is migrated or treated as the canonical `## Interfaces & Contracts` section without losing its body.
-    - Any absent managed section is safely created by the upsert path, and all five canonical sections exist afterward exactly once.
-    - A non-migratable context error reports the project context file, exact missing heading, and proposed repair in the terminal reason and Cockpit surface.
-    - Context failure cannot discard reviewed work: Rune creates a labeled WIP/recovery checkpoint before terminal preservation when no safe automatic repair exists.
-    - Tests cover legacy migration, genuinely missing-section upsert, diagnostic specificity, and a closeout failure that preserves the implementation checkpoint.
 - [ ] **Orchestrated Python worktrees have no declared or verified dependency-provisioning contract, so scaffold tasks can be impossible to validate.**
   - **What is broken.** Assay Task 1 required a new `uv`-managed Python package, but the assigned run had no `uv`, `pytest`, `ruff`, or `jsonschema`; outbound installation was blocked. The runtime provisions only the repository worktree and Node dependency link. It does not declare a Python runtime, package-manager availability, offline cache, or dependency-install authorization before the QA/coder workflow starts. The reported `uv.lock` therefore has no demonstrated provenance or resolvability.
 
@@ -743,3 +724,12 @@
     - Follow-up review hardening routes the execution agent's first Git snapshot and tech-lead repair staging through the same credential-stripped canonical boundary, rejects compact shell operators, prevents critique passes from changing reviewed validation policies, rebases related-test paths to `validationCwd`, carries that directory into repair feedback, and preserves structured executable evidence.
     - Added regression coverage for empty and malformed commands, missing executables, invalid directories and symlink escapes, dependency-install failure, validation ordering, policy round trips, Assay configuration, tracked/untracked reviewer coverage, narrowed diffs, and product-controlled Git filters.
     - Verification (2026-07-26): `npm run build`; focused planning, task-selection, execution-agent, team-task, project-orchestrator, gate-runtime, sandbox, and orchestrated-runner suites; full suite `340` files / `5609` passing tests / `8` todos.
+- [x] **Context closeout rejects legacy project headings instead of safely migrating or reporting the exact repair, leaving reviewed work dirty and uncommitted.** _(Fixed 2026-07-27.)_
+  - **What was broken.** An Assay run reached closeout with the legacy `## Canonical Interfaces` heading. Rune required `## Interfaces & Contracts`, rejected the neutral update as `missing-section`, and left the reviewed implementation dirty and uncheckpointed.
+
+  - **Resolution.**
+    - Context updates now normalize the managed document before mutation: the exact legacy heading is renamed in place with its body preserved, absent canonical sections are appended with `_None yet._`, and all five canonical headings must then occur exactly once.
+    - Duplicate canonical headings, duplicate legacy headings, legacy/canonical collisions, and managed headings embedded in update bodies fail with structured canonical-heading, conflict, and bounded repair metadata instead of an opaque string or heuristic merge.
+    - A context transform failure performs a discriminated WIP checkpoint first, writes neither `context.md` nor `tasks.md`, creates no closeout commit, and terminates as a failed operational hold with a preserved disposition—not a `blocked-on-human` finding park. The durable summary and Cockpit surfaces show the resolved worktree-relative file, repair evidence, checkpoint diagnostic or WIP SHA, and disposition without host paths.
+    - Worktree provisioning rejects project/spec/tasks/context symlinks or resolved escapes. Managed reads and closeout writes revalidate containment after agent execution and use `O_NOFOLLOW`; both closeout paths are checked before either write, preventing a post-workflow symlink swap from modifying operator files or partially advancing context.
+    - Verification (2026-07-27): code, security, and architecture reviews passed after fixes; simplification and docs-sync completed; `npm run build`; two focused rounds including `440` passing tests; final focused regression set `140` passing tests; full suite `340` files / `5642` passing tests / `8` todos.

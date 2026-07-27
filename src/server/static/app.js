@@ -872,8 +872,17 @@
         ? ` <span class="workrun-reason">· ${escHtml(wr.disposition.kind)}` +
           `${wr.disposition.wipSha ? ` · WIP ${escHtml(wr.disposition.wipSha)}` : ''}</span>`
         : '';
+      const contextFailure = wr.contextFailure
+        ? `<div class="workrun-reason">Context: ${escHtml(wr.contextFailure.file || 'context.md')}` +
+          `${wr.contextFailure.canonicalHeading ? ` · ${escHtml(wr.contextFailure.canonicalHeading)}` : ''}` +
+          ` · Repair: ${escHtml(wr.contextFailure.proposedRepair || 'repair the managed context sections')}` +
+          `${wr.contextFailure.checkpoint?.kind === 'failed'
+            ? ` · Checkpoint failed: ${escHtml(wr.contextFailure.checkpoint.diagnostic || 'unknown failure')}`
+            : ''}</div>`
+        : '';
       return `<div class="cockpit-workrun">` +
         `<div class="cockpit-workrun-line"><span class="${escHtml(cls)}">${escHtml(wr.outcome)}</span>${reason}${disposition}${link}</div>` +
+        contextFailure +
         `</div>`;
     }
     // Active: elapsed since start + last-N output lines. `running · ` is a

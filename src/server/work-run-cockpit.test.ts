@@ -238,6 +238,7 @@ const AUTH_COOKIE = 'rune-auth=test-secret';
 const RUN_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const RUN_NO_TRANSCRIPT = 'ffffffff-1111-2222-3333-444444444444';
 const ORCH_RUN_ID = 'orch-run-active-001';
+const CONTEXT_FAILURE_RUN_ID = 'context-failure-run-001';
 
 const SUMMARY_FIXTURE = {
   id: RUN_ID,
@@ -299,6 +300,37 @@ beforeAll(async () => {
   writeFileSync(
     join(WORK_RUNS_DIR, RUN_NO_TRANSCRIPT, 'summary.json'),
     JSON.stringify({ ...SUMMARY_FIXTURE, id: RUN_NO_TRANSCRIPT }, null, 2),
+  );
+  mkdirSync(join(WORK_RUNS_DIR, CONTEXT_FAILURE_RUN_ID), { recursive: true });
+  writeFileSync(
+    join(WORK_RUNS_DIR, CONTEXT_FAILURE_RUN_ID, 'summary.json'),
+    JSON.stringify({
+      ...SUMMARY_FIXTURE,
+      id: CONTEXT_FAILURE_RUN_ID,
+      outcome: 'failed',
+      reason: 'context update rejected',
+      exit: {
+        exitCode: 1,
+        signal: null,
+        cancelled: false,
+        durationMs: 10,
+        exitFact: 'execution-failure',
+      },
+      trigger: { kind: 'failure', reason: 'context update rejected' },
+      disposition: {
+        kind: 'preserved',
+        reason: 'worktree preserved after context closeout failure',
+        wipSha: 'abcdef1234567',
+      },
+      contextFailure: {
+        reason: 'managed-heading-collision',
+        file: 'docs/projects/resolved-assay/context.md',
+        canonicalHeading: '## Interfaces & Contracts',
+        conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+        proposedRepair: 'Merge the bodies and remove the legacy heading.',
+        checkpoint: { kind: 'committed', sha: 'abcdef1234567' },
+      },
+    }, null, 2),
   );
   // Also seed the rolling index (logs/work-runs/index.jsonl). The Phase 5
   // cockpit projection may source recent runs via `readRecentIndex` rather
@@ -497,6 +529,25 @@ describe('GET /api/work-runs/:id — run record (§5.3)', () => {
     const rec = res.body as Record<string, unknown>;
     expect(rec.id).toBe(RUN_ID);
     expect(rec.outcome).toBe('partial');
+  });
+
+  it('returns actionable context-closeout and preservation evidence for inspection', async () => {
+    const res = await makeRequest(port, `/api/work-runs/${CONTEXT_FAILURE_RUN_ID}`, {
+      headers: { Cookie: AUTH_COOKIE },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      outcome: 'failed',
+      trigger: { kind: 'failure' },
+      disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+      contextFailure: {
+        file: 'docs/projects/resolved-assay/context.md',
+        canonicalHeading: '## Interfaces & Contracts',
+        proposedRepair: 'Merge the bodies and remove the legacy heading.',
+      },
+    });
+    expect(bodyText(res.body)).not.toContain('/Users/');
   });
 
   it('returns 404 for an unknown run id', async () => {

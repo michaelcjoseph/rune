@@ -38,6 +38,8 @@ export interface RunSummaryRow {
   outcome: ProductDeepViewOutcome;
   endedAt: string;
   transcriptUrl?: string;
+  contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
+  disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
   branch?: string;
   routePath?: string;
   writingStage?: string;
@@ -110,6 +112,8 @@ export interface ProductDeepViewWorkRun {
   endedAt: string;
   transcriptExists?: boolean;
   transcriptUrl?: string | null;
+  contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
+  disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
   branch?: string;
   routePath?: string;
   writingStage?: string;
@@ -462,6 +466,8 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       };
       const transcriptUrl = transcriptUrlForRun(run, id);
       if (transcriptUrl) row.transcriptUrl = transcriptUrl;
+      if (run.contextFailure) row.contextFailure = run.contextFailure;
+      if (run.disposition) row.disposition = run.disposition;
       Object.assign(row, writingRunMetadata(run));
       return row;
     }) : [],

@@ -33,6 +33,11 @@ import {
   type SandboxSpec,
 } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  assertManagedWorktreeDirectory,
+  assertManagedWorktreeFile,
+  readManagedWorktreeFile,
+} from './managed-worktree-fs.js';
 
 const log = createLogger('sandbox-runtime');
 
@@ -364,7 +369,8 @@ export type WorktreeProvisioningStage =
   | 'git-registration'
   | 'project-directory'
   | 'spec-readable'
-  | 'tasks-readable';
+  | 'tasks-readable'
+  | 'context-readable';
 
 export type WorktreeProvisioningVerification =
   | { ok: true; projectDir?: string; specContent?: string; tasksContent?: string }
@@ -382,10 +388,12 @@ export interface VerifyWorktreeProvisioningOpts {
 export async function verifyWorktreeProvisioning(
   opts: VerifyWorktreeProvisioningOpts,
 ): Promise<WorktreeProvisioningVerification> {
+  let resolvedWorktree: string;
   try {
     if (!existsSync(opts.worktree) || !statSync(opts.worktree).isDirectory()) {
       throw new Error(`worktree directory is missing: ${opts.worktree}`);
     }
+    resolvedWorktree = realpathSync(opts.worktree);
   } catch (err) {
     return { ok: false, stage: 'target-directory', cause: errorFrom(err) };
   }
@@ -417,21 +425,32 @@ export async function verifyWorktreeProvisioning(
         try { return statSync(path).isDirectory(); } catch { return false; }
       });
     if (!projectDir) throw new Error(`project directory not found: ${opts.project}`);
+    assertManagedWorktreeDirectory(resolvedWorktree, projectDir, 'project directory');
   } catch (err) {
     return { ok: false, stage: 'project-directory', cause: errorFrom(err) };
   }
 
   let specContent: string;
   try {
-    specContent = readFileSync(join(projectDir, 'spec.md'), 'utf8');
+    const specPath = join(projectDir, 'spec.md');
+    specContent = readManagedWorktreeFile(resolvedWorktree, specPath, false);
   } catch (err) {
     return { ok: false, stage: 'spec-readable', cause: errorFrom(err) };
   }
   let tasksContent: string;
   try {
-    tasksContent = readFileSync(join(projectDir, 'tasks.md'), 'utf8');
+    const tasksPath = join(projectDir, 'tasks.md');
+    tasksContent = readManagedWorktreeFile(resolvedWorktree, tasksPath, false);
   } catch (err) {
     return { ok: false, stage: 'tasks-readable', cause: errorFrom(err) };
+  }
+  const contextPath = join(projectDir, 'context.md');
+  try {
+    // A missing context file is repairable by the curator's upsert. An
+    // existing or dangling symlink is not.
+    assertManagedWorktreeFile(resolvedWorktree, contextPath, true);
+  } catch (err) {
+    return { ok: false, stage: 'context-readable', cause: errorFrom(err) };
   }
   return { ok: true, projectDir, specContent, tasksContent };
 }

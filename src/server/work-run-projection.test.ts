@@ -90,6 +90,42 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
     });
   });
 
+  it('projects actionable context-closeout failure evidence for the Cockpit list', () => {
+    const id = 'context-closeout-failure-001';
+    mkdirSync(join(dir, id), { recursive: true });
+    const contextFailure = {
+      reason: 'managed-heading-collision',
+      file: 'docs/projects/resolved-assay/context.md',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+      proposedRepair: 'Merge the bodies and remove the legacy heading.',
+      checkpoint: { kind: 'committed', sha: 'abcdef1234567' },
+    };
+    writeFileSync(join(dir, id, 'summary.json'), JSON.stringify({
+      id, project: '02-growth', product: 'aura', outcome: 'failed',
+      reason: 'context update rejected',
+      exit: { exitCode: 1, signal: null, cancelled: false, durationMs: 10, exitFact: 'execution-failure' },
+      workProduct: { commitCount: 1, commitShas: ['abcdef1234567'], filesChanged: ['src/a.ts'],
+        diffstat: '', dirty: false, untracked: false,
+        transitions: { tasksNewlyChecked: 0, tasksRemaining: 1, tasksAdded: 0, tasksRemoved: 0 } },
+      baseSha: 'base', branch: 'rune-work/demo', startedAt: '2026-07-22T00:00:00.000Z',
+      endedAt: '2026-07-22T00:00:01.000Z', transcriptPath: '', forensicsPath: '',
+      trigger: { kind: 'failure', reason: 'context update rejected' },
+      disposition: { kind: 'preserved', reason: 'worktree preserved', wipSha: 'abcdef1234567' },
+      contextFailure,
+    }));
+    writeFileSync(indexFile, `${JSON.stringify({
+      id, project: '02-growth', outcome: 'failed', durationMs: 10,
+      startedAt: '2026-07-22T00:00:00.000Z', endedAt: '2026-07-22T00:00:01.000Z',
+    })}\n`);
+
+    expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
+      outcome: 'failed',
+      disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+      contextFailure,
+    });
+  });
+
   it('projects an active run that is absent from index.jsonl, with live lastOutput + startedAt', () => {
     const id = 'aaaaaaaa-1111-2222-3333-444444444444';
     seedTranscript(id, [

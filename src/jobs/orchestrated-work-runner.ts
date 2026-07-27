@@ -32,7 +32,14 @@
  * regression in team-task-deps.test.ts pins the production binding.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
@@ -54,6 +61,10 @@ import {
   type OrchestrationResult,
   type OrchestrationTerminalBugEntry,
 } from '../intent/project-orchestrator.js';
+import type {
+  ContextCloseoutFailure,
+  WipCheckpointResult,
+} from '../intent/context-closeout.js';
 import { reconstructRun, type RunReconstruction } from '../intent/orch-reconstruct.js';
 import {
   withFileLock,
@@ -70,7 +81,16 @@ import type { TaskValidationFailure } from '../intent/task-validation.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
-import { VALID_SLUG, worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
+import {
+  VALID_SLUG,
+  worktreePathFor,
+  type SandboxSpec,
+} from '../intent/sandbox.js';
+import {
+  assertManagedWorktreeFile,
+  readManagedWorktreeFile,
+  writeManagedWorktreeFile,
+} from './managed-worktree-fs.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import {
@@ -594,11 +614,10 @@ export async function parkInFlightOrchestratedRuns(
   return result;
 }
 
-/** Best-effort WIP commit of a dirty worktree — mirrors the closeout
- *  `commitWip` dep. Returns the commit sha; null when the tree is clean or on
- *  any git failure (preservation is best-effort; the caller's own outcome —
- *  park or resume — must land regardless). Shared by the shutdown parker and
- *  the recovery-redispatch restart salvage. */
+/** Best-effort WIP commit of a dirty worktree for shutdown/recovery flows.
+ *  Returns the commit sha; intentionally collapses a clean tree and git failure
+ *  to null because these callers must park/resume regardless. Closeout uses the
+ *  distinct discriminated `WipCheckpointResult`. */
 async function commitWorktreeWip(
   runGit: GitRunner,
   cwd: string,
@@ -636,7 +655,7 @@ function withTerminalDisposition(
   const durable: ExecutionTerminalDisposition = {
     kind: disposition.kind,
     reason: sanitizeExecutionDiagnostic(disposition.reason),
-    ...(disposition.kind === 'parked' && disposition.wipSha ? { wipSha: disposition.wipSha } : {}),
+    ...(disposition.wipSha ? { wipSha: disposition.wipSha } : {}),
   };
   data['disposition'] = durable;
   if (disposition.kind === 'parked' && sandbox !== undefined) {
@@ -951,6 +970,16 @@ function buildOrchestrationDeps(args: {
   const tasksPath = join(projectDir, 'tasks.md');
   const contextPath = join(projectDir, 'context.md');
   const cwd = sandbox.worktree;
+  const relativeContextFile = relative(cwd, contextPath).replaceAll('\\', '/');
+  const contextFile = relativeContextFile === '..' ||
+      relativeContextFile.startsWith('../') ||
+      relativeContextFile.startsWith('/')
+    ? 'context.md'
+    : redactSecrets(
+        scrubAbsolutePaths(
+          scrubPathsInText(relativeContextFile),
+        ),
+      );
   const taskWorkflowRunner = args.createTaskWorkflowRunner({
     sandbox,
     productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -1000,6 +1029,7 @@ function buildOrchestrationDeps(args: {
     product,
     branch,
     worktreePath: sandbox.worktree,
+    contextFile,
     baseBranch,
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
     ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
@@ -1031,9 +1061,9 @@ function buildOrchestrationDeps(args: {
       });
     },
 
-    readTasksMd: async () => readFileSafe(tasksPath),
-    readContextMd: async () => readFileSafe(contextPath),
-    readSpec: async () => readFileSafe(specPath),
+    readTasksMd: async () => readManagedWorktreeFile(cwd, tasksPath, false),
+    readContextMd: async () => readManagedWorktreeFile(cwd, contextPath, true),
+    readSpec: async () => readManagedWorktreeFile(cwd, specPath, false),
 
     // Phase 8: the LIVE per-task role-spawn binding — runTeamTaskWorkflow over
     // the production TeamTaskDeps (execution-agent artifact sessions, charter
@@ -1057,8 +1087,14 @@ function buildOrchestrationDeps(args: {
       sections: {},
       ...(evidence.handoffNotes.length > 0 ? { handoffNotes: evidence.handoffNotes } : {}),
     }),
-    writeContextMd: async (content: string) => writeFileSync(contextPath, content, 'utf8'),
-    writeTasksMd: async (content: string) => writeFileSync(tasksPath, content, 'utf8'),
+    writeContextMd: async (content: string) => {
+      assertCloseoutManagedPaths(cwd, tasksPath, contextPath);
+      writeManagedWorktreeFile(cwd, contextPath, content, true);
+    },
+    writeTasksMd: async (content: string) => {
+      assertCloseoutManagedPaths(cwd, tasksPath, contextPath);
+      writeManagedWorktreeFile(cwd, tasksPath, content, false);
+    },
 
     // Task-scoped closeout checks use the product policy's short-budget
     // strategy. The project-level finalizer independently owns the full gate.
@@ -1255,16 +1291,16 @@ function buildOrchestrationDeps(args: {
       const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd });
       return { sha: stdout.trim(), subject: message };
     },
-    // Best-effort WIP preservation when the closeout repair loop exhausts: the
-    // held run keeps branch + worktree, but only a commit on the stable branch
-    // survives a later manual worktree cleanup and is what the resume path
-    // checks back out. Null (nothing to commit / commit failed) never blocks
-    // the hold.
-    commitWip: async (task: SelectedTask): Promise<CloseoutCommit | null> => {
-      const message = `rune(${product}): WIP — closeout blocked — ${task.text}`.slice(0, 200);
+    // WIP preservation checkpoint before a closeout terminal. The
+    // discriminated result keeps "already clean" distinct from a failed git
+    // operation so terminal evidence never implies a checkpoint that did not
+    // actually land.
+    commitWip: async (task: SelectedTask): Promise<WipCheckpointResult> => {
+      const safeTaskText = sanitizeExecutionDiagnostic(task.text);
+      const message = `rune(${product}): WIP — closeout blocked — ${safeTaskText}`.slice(0, 200);
       try {
         const { stdout } = await runGit(['status', '--porcelain'], { cwd });
-        if (stdout.trim() === '') return null; // nothing to preserve
+        if (stdout.trim() === '') return { kind: 'already-clean' };
         await runGit(['add', '-A'], { cwd });
         await runGit(['commit', '-m', message], { cwd });
         const { stdout: sha } = await runGit(['rev-parse', 'HEAD'], { cwd });
@@ -1274,16 +1310,17 @@ function buildOrchestrationDeps(args: {
             event: 'closeout-wip-commit',
             taskId: task.id,
             commitSha: sha.trim(),
-            line: `WIP preserved for ${task.text}: ${sha.trim().slice(0, 7)}`,
+            line: `WIP preserved for ${safeTaskText}: ${sha.trim().slice(0, 7)}`,
           },
         });
-        return { sha: sha.trim(), subject: message };
+        return { kind: 'committed', sha: sha.trim() };
       } catch (err) {
+        const diagnostic = sanitizeExecutionDiagnostic(err);
         log.warn('orchestrated-work-runner: WIP commit failed', {
           id: descriptor.id,
-          error: (err as Error).message,
+          error: diagnostic,
         });
-        return null;
+        return { kind: 'failed', diagnostic };
       }
     },
     verifyCleanWorktree: async (): Promise<boolean> => {
@@ -1295,6 +1332,16 @@ function buildOrchestrationDeps(args: {
   };
 }
 
+function assertCloseoutManagedPaths(
+  worktree: string,
+  tasksPath: string,
+  contextPath: string,
+): void {
+  assertManagedWorktreeFile(worktree, tasksPath, false);
+  assertManagedWorktreeFile(worktree, contextPath, true);
+}
+
+/** Best-effort reader for non-authoritative diagnostics and canonical backlog I/O. */
 function readFileSafe(path: string): string {
   try {
     return existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -1757,16 +1804,29 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         terminalization.preserveWorktree ||
         terminalization.finalizerOwnsTeardown
       ) {
-        const alreadyParked = ((terminal.data ?? {}) as Record<string, unknown>)['parked'] === true;
+        const terminalData = (terminal.data ?? {}) as Record<string, unknown>;
+        const alreadyParked = terminalData['parked'] === true;
+        const contextFailure = terminalData['contextFailure'];
+        const checkpoint = contextFailure && typeof contextFailure === 'object'
+          ? (contextFailure as Record<string, unknown>)['checkpoint']
+          : undefined;
+        const wipSha = checkpoint && typeof checkpoint === 'object' &&
+            (checkpoint as Record<string, unknown>)['kind'] === 'committed' &&
+            typeof (checkpoint as Record<string, unknown>)['sha'] === 'string'
+          ? String((checkpoint as Record<string, unknown>)['sha'])
+          : undefined;
         const disposition: ExecutionTerminalDisposition = {
           kind: alreadyParked ? 'parked' : 'preserved',
           reason: alreadyParked
             ? 'worktree parked by orchestration result'
+            : contextFailure !== undefined
+              ? 'worktree preserved after context closeout failure'
             : terminalization.finalizerOwnsTeardown
             ? 'terminal worktree lifecycle owned by finalizer'
             : isMutationShutdownInProgress()
               ? 'worktree preserved for shutdown recovery'
               : 'worktree preserved by orchestration result',
+          ...(wipSha !== undefined ? { wipSha } : {}),
         };
         terminalization.markDispositionResolved(disposition);
         return withTerminalDisposition(terminal, disposition);
@@ -2680,6 +2740,11 @@ function buildOrchestratedSummary(args: {
   const disposition = isExecutionTerminalDisposition(data['disposition'])
     ? data['disposition']
     : undefined;
+  const contextFailure = data['contextFailure'] &&
+      typeof data['contextFailure'] === 'object' &&
+      !Array.isArray(data['contextFailure'])
+    ? data['contextFailure'] as ContextCloseoutFailure
+    : undefined;
   const cancelReason = trigger.kind === 'cancellation' ? trigger.cancellationSource : data['cancelReason'];
   const exit: ExitFacts = {
     exitCode:
@@ -2723,6 +2788,7 @@ function buildOrchestratedSummary(args: {
     ...(cancellation !== undefined ? { cancellation } : {}),
     trigger,
     ...(disposition !== undefined ? { disposition } : {}),
+    ...(contextFailure !== undefined ? { contextFailure } : {}),
   };
 }
 
@@ -2859,7 +2925,11 @@ function mapResultToTerminal(
   }
   if (result.kind === 'held') {
     const executionFailure = result.executionFailure;
-    return term(mutationId, executionFailure === undefined ? 'completed' : 'failed', {
+    const contextFailure = result.contextFailure;
+    return term(
+      mutationId,
+      executionFailure === undefined && contextFailure === undefined ? 'completed' : 'failed',
+      {
       ...base,
       held: true,
       reason: result.reason ?? 'branch-complete; held for the Project 15 finalizer',
@@ -2872,6 +2942,7 @@ function mapResultToTerminal(
       ...(executionFailure !== undefined ? {
         executionFailure,
       } : {}),
+      ...(contextFailure !== undefined ? { contextFailure } : {}),
     });
   }
   if (result.kind === 'cancelled') {

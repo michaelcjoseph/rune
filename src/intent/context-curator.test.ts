@@ -23,7 +23,11 @@ import {
   CONTEXT_UPDATE_MAX_CHARS,
   type ContextUpdate,
 } from './context-curator.js';
-import { seedProjectContext, hasRequiredSections } from './project-context.js';
+import {
+  CONTEXT_SECTIONS,
+  seedProjectContext,
+  hasRequiredSections,
+} from './project-context.js';
 
 const SEED = seedProjectContext({
   product: 'aura',
@@ -50,13 +54,168 @@ describe('context-curator — section preservation', () => {
     }
   });
 
-  it('an update that would drop a required section is rejected', () => {
-    // A malformed update whose section map somehow nukes a header must not pass.
-    // We model that as a base content that is already missing a section.
-    const broken = SEED.replace('## Known Risks', '## Renamed Risks');
-    const res = applyContextUpdate(broken, neutralUpdate());
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe('missing-section');
+  it('migrates the exact legacy Canonical Interfaces heading in place without losing its body', () => {
+    const legacy = SEED.replace(
+      '## Interfaces & Contracts\n\n_None yet._',
+      '## Canonical Interfaces\n\nPOST /v1/assays accepts a signed manifest.',
+    );
+
+    const res = applyContextUpdate(legacy, neutralUpdate({ sections: {} }));
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain(
+        '## Interfaces & Contracts\n\nPOST /v1/assays accepts a signed manifest.',
+      );
+      expect(res.content).not.toContain('## Canonical Interfaces');
+      for (const section of CONTEXT_SECTIONS) {
+        expect(res.content.match(new RegExp(`^## ${section.replace(/[&]/g, '\\&')}$`, 'gm')))
+          .toHaveLength(1);
+      }
+    }
+  });
+
+  it('upserts every absent canonical section with the explicit placeholder', () => {
+    const partial = [
+      '# Project Context: Assay',
+      '',
+      '## Current State',
+      '',
+      'Reviewed implementation is ready for closeout.',
+      '',
+    ].join('\n');
+
+    const res = applyContextUpdate(partial, neutralUpdate({ sections: {} }));
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('Reviewed implementation is ready for closeout.');
+      for (const section of CONTEXT_SECTIONS) {
+        expect(res.content.match(new RegExp(`^## ${section.replace(/[&]/g, '\\&')}$`, 'gm')))
+          .toHaveLength(1);
+      }
+      expect(res.content.match(/^_None yet\._$/gm)).toHaveLength(4);
+    }
+  });
+
+  it('rejects a duplicate canonical heading with actionable structured diagnostics', () => {
+    const duplicate = `${SEED.trimEnd()}\n\n## Known Risks\n\nA second competing body.\n`;
+
+    const res = applyContextUpdate(duplicate, neutralUpdate({ sections: {} }));
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'duplicate-managed-section',
+      canonicalHeading: '## Known Risks',
+      conflictingHeadings: ['## Known Risks', '## Known Risks'],
+      proposedRepair: expect.stringMatching(/keep exactly one|merge.*one/i),
+    });
+    if (!res.ok) {
+      expect(String((res as unknown as Record<string, unknown>)['proposedRepair']).length)
+        .toBeLessThanOrEqual(500);
+    }
+  });
+
+  it('bounds duplicate diagnostics while preserving the total conflicting-heading count', () => {
+    const duplicateBodies = Array.from(
+      { length: 10 },
+      (_, index) => `## Known Risks\n\nCompeting body ${index + 2}.`,
+    ).join('\n\n');
+
+    const res = applyContextUpdate(
+      `${SEED.trimEnd()}\n\n${duplicateBodies}\n`,
+      neutralUpdate({ sections: {} }),
+    );
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'duplicate-managed-section',
+      canonicalHeading: '## Known Risks',
+      conflictingHeadingCount: 11,
+      conflictingHeadings: Array.from({ length: 10 }, () => '## Known Risks'),
+    });
+  });
+
+  it('rejects a legacy/canonical collision instead of guessing how to merge the bodies', () => {
+    const collision = `${SEED.trimEnd()}\n\n## Canonical Interfaces\n\nLegacy competing body.\n`;
+
+    const res = applyContextUpdate(collision, neutralUpdate({ sections: {} }));
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'managed-heading-collision',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+      proposedRepair: expect.stringMatching(/merge|remove|keep/i),
+    });
+    if (!res.ok) {
+      expect(String((res as unknown as Record<string, unknown>)['proposedRepair']).length)
+        .toBeLessThanOrEqual(500);
+    }
+  });
+
+  it.each([
+    {
+      name: 'duplicate canonical plus legacy',
+      extra: [
+        '## Interfaces & Contracts',
+        '',
+        'Second canonical body.',
+        '',
+        '## Canonical Interfaces',
+        '',
+        'Legacy body.',
+      ].join('\n'),
+      conflicts: [
+        '## Interfaces & Contracts',
+        '## Interfaces & Contracts',
+        '## Canonical Interfaces',
+      ],
+    },
+    {
+      name: 'canonical plus duplicate legacy',
+      extra: [
+        '## Canonical Interfaces',
+        '',
+        'First legacy body.',
+        '',
+        '## Canonical Interfaces',
+        '',
+        'Second legacy body.',
+      ].join('\n'),
+      conflicts: [
+        '## Interfaces & Contracts',
+        '## Canonical Interfaces',
+        '## Canonical Interfaces',
+      ],
+    },
+  ])('reports every competing occurrence for $name', ({ extra, conflicts }) => {
+    const res = applyContextUpdate(
+      `${SEED.trimEnd()}\n\n${extra}\n`,
+      neutralUpdate({ sections: {} }),
+    );
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'managed-heading-collision',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: conflicts,
+      proposedRepair: expect.stringMatching(/all competing bodies.*exactly one/i),
+    });
+  });
+
+  it('upserts a true canonical heading when malformed text splits the heading across lines', () => {
+    const malformed = SEED.replace(
+      '## Interfaces & Contracts',
+      '##\nInterfaces & Contracts',
+    );
+    const res = applyContextUpdate(malformed, neutralUpdate({ sections: {} }));
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content.match(/^## Interfaces & Contracts$/gm)).toHaveLength(1);
+      expect(res.content).toContain('##\nInterfaces & Contracts');
+    }
   });
 });
 
@@ -90,8 +249,32 @@ describe('context-curator — transcript-dump rejection', () => {
       SEED,
       neutralUpdate({ sections: { 'Current State': 'Done.\n\n## Known Risks\n\ninjected' } }),
     );
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe('embedded-section-header');
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'embedded-section-header',
+      canonicalHeading: '## Known Risks',
+      conflictingHeadings: ['## Known Risks'],
+      proposedRepair: expect.stringMatching(/remove.*heading|body/i),
+    });
+  });
+
+  it('rejects a body that embeds the legacy managed heading', () => {
+    const res = applyContextUpdate(
+      SEED,
+      neutralUpdate({
+        sections: {
+          'Next Task Handoff': 'Continue the rollout.\n\n## Canonical Interfaces\n\ninjected',
+        },
+      }),
+    );
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'embedded-section-header',
+      canonicalHeading: '## Interfaces & Contracts',
+      conflictingHeadings: ['## Canonical Interfaces'],
+      proposedRepair: expect.stringMatching(/remove.*heading|body/i),
+    });
   });
 });
 

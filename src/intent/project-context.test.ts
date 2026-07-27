@@ -103,4 +103,17 @@ describe('project-context — hasRequiredSections', () => {
   it('rejects an empty string', () => {
     expect(hasRequiredSections('')).toBe(false);
   });
+
+  it('rejects a document where a canonical section occurs more than once', () => {
+    const duplicated = `${seedProjectContext(BASE_SEED).trimEnd()}\n\n## Known Risks\n\nCompeting body.\n`;
+    expect(hasRequiredSections(duplicated)).toBe(false);
+  });
+
+  it('does not treat a heading split across lines as a canonical heading', () => {
+    const split = seedProjectContext(BASE_SEED).replace(
+      '## Interfaces & Contracts',
+      '##\nInterfaces & Contracts',
+    );
+    expect(hasRequiredSections(split)).toBe(false);
+  });
 });

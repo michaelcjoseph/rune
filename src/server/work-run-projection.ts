@@ -115,7 +115,10 @@ function buildProjection(
   outcome: WorkRunOutcome | null,
   reason: string | null,
   startedAt: string,
-  terminal?: Pick<NonNullable<ReturnType<typeof readWorkRunSummary>>, 'trigger' | 'disposition'>,
+  terminal?: Pick<
+    NonNullable<ReturnType<typeof readWorkRunSummary>>,
+    'trigger' | 'disposition' | 'contextFailure'
+  >,
 ): WorkRunProjection {
   const transcriptPath = join(dir, id, 'transcript.jsonl');
   const hasTranscript = existsSync(transcriptPath);
@@ -128,6 +131,9 @@ function buildProjection(
     transcriptUrl: hasTranscript ? `/api/work-runs/${id}/transcript` : null,
     ...(terminal?.trigger !== undefined ? { trigger: terminal.trigger } : {}),
     ...(terminal?.disposition !== undefined ? { disposition: terminal.disposition } : {}),
+    ...(terminal?.contextFailure !== undefined
+      ? { contextFailure: terminal.contextFailure }
+      : {}),
   };
 }
 

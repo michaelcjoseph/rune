@@ -56,7 +56,7 @@ export interface ContextSeedInput {
 
 /** Placeholder body for a section with no seeded content — keeps the header
  *  present (so `hasRequiredSections` holds) without faking detail. */
-const EMPTY_SECTION_PLACEHOLDER = '_None yet._';
+export const EMPTY_SECTION_PLACEHOLDER = '_None yet._';
 
 function bulletList(items: readonly string[] | undefined): string | undefined {
   if (!items || items.length === 0) return undefined;
@@ -120,13 +120,17 @@ export function seedProjectContext(input: ContextSeedInput): string {
  * context update that silently drops a section is rejected on this predicate.
  */
 export function hasRequiredSections(content: string): boolean {
-  return CONTEXT_SECTIONS.every((section) =>
-    new RegExp(`^##\\s+${escapeRegExp(section)}\\s*$`, 'm').test(content),
-  );
+  return CONTEXT_SECTIONS.every((section) => {
+    const matches = content.match(contextHeadingRegExp(section, 'gm'));
+    return matches?.length === 1;
+  });
 }
 
-/** Escape a literal string for use inside a `RegExp`. Exported so the context
- *  curator reuses the one copy rather than duplicating it. */
-export function escapeRegExp(s: string): string {
+/** Exact, line-local matcher shared by every managed-heading consumer. */
+export function contextHeadingRegExp(heading: string, flags = ''): RegExp {
+  return new RegExp(`^##[ \\t]+${escapeRegExp(heading)}[ \\t]*$`, flags);
+}
+
+function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

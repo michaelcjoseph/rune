@@ -34,7 +34,15 @@
 
 import { selectNextTask, type SelectedTask } from './orch-task-select.js';
 import { assembleTaskContext } from './orch-context-assembly.js';
-import { applyContextUpdate, type ContextUpdate } from './context-curator.js';
+import {
+  applyContextUpdate,
+  type ContextUpdate,
+} from './context-curator.js';
+import {
+  type ContextCloseoutFailure,
+  type ContextUpdateFailure,
+  type WipCheckpointResult,
+} from './context-closeout.js';
 import { markSelectedTaskComplete } from './orch-closeout.js';
 import { buildTaskRunRecord, type TaskRunRecord } from './orch-run-record.js';
 import {
@@ -62,6 +70,7 @@ import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import {
   adjacentExecutionFailure,
   executionFailureSummary,
+  sanitizeExecutionDiagnostic,
   type ExecutionCheckpoint,
   type ExecutionFailure,
 } from './execution-failure.js';
@@ -136,6 +145,8 @@ export interface OrchestrationDeps {
   branch: string;
   /** Operator-visible worktree path for parked blocked-on-human runs. */
   worktreePath?: string;
+  /** Scrubbed worktree-relative context path from the resolved project dir. */
+  contextFile?: string;
   /** Base branch a gated merge would land on. */
   baseBranch?: string;
   /** Optional live activity sink for appliers that need supervision heartbeats. */
@@ -177,9 +188,8 @@ export interface OrchestrationDeps {
     evidence: TaskEvidence,
   ) => Promise<CloseoutCheckResult>;
   commitCloseout: (task: SelectedTask) => Promise<CloseoutCommit>;
-  /** Optional best-effort WIP preservation commit when closeout repair exhausts.
-   *  Returns null when there is nothing to commit or the commit fails. */
-  commitWip?: (task: SelectedTask) => Promise<CloseoutCommit | null>;
+  /** WIP preservation checkpoint used before a closeout terminal. */
+  commitWip?: (task: SelectedTask) => Promise<WipCheckpointResult>;
   verifyCleanWorktree: () => Promise<boolean>;
 
   // --- finalizer ---
@@ -197,6 +207,7 @@ export type OrchestrationResult =
       preserveBranch?: true;
       preserveWorktree?: true;
       executionFailure?: ExecutionFailure;
+      contextFailure?: ContextCloseoutFailure;
     }
   | {
       kind: 'blocked';
@@ -329,7 +340,7 @@ async function runProjectOrchestrationImpl(
       if (closeout.closeoutFailure !== undefined) {
         // Preserve the work BEFORE the terminal: the WIP commit survives even a
         // later worktree cleanup — the resume path checks the branch tip back out.
-        const wip = await commitWipSafely(deps, task);
+        const checkpoint = await checkpointWip(deps, task);
         const attempts = 1 + CLOSEOUT_REPAIR_CAP;
         const validation = closeout.closeoutFailure.validationFailure;
         const baseReason = `closeout checks failed after ${attempts} attempts` +
@@ -338,9 +349,7 @@ async function runProjectOrchestrationImpl(
             : `; needs-validation: ${validation.kind}; ` +
             `command \`${validation.command}\`; prerequisite \`` +
             `${validation.executable ?? validation.validationCwd ?? validation.prerequisite}\``);
-        const reason = wip === null
-          ? baseReason
-          : `${baseReason}; WIP preserved as ${wip.sha.slice(0, 7)}`;
+        const reason = `${baseReason}; ${checkpointSummary(checkpoint)}`;
         // PARK (blocked-on-human), do not hold: a held terminal writes a
         // `completed` supervision row the release path cannot see, and its
         // preserved worktree stays git-registered — never swept by the orphan
@@ -369,6 +378,21 @@ async function runProjectOrchestrationImpl(
         }
         // No worktree path wired (fixture-only) — preserved hold fallback.
         return buildOperationalHold(deps, reason, taskRecords);
+      }
+      if (closeout.contextFailure !== undefined) {
+        const checkpoint = await checkpointWip(deps, task);
+        const contextFailure: ContextCloseoutFailure = {
+          ...closeout.contextFailure,
+          file: scrubContextFile(deps.contextFile),
+          checkpoint,
+        };
+        return buildOperationalHold(
+          deps,
+          contextFailureSummary(contextFailure),
+          taskRecords,
+          undefined,
+          contextFailure,
+        );
       }
       return buildOperationalHold(deps, closeout.reason, taskRecords);
     }
@@ -487,7 +511,12 @@ async function runTaskWorkflow(
 
 type CloseoutResult =
   | { kind: 'ok'; commitSha: string; tasksMd: string }
-  | { kind: 'blocked'; reason: string; closeoutFailure?: CloseoutCheckFailure };
+  | {
+      kind: 'blocked';
+      reason: string;
+      closeoutFailure?: CloseoutCheckFailure;
+      contextFailure?: ContextUpdateFailure;
+    };
 
 /** Perform the mutation-only closeout sequence for one validated task. */
 async function performCloseout(
@@ -505,7 +534,12 @@ async function performCloseout(
   const update = deps.curateContext(contextMd, evidence);
   const ctxResult = applyContextUpdate(contextMd, update);
   if (!ctxResult.ok) {
-    return { kind: 'blocked', reason: `context update rejected: ${ctxResult.reason}` };
+    const { ok: _ok, ...contextFailure } = ctxResult;
+    return {
+      kind: 'blocked',
+      reason: `context update rejected: ${ctxResult.reason}`,
+      contextFailure,
+    };
   }
   const tick = markSelectedTaskComplete(tasksMd, task);
   if (!tick.ok) {
@@ -898,16 +932,65 @@ function buildCloseoutRepairFeedback(failure: CloseoutCheckFailure): GateRejecti
   });
 }
 
-async function commitWipSafely(
+async function checkpointWip(
   deps: OrchestrationDeps,
   task: SelectedTask,
-): Promise<CloseoutCommit | null> {
-  if (deps.commitWip === undefined) return null;
-  try {
-    return await deps.commitWip(task);
-  } catch {
-    return null; // preservation is best-effort; the hold itself must land
+): Promise<WipCheckpointResult> {
+  if (deps.commitWip === undefined) {
+    return {
+      kind: 'failed',
+      diagnostic: 'WIP checkpoint is unavailable; uncommitted worktree preserved',
+    };
   }
+  try {
+    const checkpoint = await deps.commitWip(task);
+    if (checkpoint.kind === 'failed') {
+      return {
+        kind: 'failed',
+        diagnostic: sanitizeExecutionDiagnostic(checkpoint.diagnostic),
+      };
+    }
+    // Rebuild successful variants so excess runtime fields from an injected
+    // adapter cannot cross the durable/user-facing boundary.
+    return checkpoint.kind === 'committed'
+      ? { kind: 'committed', sha: checkpoint.sha }
+      : { kind: 'already-clean' };
+  } catch (err) {
+    return {
+      kind: 'failed',
+      diagnostic: sanitizeExecutionDiagnostic(err),
+    };
+  }
+}
+
+function checkpointSummary(checkpoint: WipCheckpointResult): string {
+  if (checkpoint.kind === 'committed') {
+    return `WIP preserved as ${checkpoint.sha.slice(0, 7)}`;
+  }
+  if (checkpoint.kind === 'already-clean') return 'worktree already clean';
+  return `WIP checkpoint failed: ${checkpoint.diagnostic}`;
+}
+
+function scrubContextFile(file: string | undefined): string {
+  const scrubbed = scrubAbsolutePaths(file?.trim() || 'context.md')
+    .replaceAll('\\', '/')
+    .slice(0, 1_000);
+  return scrubbed || 'context.md';
+}
+
+function contextFailureSummary(failure: ContextCloseoutFailure): string {
+  const conflictSample = failure.conflictingHeadings ?? [];
+  const conflictTotal = failure.conflictingHeadingCount ?? conflictSample.length;
+  const conflicts = conflictSample.length
+    ? `; conflicting headings (${conflictTotal} total): ${conflictSample.join(', ')}` +
+      (conflictTotal > conflictSample.length ? ', …' : '')
+    : '';
+  return sanitizeExecutionDiagnostic(
+    `context update rejected in ${failure.file}: ${failure.reason}` +
+      `${failure.canonicalHeading ? ` at ${failure.canonicalHeading}` : ''}` +
+      `${conflicts}; proposed repair: ${failure.proposedRepair}; ` +
+      checkpointSummary(failure.checkpoint),
+  );
 }
 
 function buildOperationalHold(
@@ -915,6 +998,7 @@ function buildOperationalHold(
   reason: string,
   taskRecords: TaskRunRecord[],
   executionFailure?: ExecutionFailure,
+  contextFailure?: ContextCloseoutFailure,
 ): Extract<OrchestrationResult, { kind: 'held' }> {
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
@@ -935,6 +1019,7 @@ function buildOperationalHold(
       preserveWorktree: true as const,
     } : {}),
     ...(executionFailure !== undefined ? { executionFailure } : {}),
+    ...(contextFailure !== undefined ? { contextFailure } : {}),
   };
 }
 

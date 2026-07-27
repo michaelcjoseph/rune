@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
@@ -714,6 +722,107 @@ describe('orchestratedWorkApplier', () => {
       expect(data['projectSlug']).toBe('demo');
       expect(created).toBe(true);
       expect(destroyed).toBe(true);
+    });
+
+    it('persists a context-closeout failure as failed terminal truth with preserved WIP disposition', async () => {
+      const contextFailure = {
+        reason: 'managed-heading-collision' as const,
+        file: 'docs/projects/resolved-assay/context.md',
+        canonicalHeading: '## Interfaces & Contracts',
+        conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+        proposedRepair: 'Merge the bodies and remove the legacy heading.',
+        checkpoint: {
+          kind: 'committed' as const,
+          sha: 'abcdef1234567',
+        },
+      };
+      inject({
+        kind: 'held',
+        reason:
+          'context update rejected in docs/projects/resolved-assay/context.md: ' +
+          'managed-heading-collision at ## Interfaces & Contracts',
+        handoff: {
+          runId: 'mut-1',
+          project: 'demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
+          taskRecords: [],
+        },
+        branch: 'rune-work/demo',
+        preserveBranch: true,
+        preserveWorktree: true,
+        contextFailure,
+      });
+      let persistedSummary: Record<string, unknown> | undefined;
+      __setOrchestratedRuntimeForTest({
+        runGit: makeWorkProductGitStub({
+          commitShas: ['abcdef1234567'],
+          diffstat: ' src/task.ts | 1 +\n',
+        }).runGit,
+        writeSummary: (_dir, summary) => {
+          persistedSummary = summary as unknown as Record<string, unknown>;
+        },
+        appendIndexRow: () => {},
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+      expect(terminal).toMatchObject({
+        kind: 'failed',
+        data: {
+          held: true,
+          contextFailure,
+          trigger: { kind: 'failure' },
+          disposition: {
+            kind: 'preserved',
+            wipSha: 'abcdef1234567',
+          },
+        },
+      });
+      expect(persistedSummary).toMatchObject({
+        outcome: 'failed',
+        exit: { exitCode: 1, exitFact: 'execution-failure' },
+        trigger: { kind: 'failure' },
+        disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+        contextFailure,
+      });
+      expect(JSON.stringify(terminal)).not.toContain('/Users/');
+      expect(destroyed).toBe(false);
+    });
+
+    it('derives contextFile from the resolved project directory, not the requested slug', async () => {
+      let seenContextFile: string | undefined;
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('resolved-assay');
+          wtDir = dir;
+          return { ...sandbox, project: 'requested-assay' };
+        },
+        verifyWorktree: async (opts) => ({
+          ok: true,
+          projectDir: join(opts.worktree, 'docs', 'projects', 'resolved-assay'),
+          specContent: '# Spec\n',
+          tasksContent: '- [ ] task one\n',
+        }),
+        runOrchestration: async (deps) => {
+          seenContextFile = deps.contextFile;
+          return {
+            kind: 'blocked',
+            reason: 'stop after context path assertion',
+            task: { id: 'task-one', text: 'task one', section: 'Tasks' },
+          };
+        },
+      });
+
+      await drain(orchestratedWorkApplier.apply(
+        makeDescriptor({ projectSlug: 'requested-assay', product: 'rune' }),
+        ctx,
+      ));
+
+      expect(seenContextFile).toBe('docs/projects/resolved-assay/context.md');
+      expect(seenContextFile).not.toContain('requested-assay');
     });
 
     it('dirty terminal with a verified resumable cursor WIP-commits, parks, and preserves the worktree', async () => {
@@ -3849,6 +3958,54 @@ describe('orchestratedWorkApplier', () => {
       expect(terminal?.data).toMatchObject({ reason: 'worktree provisioning failed: tasks-readable' });
       expect(JSON.stringify(terminal)).not.toContain('/Users/private');
       expect(runOrchestration).not.toHaveBeenCalled();
+    });
+
+    it('rejects a managed-file symlink swap after workflow execution without writing its target', async () => {
+      const runId = 'mut-closeout-symlink-swap';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-symlink-artifacts-'));
+      const externalTasks = join(artifactsDir, 'operator-tasks.md');
+      const { runGit } = makeWorkProductGitStub({ commitShas: [], diffstat: '', status: '' });
+      writeFileSync(externalTasks, 'operator-owned content\n', 'utf8');
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (deps) => {
+          const tasksPath = join(wtDir!, 'docs', 'projects', 'demo', 'tasks.md');
+          rmSync(tasksPath);
+          symlinkSync(externalTasks, tasksPath);
+          await deps.writeContextMd('# closeout must not land\n');
+          return { kind: 'finalized', outcome: 'unused' };
+        },
+      });
+
+      try {
+        const events = await drain(
+          orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx),
+        );
+        const terminal = events.find((event) =>
+          event.kind === 'completed' || event.kind === 'failed');
+
+        expect(terminal?.kind).toBe('failed');
+        expect(readFileSync(externalTasks, 'utf8')).toBe('operator-owned content\n');
+        expect(readFileSync(
+          join(wtDir!, 'docs', 'projects', 'demo', 'context.md'),
+          'utf8',
+        )).toBe('# Project Context\n');
+        expect(JSON.stringify(terminal)).not.toContain(artifactsDir);
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it('maps user cancellation to failed terminal artifacts and removes the worktree', async () => {

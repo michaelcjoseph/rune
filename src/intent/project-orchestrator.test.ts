@@ -2203,7 +2203,10 @@ describe('project-orchestrator — closeout repair loop', () => {
       timedOut: false,
       diagnostics: 'Failed to resolve package group "test" from <repo>/harness/pyproject.toml',
     };
-    const commitWip = vi.fn(async () => ({ sha: 'wip-validation-1234', subject: 'validation WIP' }));
+    const commitWip = vi.fn(async () => ({
+      kind: 'committed' as const,
+      sha: 'wip-validation-1234',
+    }));
     const writeContextMd = vi.fn(async () => undefined);
     const writeTasksMd = vi.fn(async () => undefined);
     const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
@@ -2272,7 +2275,10 @@ describe('project-orchestrator — closeout repair loop', () => {
       writeContextMd,
       writeTasksMd,
       commitCloseout,
-      commitWip: async () => ({ sha: 'wip-review-surface', subject: 'preserve WIP' }),
+      commitWip: async () => ({
+        kind: 'committed',
+        sha: 'wip-review-surface',
+      }),
       runCloseoutChecks: async () => ({
         ok: false,
         failure: {
@@ -2359,7 +2365,10 @@ describe('project-orchestrator — closeout repair loop', () => {
 
   it('exhausts the repair budget, WIP-commits, and PARKS blocked-on-human with branch and worktree preserved', async () => {
     let workflowRuns = 0;
-    const commitWip = vi.fn(async () => ({ sha: 'wipsha1234', subject: 'wip subject' }));
+    const commitWip = vi.fn(async () => ({
+      kind: 'committed' as const,
+      sha: 'wipsha1234',
+    }));
     const h = makeHarness({
       worktreePath: '/tmp/rune-worktrees/aura/14-x',
       runTaskWorkflow: async (task) => {
@@ -2408,7 +2417,7 @@ describe('project-orchestrator — closeout repair loop', () => {
       parked: { status: 'blocked-on-human', preserveWorktree: true },
     });
     expect(String((res as { reason?: string }).reason ?? '')).toMatch(
-      /closeout checks failed after 3 attempts$/,
+      /closeout checks failed after 3 attempts; WIP checkpoint failed: WIP checkpoint is unavailable/,
     );
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
   });
@@ -2419,7 +2428,9 @@ describe('project-orchestrator — closeout repair loop', () => {
 
     const raw = res as unknown as Record<string, unknown>;
     expect(raw['kind']).toBe('held');
-    expect(String(raw['reason'] ?? '')).toMatch(/closeout checks failed after 3 attempts$/);
+    expect(String(raw['reason'] ?? '')).toMatch(
+      /closeout checks failed after 3 attempts; WIP checkpoint failed: WIP checkpoint is unavailable/,
+    );
     expect(raw['preserveBranch']).toBe(true);
     expect(raw['preserveWorktree']).toBe(true);
     expect(raw).not.toHaveProperty('parked');
@@ -2466,8 +2477,128 @@ describe('project-orchestrator — closeout repair loop', () => {
       parked: { status: 'blocked-on-human' },
     });
     expect(String((res as { reason?: string }).reason ?? '')).toMatch(
-      /closeout checks failed after 3 attempts$/,
+      /closeout checks failed after 3 attempts; WIP checkpoint failed: git broke$/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Context closeout migration failures — reviewed work must be checkpointed
+// before an operational (never blocked-on-human) preservation hold.
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — context closeout checkpoint', () => {
+  function installAmbiguousContext(h: Harness): void {
+    h.state.contextMd = `${seedProjectContext({
+      product: 'aura',
+      projectTitle: 'Assay closeout',
+    }).trimEnd()}\n\n## Canonical Interfaces\n\nLegacy competing contract body.\n`;
+    Object.assign(h.deps, {
+      contextFile: 'docs/projects/resolved-assay/context.md',
+    });
+  }
+
+  it('WIP-checkpoints before a failed operational preservation hold and performs no closeout writes', async () => {
+    const operations: string[] = [];
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-land',
+      subject: 'must not land',
+    }));
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/assay/resolved-assay',
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+      runCloseoutChecks: async () => {
+        operations.push('validation');
+        return { ok: true } as const;
+      },
+      curateContext: () => {
+        operations.push('context:transform');
+        return { kind: 'neutral', sections: {} };
+      },
+      commitWip: (async () => {
+        operations.push('checkpoint');
+        return {
+          kind: 'committed',
+          sha: 'abcdef1234567',
+          subject: 'rune(aura): WIP — /Users/operator/private — Build the streak core',
+        };
+      }) as never,
+    }, '# Tasks\n- [ ] Build the streak core\n');
+    installAmbiguousContext(h);
+
+    const result = await runProjectOrchestration(h.deps);
+    const raw = result as unknown as Record<string, unknown>;
+
+    expect(operations).toEqual(['validation', 'context:transform', 'checkpoint']);
+    expect(raw).toMatchObject({
+      kind: 'held',
+      preserveBranch: true,
+      preserveWorktree: true,
+      contextFailure: {
+        reason: 'managed-heading-collision',
+        file: 'docs/projects/resolved-assay/context.md',
+        canonicalHeading: '## Interfaces & Contracts',
+        conflictingHeadings: ['## Interfaces & Contracts', '## Canonical Interfaces'],
+        proposedRepair: expect.stringMatching(/merge|remove|keep/i),
+        checkpoint: {
+          kind: 'committed',
+          sha: 'abcdef1234567',
+        },
+      },
+    });
+    expect(raw).not.toHaveProperty('parked');
+    expect(JSON.stringify(raw)).not.toMatch(/blocked-on-human/i);
+    expect(JSON.stringify(raw)).not.toContain('/Users/operator/');
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+  });
+
+  it('distinguishes an already-clean checkpoint from a failed checkpoint', async () => {
+    const cases = [
+      {
+        checkpoint: { kind: 'already-clean' },
+        expected: { kind: 'already-clean' },
+      },
+      {
+        checkpoint: {
+          kind: 'failed',
+          diagnostic: 'git commit failed at /Users/jarvis/workspace/assay: index.lock exists',
+        },
+        expected: {
+          kind: 'failed',
+          diagnostic: expect.stringMatching(/index\.lock exists/),
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const h = makeHarness({
+        worktreePath: '/tmp/rune-worktrees/assay/resolved-assay',
+        commitWip: (async () => testCase.checkpoint) as never,
+      }, '# Tasks\n- [ ] Build the streak core\n');
+      installAmbiguousContext(h);
+
+      const result = await runProjectOrchestration(h.deps);
+      const raw = result as unknown as Record<string, unknown>;
+
+      expect(raw).toMatchObject({
+        kind: 'held',
+        preserveWorktree: true,
+        contextFailure: {
+          file: 'docs/projects/resolved-assay/context.md',
+          checkpoint: testCase.expected,
+        },
+      });
+      expect(raw).not.toHaveProperty('parked');
+      expect((raw['contextFailure'] as Record<string, unknown>)['wipSha']).toBeUndefined();
+      expect(JSON.stringify(raw)).not.toContain('/Users/jarvis/');
+    }
   });
 });
 

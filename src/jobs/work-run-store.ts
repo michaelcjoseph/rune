@@ -28,9 +28,20 @@ import type { OperationCancellation } from '../cancellation.js';
 import {
   isExecutionTerminalDisposition,
   isExecutionTerminalTrigger,
+  sanitizeExecutionDiagnostic,
   type ExecutionTerminalDisposition,
   type ExecutionTerminalTrigger,
 } from '../intent/execution-failure.js';
+import type {
+  ContextCloseoutFailure,
+  WipCheckpointResult,
+} from '../intent/context-closeout.js';
+import {
+  CONTEXT_CONFLICTING_HEADINGS_MAX,
+  CONTEXT_PROPOSED_REPAIR_MAX_CHARS,
+  checkpointWipSha,
+  isContextUpdateReason,
+} from '../intent/context-closeout.js';
 
 const log = createLogger('work-run-store');
 
@@ -95,6 +106,8 @@ export interface WorkRunSummary {
   /** Immutable cause plus separate cleanup result. Absent on legacy summaries. */
   trigger?: ExecutionTerminalTrigger;
   disposition?: ExecutionTerminalDisposition;
+  /** Actionable context-closeout failure evidence, absent on unrelated runs. */
+  contextFailure?: ContextCloseoutFailure;
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */
@@ -187,6 +200,7 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const rawCancellation = (parsed as Record<string, unknown>)['cancellation'];
   const rawTrigger = (parsed as Record<string, unknown>)['trigger'];
   const rawDisposition = (parsed as Record<string, unknown>)['disposition'];
+  const rawContextFailure = (parsed as Record<string, unknown>)['contextFailure'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -202,22 +216,134 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const cancellationValid = rawCancellation === undefined || cancellation !== undefined;
   const triggerValid = rawTrigger === undefined || isExecutionTerminalTrigger(rawTrigger);
   const dispositionValid = rawDisposition === undefined || isExecutionTerminalDisposition(rawDisposition);
+  const contextFailure = rawContextFailure === undefined
+    ? undefined
+    : parseContextCloseoutFailure(rawContextFailure);
+  const contextFailureValid = rawContextFailure === undefined || contextFailure !== undefined;
   if (
     s.id === id &&
     typeof s.product === 'string' &&
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
     targetValid &&
-    cancellationValid && triggerValid && dispositionValid
+    cancellationValid && triggerValid && dispositionValid && contextFailureValid
   ) {
     const summary = {
       ...s,
       ...(cancellation !== undefined ? { cancellation } : {}),
+      ...(contextFailure !== undefined ? { contextFailure } : {}),
     } as WorkRunSummary;
+    if (
+      contextFailure !== undefined &&
+      !hasConsistentContextFailureTerminalState(summary, contextFailure)
+    ) {
+      log.warn('readWorkRunSummary: context failure contradicts terminal state', { id });
+      return { status: 'invalid' };
+    }
     return { status: 'found', summary };
   }
   log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
   return { status: 'invalid' };
+}
+
+function parseContextCloseoutFailure(value: unknown): ContextCloseoutFailure | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const reason = record['reason'];
+  const parsedCheckpoint = parseWipCheckpoint(record['checkpoint']);
+  if (parsedCheckpoint === undefined) return undefined;
+  const conflicts = record['conflictingHeadings'];
+  const conflictsValid = conflicts === undefined || (
+    Array.isArray(conflicts) &&
+    conflicts.length > 0 &&
+    conflicts.length <= CONTEXT_CONFLICTING_HEADINGS_MAX &&
+    conflicts.every((heading) => boundedString(heading, 200))
+  );
+  const conflictCount = record['conflictingHeadingCount'];
+  const conflictCountValid = conflictCount === undefined || (
+    Array.isArray(conflicts) &&
+    Number.isSafeInteger(conflictCount) &&
+    Number(conflictCount) > conflicts.length
+  );
+  if (
+    !isContextUpdateReason(reason) ||
+    !boundedString(record['file'], 1_000)
+  ) {
+    return undefined;
+  }
+  if (
+    String(record['file']).startsWith('/') ||
+    String(record['file']).split('/').includes('..') ||
+    String(record['file']).includes('\\') ||
+    (record['canonicalHeading'] !== undefined &&
+      !boundedString(record['canonicalHeading'], 200)) ||
+    !conflictsValid ||
+    !conflictCountValid ||
+    !boundedString(record['proposedRepair'], CONTEXT_PROPOSED_REPAIR_MAX_CHARS)
+  ) {
+    return undefined;
+  }
+  const file = sanitizeExecutionDiagnostic(record['file']);
+  return {
+    reason,
+    file,
+    ...(record['canonicalHeading'] !== undefined
+      ? { canonicalHeading: sanitizeExecutionDiagnostic(record['canonicalHeading']) }
+      : {}),
+    ...(conflicts !== undefined
+      ? {
+          conflictingHeadings: conflicts.map((heading) =>
+            sanitizeExecutionDiagnostic(heading),
+          ),
+        }
+      : {}),
+    ...(typeof conflictCount === 'number'
+      ? { conflictingHeadingCount: conflictCount }
+      : {}),
+    proposedRepair: sanitizeExecutionDiagnostic(record['proposedRepair']),
+    checkpoint: parsedCheckpoint,
+  };
+}
+
+function hasConsistentContextFailureTerminalState(
+  summary: WorkRunSummary,
+  failure: ContextCloseoutFailure,
+): boolean {
+  const expectedWipSha = checkpointWipSha(failure.checkpoint);
+  return summary.outcome === 'failed' &&
+    summary.trigger?.kind === 'failure' &&
+    summary.exit !== null &&
+    typeof summary.exit === 'object' &&
+    summary.exit.exitCode === 1 &&
+    summary.exit.signal === null &&
+    summary.exit.cancelled === false &&
+    summary.exit.exitFact === 'execution-failure' &&
+    summary.disposition?.kind === 'preserved' &&
+    summary.disposition.wipSha === expectedWipSha;
+}
+
+function parseWipCheckpoint(value: unknown): WipCheckpointResult | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record['kind'] === 'already-clean') return { kind: 'already-clean' };
+  if (
+    record['kind'] === 'committed' &&
+    typeof record['sha'] === 'string' &&
+    /^[0-9a-f]{7,64}$/i.test(record['sha'])
+  ) {
+    return { kind: 'committed', sha: record['sha'] };
+  }
+  if (record['kind'] === 'failed' && boundedString(record['diagnostic'], 2_000)) {
+    return {
+      kind: 'failed',
+      diagnostic: sanitizeExecutionDiagnostic(record['diagnostic']),
+    };
+  }
+  return undefined;
+}
+
+function boundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
 /** Compatibility reader for non-authorization surfaces. */

@@ -1369,6 +1369,72 @@ describe('createWorktree provisioning integration', () => {
       rmSync(f.root, { recursive: true, force: true });
     }
   });
+
+  it('rejects a project directory symlink that resolves outside the worktree', async () => {
+    const f = realRepoFixture();
+    try {
+      const sandbox = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+      });
+      const projectPath = join(sandbox.worktree, 'docs', 'projects', '01-probe');
+      const externalProject = join(f.root, 'external-project');
+      mkdirSync(externalProject);
+      writeFileSync(join(externalProject, 'spec.md'), '# External\n');
+      writeFileSync(join(externalProject, 'tasks.md'), '- [ ] External\n');
+      rmSync(projectPath, { recursive: true, force: true });
+      symlinkSync(externalProject, projectPath, 'dir');
+
+      const result = await verifyWorktreeProvisioning({
+        repoPath: f.repo,
+        worktree: sandbox.worktree,
+        expectedBranch: 'rune-work/01-probe',
+        project: '01-probe',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.stage).toBe('project-directory');
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['spec.md', 'spec-readable'],
+    ['tasks.md', 'tasks-readable'],
+    ['context.md', 'context-readable'],
+  ] as const)('rejects an escaping %s symlink before dispatch', async (name, stage) => {
+    const f = realRepoFixture();
+    try {
+      const sandbox = await createWorktreeProduction({
+        product: 'assay', project: '01-probe', branch: 'rune-work/01-probe',
+        worktreeRoot: f.worktreeRoot, productsConfigPath: f.configPath,
+      });
+      const managedPath = join(
+        sandbox.worktree,
+        'docs',
+        'projects',
+        '01-probe',
+        name,
+      );
+      const external = join(f.root, `external-${name}`);
+      writeFileSync(external, 'external operator data\n');
+      rmSync(managedPath, { force: true });
+      symlinkSync(external, managedPath);
+
+      const result = await verifyWorktreeProvisioning({
+        repoPath: f.repo,
+        worktree: sandbox.worktree,
+        expectedBranch: 'rune-work/01-probe',
+        project: '01-probe',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.stage).toBe(stage);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
