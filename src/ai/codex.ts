@@ -30,10 +30,12 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
 import { scrubPathsInText } from './tool-labels.js';
 import {
@@ -52,6 +54,21 @@ import {
 const log = createLogger('codex');
 
 const HOMEBREW_FALLBACK = '/opt/homebrew/bin/codex';
+const PROBE_STDERR_MAX_CHARS = 500;
+export const CODEX_PROBE_RUNTIME_ROOT = join(PROJECT_ROOT, '.rune', 'codex-preflight');
+
+/** A bounded diagnostic may cross into a run transcript, unlike raw CLI output. */
+function safeProbeStderr(stderr: string, env: NodeJS.ProcessEnv): string | undefined {
+  const value = redactSecrets(
+    scrubAbsolutePaths(scrubPathsInText(stderr))
+      .replace(/\/(?:Users|home|private|var|tmp)\/[A-Za-z0-9_./-]+/g, '<host-path>'),
+    Object.values(env).filter((item): item is string => typeof item === 'string'),
+  )
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, PROBE_STDERR_MAX_CHARS);
+  return value || undefined;
+}
 
 /** Resolve the path to the `codex` binary — `which codex` first, then a
  *  Homebrew default (the canonical install path on Apple Silicon macOS).
@@ -121,6 +138,20 @@ function codexAuthSource(env: NodeJS.ProcessEnv): string {
   return join(sourceHome, 'auth.json');
 }
 
+function createCodexProbeRuntime(): string {
+  // Codex creates app-server helper binaries under CODEX_HOME but refuses to
+  // place them in the OS temporary directory. Keep each runtime private and
+  // short-lived under Rune's repo-owned cache root instead.
+  mkdirSync(CODEX_PROBE_RUNTIME_ROOT, { recursive: true, mode: 0o700 });
+  chmodSync(CODEX_PROBE_RUNTIME_ROOT, 0o700);
+  const projectRoot = realpathSync(PROJECT_ROOT);
+  const runtimeRoot = realpathSync(CODEX_PROBE_RUNTIME_ROOT);
+  if (!runtimeRoot.startsWith(`${projectRoot}/`)) {
+    throw new Error('Codex probe runtime root resolves outside the Rune repository');
+  }
+  return mkdtempSync(join(runtimeRoot, 'probe-'));
+}
+
 function buildCodexProbeProfile(
   profilePath: string,
   runtimeDir: string,
@@ -141,7 +172,9 @@ function buildCodexProbeProfile(
     `(allow file-read* (literal "${seatbeltLiteral(binaryPath)}"))`,
     `(allow file-read* (literal "${seatbeltLiteral(realBinary)}"))`,
     `(deny file-read* (literal "${seatbeltLiteral(profilePath)}"))`,
-    '(deny network-outbound (remote ip "localhost:*"))',
+    // Codex's in-process app-server client uses loopback during startup. This
+    // profile is only for the tool-free readiness probe; the artifact-role
+    // profile retains its raw-localhost deny plus the explicit MCP relay.
   ].join('\n'), { mode: 0o600 });
 }
 
@@ -172,7 +205,7 @@ async function boundedCodexProbe(
   if (!existsSync(authSource) || !statSync(authSource).isFile()) {
     return { status: 'probe-failure', code: 'not-authenticated' };
   }
-  const runtimeDir = mkdtempSync(join(tmpdir(), 'rune-codex-preflight-'));
+  const runtimeDir = createCodexProbeRuntime();
   const privateCodexHome = join(runtimeDir, 'codex-home');
   const privateBinary = join(runtimeDir, 'codex');
   const profilePath = join(runtimeDir, 'probe.sb');
@@ -192,7 +225,11 @@ async function boundedCodexProbe(
     ].filter((path): path is string => typeof path === 'string' && path !== '' && path !== runtimeDir)
       .flatMap((path) => {
         try { return [path, realpathSync(path)]; } catch { return [path]; }
-      });
+      })
+      // The private runtime is deliberately repo-owned, so its ancestors
+      // cannot be denied without also denying the probe's own cwd. This is
+      // safe here because the probe exposes no model tools or MCP servers.
+      .filter((path) => path !== runtimeDir && !runtimeDir.startsWith(`${path}/`));
     buildCodexProbeProfile(profilePath, runtimeDir, privateBinary, deniedReadRoots);
     const env = {
       ...safeProbeEnv(opts.env),
@@ -243,7 +280,10 @@ export async function probeCodexAuthentication(
   if (result.status !== 'process' || result.result.status !== 'completed') {
     return { ok: false, code: 'invalid-response' };
   }
-  if (result.result.exitCode !== 0) return { ok: false, code: 'not-authenticated' };
+  if (result.result.exitCode !== 0) {
+    const diagnostic = safeProbeStderr(result.result.stderr, opts.env);
+    return { ok: false, code: 'not-authenticated', ...(diagnostic !== undefined ? { diagnostic } : {}) };
+  }
   const loggedIn = [result.result.stdout, result.result.stderr]
     .some((stream) => /(?:^|\n)Logged in\b/im.test(stream));
   return loggedIn ? { ok: true } : { ok: false, code: 'not-authenticated' };
@@ -285,14 +325,13 @@ export async function probeCodexModelCall(
     '-c', 'mcp_servers={}',
     '-c', 'web_search="disabled"',
     '-c', 'hooks={}',
-    '-c', 'apps.enabled=false',
-    '-c', 'remote_plugins.enabled=false',
+    '-c', 'features.apps=false',
+    '-c', 'features.remote_plugin=false',
     '-c', 'features.shell_tool=false',
     '-c', 'features.unified_exec=false',
     '-c', 'features.multi_agent=false',
     '-c', 'features.computer_use=false',
     '-c', 'features.browser_use=false',
-    '-c', 'tools_view_image=false',
     '-c', 'shell_environment_policy.inherit="none"',
     ...(opts.configOverrides ?? []).flatMap((override) => ['-c', override]),
     'Reply with exactly OK. Do not use tools.',
@@ -303,7 +342,10 @@ export async function probeCodexModelCall(
   if (result.status !== 'process' || result.result.status !== 'completed') {
     return { ok: false, code: 'invalid-response' };
   }
-  if (result.result.exitCode !== 0) return { ok: false, code: 'nonzero-exit' };
+  if (result.result.exitCode !== 0) {
+    const diagnostic = safeProbeStderr(result.result.stderr, opts.env);
+    return { ok: false, code: 'nonzero-exit', ...(diagnostic !== undefined ? { diagnostic } : {}) };
+  }
   return validCodexCompletion(result.result.stdout);
 }
 

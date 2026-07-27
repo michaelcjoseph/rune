@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ArtifactMcpConfig } from './artifact-mcp.js';
@@ -11,6 +12,7 @@ import {
   type ExecutionPreflightRoleModels,
 } from './execution-preflight.js';
 import type { RoleModelBinding } from './execution-agent.js';
+import { CODEX_PROBE_RUNTIME_ROOT } from '../ai/codex.js';
 
 const claude = (alias = 'opus'): RoleModelBinding => ({
   alias,
@@ -73,8 +75,9 @@ function artifactConfig(stop = vi.fn(async () => {})): ArtifactMcpConfig {
 
 describe('preflightExecution', () => {
   it('runs the production auth/model probes for a mixed policy with the exact resolved aliases', async () => {
-    const beforeProbeDirs = new Set((await readdir(tmpdir()))
-      .filter((name) => name.startsWith('rune-codex-preflight-')));
+    const beforeProbeDirs = new Set(existsSync(CODEX_PROBE_RUNTIME_ROOT)
+      ? await readdir(CODEX_PROBE_RUNTIME_ROOT)
+      : []);
     const dir = await mkdtemp(join(tmpdir(), 'executor-preflight-cli-'));
     const claudeBin = join(dir, 'claude-fixture');
     const codexBin = join(dir, 'codex-fixture');
@@ -109,6 +112,11 @@ describe('preflightExecution', () => {
         '  case "$*" in *"-m gpt-coder"*"--ignore-user-config"*) ;; *) exit 93 ;; esac',
         '  case "$*" in *"features.shell_tool=false"*) ;; *) exit 94 ;; esac',
         '  case "$*" in *"features.unified_exec=false"*) ;; *) exit 95 ;; esac',
+        '  case "$*" in *"features.apps=false"*) ;; *) exit 96 ;; esac',
+        '  case "$*" in *"apps.enabled=false"*) exit 97 ;; esac',
+        '  case "$*" in *"features.remote_plugin=false"*) ;; *) exit 98 ;; esac',
+        '  case "$*" in *"remote_plugins.enabled=false"*) exit 99 ;; esac',
+        '  case "$*" in *"tools_view_image=false"*) exit 100 ;; esac',
         "  printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"OK\"}}'",
         'fi',
       ].join('\n'));
@@ -131,8 +139,7 @@ describe('preflightExecution', () => {
       });
 
       expect(result.status, JSON.stringify(result)).toBe('success');
-      const afterProbeDirs = (await readdir(tmpdir()))
-        .filter((name) => name.startsWith('rune-codex-preflight-'));
+      const afterProbeDirs = await readdir(CODEX_PROBE_RUNTIME_ROOT);
       expect(afterProbeDirs.filter((name) => !beforeProbeDirs.has(name))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });

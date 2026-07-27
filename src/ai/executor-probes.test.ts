@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { probeClaudeModelCall } from './claude.js';
-import { probeCodexModelCall } from './codex.js';
+import { CODEX_PROBE_RUNTIME_ROOT, probeCodexModelCall } from './codex.js';
 
 describe('centralized executor probes', () => {
   it('contains Codex host reads and removes its private runtime', async () => {
@@ -13,8 +15,9 @@ describe('centralized executor probes', () => {
     const home = join(dir, 'home');
     const codexHome = join(dir, 'codex-home');
     const secret = join(home, 'secret');
-    const before = new Set((await readdir(tmpdir()))
-      .filter((name) => name.startsWith('rune-codex-preflight-')));
+    const before = new Set(existsSync(CODEX_PROBE_RUNTIME_ROOT)
+      ? await readdir(CODEX_PROBE_RUNTIME_ROOT)
+      : []);
     try {
       await mkdir(home);
       await mkdir(codexHome);
@@ -38,11 +41,82 @@ describe('centralized executor probes', () => {
         model: 'fixture-model',
       });
 
-      expect(result).toEqual({ ok: false, code: 'nonzero-exit' });
-      const after = (await readdir(tmpdir()))
-        .filter((name) => name.startsWith('rune-codex-preflight-'));
+      expect(result).toMatchObject({ ok: false, code: 'nonzero-exit' });
+      const after = await readdir(CODEX_PROBE_RUNTIME_ROOT);
       expect(after.filter((name) => !before.has(name))).toEqual([]);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a sanitized Codex stderr diagnostic on model failure', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codex-probe-diagnostic-'));
+    const binary = join(dir, 'codex-fixture');
+    const home = join(dir, 'home');
+    const codexHome = join(dir, 'codex-home');
+    try {
+      await mkdir(home);
+      await mkdir(codexHome);
+      await writeFile(join(codexHome, 'auth.json'), '{}');
+      await writeFile(binary, [
+        '#!/bin/sh',
+        "printf '%s\\n' 'unknown model fixture-model; token=sk-raw-secret /Users/operator/private' >&2",
+        'exit 7',
+      ].join('\n'));
+      await chmod(binary, 0o700);
+
+      const result = await probeCodexModelCall({
+        binaryPath: binary,
+        cwd: dir,
+        env: {
+          PATH: '/usr/bin:/bin', HOME: home, CODEX_HOME: codexHome,
+          OPENAI_API_KEY: 'sk-raw-secret',
+        },
+        timeoutMs: 2_000,
+        model: 'fixture-model',
+      });
+
+      expect(result).toMatchObject({ ok: false, code: 'nonzero-exit' });
+      expect(JSON.stringify(result)).not.toContain('sk-raw-secret');
+      expect(JSON.stringify(result)).not.toContain('/Users/operator');
+      expect(result.ok ? '' : result.diagnostic).toContain('<host-path>');
+      expect(result.ok ? '' : result.diagnostic).toContain('unknown model fixture-model');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('allows the Codex probe internal loopback client', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codex-probe-loopback-'));
+    const binary = join(dir, 'codex-fixture');
+    const home = join(dir, 'home');
+    const codexHome = join(dir, 'codex-home');
+    const server = createServer((_req, res) => res.end('OK'));
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('loopback test server did not bind');
+      await mkdir(home);
+      await mkdir(codexHome);
+      await writeFile(join(codexHome, 'auth.json'), '{}');
+      await writeFile(binary, [
+        '#!/bin/sh',
+        `curl -fsS 'http://127.0.0.1:${address.port}/' >/dev/null || exit 7`,
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"OK\"}}'",
+      ].join('\n'));
+      await chmod(binary, 0o700);
+
+      const result = await probeCodexModelCall({
+        binaryPath: binary,
+        cwd: dir,
+        env: { PATH: '/usr/bin:/bin', HOME: home, CODEX_HOME: codexHome },
+        timeoutMs: 2_000,
+        model: 'fixture-model',
+      });
+
+      expect(result).toEqual({ ok: true });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
       await rm(dir, { recursive: true, force: true });
     }
   });
