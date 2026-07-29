@@ -1326,7 +1326,18 @@ describe('project-orchestrator — durable run state', () => {
     const h = makeHarness({
       runTaskWorkflow: async (task) => {
         workflowCalls += 1;
-        if (workflowCalls === 1) return readyEvidence(task);
+        if (workflowCalls === 1) {
+          return {
+            ...readyEvidence(task),
+            coderSelfReviews: [{
+              round: 1,
+              outcome: 'revised',
+              notes: 'Corrected the staged guard.',
+              canonicalHash: 'canonical-review-hash',
+              changedPaths: ['src/streak.ts'],
+            }],
+          };
+        }
         return {
           taskId: task.id,
           outcome: 'blocked',
@@ -1363,6 +1374,13 @@ describe('project-orchestrator — durable run state', () => {
         contextOutcome: 'updated',
         gates: { objectionOpen: false },
         outcome: 'ready-for-closeout',
+        coderSelfReviews: [{
+          round: 1,
+          outcome: 'revised',
+          notes: 'Corrected the staged guard.',
+          canonicalHash: 'canonical-review-hash',
+          changedPaths: ['src/streak.ts'],
+        }],
       }),
     ]);
     expect(persistedCursors).toContainEqual({
@@ -1541,6 +1559,13 @@ describe('project-orchestrator — durable run state', () => {
         loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes: ['shipped with a low-severity performance caveat'],
+        coderSelfReviews: [{
+          round: 1,
+          outcome: 'confirmed',
+          notes: 'Validated the staged cache change.',
+          canonicalHash: 'cache-review-hash',
+          changedPaths: ['src/cache.ts'],
+        }],
       }),
       appendTaskRunRecord: async (record) => {
         persistedRecords.push(record);
@@ -1567,12 +1592,20 @@ describe('project-orchestrator — durable run state', () => {
         outcome: 'ready-for-closeout',
         verdicts: { reviewer: 'pass-with-warnings' },
         warnings: [warningFinding],
+        coderSelfReviews: [expect.objectContaining({
+          outcome: 'confirmed',
+          canonicalHash: 'cache-review-hash',
+        })],
       }),
     ]);
     expect(finalizerRecords).toEqual([
       expect.objectContaining({
         taskId: 'cache-repeated-reads',
         warnings: [warningFinding],
+        coderSelfReviews: [expect.objectContaining({
+          notes: 'Validated the staged cache change.',
+          changedPaths: ['src/cache.ts'],
+        })],
       }),
     ]);
   });

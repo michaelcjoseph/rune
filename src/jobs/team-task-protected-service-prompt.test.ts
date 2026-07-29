@@ -7,6 +7,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 import type { JudgmentModelCall, TeamTaskSeams } from './team-task-deps.js';
+import { stubCanonicalGit } from './canonical-git-test-stub.js';
 
 vi.mock('../roles/loader.js', () => ({
   composeRoleContext: (role: string, baseInstructions: string) => ({
@@ -49,19 +50,6 @@ const GREEN_JUDGMENT_REPLY = [
   '```',
 ].join('\n');
 
-// Project 20 added a cold coder self-review that routes through judgmentCall
-// with role 'coder'. It expects the corrected-or-confirmed coder artifact
-// echoed back in a `self-review-artifact` fence; echoing the artifact unchanged
-// yields revised=false, so the run proceeds exactly as it did before the
-// self-review step existed.
-function confirmCoderSelfReview(message: string): string {
-  const fence = message.match(/```self-review-artifact[\s\S]*?```/);
-  if (fence === null) {
-    throw new Error('coder self-review prompt missing self-review-artifact fence');
-  }
-  return fence[0];
-}
-
 function makeSandbox(): SandboxSpec {
   return {
     product: 'rune',
@@ -102,34 +90,36 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
     const judgmentPrompts: Array<{ role: string; model: string; systemPrompt: string; message: string }> = [];
 
     const judgmentCall: JudgmentModelCall = async ({ role, model, systemPrompt, message }) => {
-      // The coder self-review reviews an artifact in fresh context and does no
-      // operational work, so it is outside the runtime protected-service
-      // invariant this test guards. Echo the artifact unchanged and keep it out
-      // of the operational judgment-prompt accounting.
-      if (role === 'coder') {
-        return confirmCoderSelfReview(message);
-      }
       judgmentPrompts.push({ role, model, systemPrompt, message });
       return GREEN_JUDGMENT_REPLY;
     };
+    let currentDiff = '';
     const runExecution: TeamTaskSeams['runExecution'] = async (opts): Promise<ExecutionAgentResult> => {
-      const role = artifactPrompts.length === 0 ? 'qa' : 'coder';
+      const role = opts.role;
       artifactPrompts.push({
         role,
         format: opts.model.format,
         systemPrompt: opts.systemPrompt ?? '',
         prompt: opts.prompt,
       });
-      return {
+      const result = {
         ok: true,
-        diff: [
+        diff: currentDiff || [
           `diff --git a/src/${artifactPrompts.length}.test.ts b/src/${artifactPrompts.length}.test.ts`,
           `+++ b/src/${artifactPrompts.length}.test.ts`,
           '+expect(true).toBe(true)',
           '',
         ].join('\n'),
-        output: `artifact role ${artifactPrompts.length} done`,
-      };
+        output: opts.workflowStage === 'coder-self-review'
+          ? [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The worktree is ready."}',
+              '```',
+            ].join('\n')
+          : `artifact role ${artifactPrompts.length} done`,
+      } satisfies ExecutionAgentResult;
+      currentDiff = result.diff;
+      return result;
     };
 
     const run = createProductionTaskWorkflowRunner(
@@ -146,9 +136,9 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
           artifactMcp: 'not-required',
           artifactFormats: [],
         }),
-        captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
         judgmentCall,
         runExecution,
+        runCanonicalGit: stubCanonicalGit(() => currentDiff, 'src/2.test.ts'),
       },
     );
     const task: SelectedTask = {
@@ -164,7 +154,7 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
     });
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    expect(artifactPrompts.map((call) => call.format)).toEqual(['codex', 'codex']);
+    expect(artifactPrompts.map((call) => call.format)).toEqual(['codex', 'codex', 'codex']);
     expect(judgmentPrompts.map((call) => call.role)).toEqual(
       expect.arrayContaining(['tech-lead', 'reviewer']),
     );

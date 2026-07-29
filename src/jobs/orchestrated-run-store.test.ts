@@ -165,6 +165,13 @@ describe('orchestrated run store', () => {
       verdicts: { reviewer: 'pass-with-warnings' },
       warnings: [warning],
       acceptance,
+      coderSelfReviews: [{
+        round: 1,
+        outcome: 'revised',
+        notes: 'Corrected the staged retry guard.',
+        canonicalHash: 'canonical-hash',
+        changedPaths: ['src/cache.ts'],
+      }],
     });
 
     await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-orch-1', record);
@@ -174,8 +181,24 @@ describe('orchestrated run store', () => {
         verdicts: { reviewer: 'pass-with-warnings' },
         warnings: [warning],
         acceptance,
+        coderSelfReviews: [{
+          round: 1,
+          outcome: 'revised',
+          notes: 'Corrected the staged retry guard.',
+          canonicalHash: 'canonical-hash',
+          changedPaths: ['src/cache.ts'],
+        }],
       }),
     ]);
+  });
+
+  it('keeps historical TaskRunRecords without coderSelfReviews readable', async () => {
+    const legacy = readyRecord();
+    delete legacy.coderSelfReviews;
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-orch-legacy', legacy);
+
+    await expect(readRecords(tmpDir, 'mut-orch-legacy')).resolves.toEqual([legacy]);
   });
 
   it('skips a torn trailing TaskRunRecord line without throwing or losing earlier records', async () => {

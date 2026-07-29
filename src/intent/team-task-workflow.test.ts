@@ -34,6 +34,7 @@ import {
   type LoopExitReason,
   type TaskEvidence,
   type CoderResult,
+  type CoderSelfReviewResult,
   type QaResult,
   type TechLeadTestRepairResult,
 } from './team-task-workflow.js';
@@ -74,6 +75,15 @@ function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
     qaWriteTests: async () => ({ kind: 'tests-written', testIds: ['t1'] }),
     techLeadReviewTests: async () => ({ approved: true }),
     coder: async () => ({ diff: 'diff --git a/x b/x', handoffNotes: ['wired the core'] }),
+    coderSelfReview: async ({ artifact }) => ({
+      outcome: 'confirmed',
+      notes: 'Canonical worktree is ready for review.',
+      reviewState: {
+        diff: artifact.diff,
+        hash: 'canonical-hash',
+        changedPaths: ['x'],
+      },
+    }),
     reviewer: async () => cleanVerdict,
     techLeadReviewDiff: async () => ({ pass: true }),
     designer: async () => ({ pass: true }),
@@ -90,7 +100,10 @@ type CoderSelfReviewDeps = {
     spec: string;
     context: string;
     tests: string[] | string;
-  }) => Promise<{ artifact: CoderResult; revised: boolean }>;
+    qa: QaResult;
+    rejectionFeedback?: GateRejectionFeedback[];
+    findingsLedger?: FindingsLedgerEntry[];
+  }) => Promise<CoderSelfReviewResult>;
   qaRevalidateDiff: (input: {
     task: SizedTask;
     qa: QaResult;
@@ -1697,25 +1710,32 @@ describe('team-task-workflow — gate rejection records', () => {
 // Coder diff self-review
 // ---------------------------------------------------------------------------
 
-describe('team-task-workflow — coder diff self-review', () => {
+describe('team-task-workflow — worktree coder self-review', () => {
   function forbidPmWrapup(): TeamTaskDeps['pmWrapup'] {
     return async () => {
       throw new Error('PM wrap-up must not be consulted by coder self-review');
     };
   }
 
-  it('runs coder self-review once after the first coder diff and before any downstream diff review consumes it', async () => {
+  it('self-reviews every coder round before downstream roles consume canonical Git state', async () => {
     const order: string[] = [];
     const selfReviewInputs: CoderResult[] = [];
     const reviewerDiffs: string[] = [];
-    const techLeadDiffs: string[] = [];
-    const designerDiffs: string[] = [];
+    const activities: Array<Record<string, unknown>> = [];
     let reviewerCalls = 0;
     let coderCalls = 0;
 
     const ev = await runTeamTaskWorkflow(
       frontEndTask,
-      { ...INPUT, cap: 2 },
+      {
+        ...INPUT,
+        cap: 2,
+        emit: (event) => {
+          if (event.kind === 'activity' && event.data !== undefined) {
+            activities.push(event.data);
+          }
+        },
+      },
       makeCoderSelfReviewDeps({
         qaWriteTests: async () => {
           order.push('qa');
@@ -1736,12 +1756,17 @@ describe('team-task-workflow — coder diff self-review', () => {
         coderSelfReview: async ({ artifact }) => {
           order.push('coder-self-review');
           selfReviewInputs.push(artifact);
+          const round = selfReviewInputs.length;
           return {
-            artifact: {
-              diff: 'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW',
-              handoffNotes: ['self-review fixed the missing guard'],
+            outcome: round === 1 ? 'revised' : 'confirmed',
+            notes: round === 1 ? 'Fixed the missing guard.' : 'Retry is internally consistent.',
+            reviewState: {
+              diff: round === 1
+                ? 'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW'
+                : 'diff --git a/app.ts b/app.ts\nFIXED-IN-ROUND-TWO',
+              hash: `hash-${round}`,
+              changedPaths: ['app.ts'],
             },
-            revised: true,
           };
         },
         reviewer: async ({ diff }) => {
@@ -1754,12 +1779,11 @@ describe('team-task-workflow — coder diff self-review', () => {
         },
         techLeadReviewDiff: async ({ diff }) => {
           order.push('tech-lead-diff');
-          techLeadDiffs.push(diff);
           return { pass: true };
         },
         designer: async ({ diff }) => {
           order.push('designer');
-          designerDiffs.push(diff);
+          expect(diff).toContain('FIXED');
           return { pass: true };
         },
         pmWrapup: forbidPmWrapup(),
@@ -1769,10 +1793,12 @@ describe('team-task-workflow — coder diff self-review', () => {
     expect(ev.outcome).toBe('ready-for-closeout');
     expect(selfReviewInputs).toEqual([
       { diff: 'diff --git a/app.ts b/app.ts\nBUGGY', handoffNotes: [] },
+      { diff: 'diff retry', handoffNotes: [] },
     ]);
-    expect(reviewerDiffs[0]).toBe('diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW');
-    expect(techLeadDiffs[0]).toBe('diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW');
-    expect(designerDiffs[0]).toBe('diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW');
+    expect(reviewerDiffs).toEqual([
+      'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW',
+      'diff --git a/app.ts b/app.ts\nFIXED-IN-ROUND-TWO',
+    ]);
     expect(order).toEqual([
       'qa',
       'tl-tests',
@@ -1782,11 +1808,41 @@ describe('team-task-workflow — coder diff self-review', () => {
       'tech-lead-diff',
       'designer',
       'coder',
+      'coder-self-review',
       'reviewer',
       'tech-lead-diff',
       'designer',
     ]);
-    expect(order.filter((step) => step === 'coder-self-review')).toHaveLength(1);
+    expect(ev.coderSelfReviews).toEqual([
+      {
+        round: 1,
+        outcome: 'revised',
+        notes: 'Fixed the missing guard.',
+        canonicalHash: 'hash-1',
+        changedPaths: ['app.ts'],
+      },
+      {
+        round: 2,
+        outcome: 'confirmed',
+        notes: 'Retry is internally consistent.',
+        canonicalHash: 'hash-2',
+        changedPaths: ['app.ts'],
+      },
+    ]);
+    expect(activities.filter((event) => event['event'] === 'coder-self-review')).toEqual([
+      expect.objectContaining({
+        round: 1,
+        outcome: 'revised',
+        canonicalHash: 'hash-1',
+        changedPaths: ['app.ts'],
+      }),
+      expect.objectContaining({
+        round: 2,
+        outcome: 'confirmed',
+        canonicalHash: 'hash-2',
+        changedPaths: ['app.ts'],
+      }),
+    ]);
   });
 
   it('re-validates QA test intent against a revised self-reviewed diff before reviewer/tech-lead/designer consume it', async () => {
@@ -1819,11 +1875,13 @@ describe('team-task-workflow — coder diff self-review', () => {
         coderSelfReview: async () => {
           order.push('coder-self-review');
           return {
-            artifact: {
+            outcome: 'revised',
+            notes: 'Added a behavior-preserving guard.',
+            reviewState: {
               diff: 'diff after self-review with behavior-preserving guard',
-              handoffNotes: [],
+              hash: 'revised-hash',
+              changedPaths: ['src/guard.ts'],
             },
-            revised: true,
           };
         },
         qaRevalidateDiff: async ({ diff }) => {
@@ -1894,7 +1952,15 @@ describe('team-task-workflow — coder diff self-review', () => {
         },
         coderSelfReview: async ({ artifact }) => {
           order.push('coder-self-review');
-          return { artifact, revised: false };
+          return {
+            outcome: 'confirmed',
+            notes: 'No changes were needed.',
+            reviewState: {
+              diff: artifact.diff,
+              hash: 'confirmed-hash',
+              changedPaths: ['src/coder.ts'],
+            },
+          };
         },
         qaRevalidateDiff: async () => {
           revalidateCalled = true;
@@ -1920,6 +1986,14 @@ describe('team-task-workflow — coder diff self-review', () => {
     );
 
     expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewSurfaceHash).toBe('confirmed-hash');
+    expect(ev.coderSelfReviews).toEqual([{
+      round: 1,
+      outcome: 'confirmed',
+      notes: 'No changes were needed.',
+      canonicalHash: 'confirmed-hash',
+      changedPaths: ['src/coder.ts'],
+    }]);
     expect(revalidateCalled).toBe(true);
     expect(reviewerDiffs).toEqual(['diff confirmed by self-review']);
     expect(techLeadDiffs).toEqual(['diff confirmed by self-review']);
@@ -1935,6 +2009,100 @@ describe('team-task-workflow — coder diff self-review', () => {
     ]);
   });
 
+  // A `revised` self-review edits the worktree AFTER the coder handed off, so
+  // the coder's own notes no longer describe the diff under review. The
+  // self-review notes are the only channel explaining what changed — including
+  // a justified test removal, which reviewer and tech lead look for in the
+  // handoff notes.
+  it('gives downstream roles the self-review notes as coder handoff notes when the pass revised the worktree', async () => {
+    const reviewerNotes: Array<string[] | undefined> = [];
+    const techLeadNotes: Array<string[] | undefined> = [];
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 1 },
+      makeCoderSelfReviewDeps({
+        qaWriteTests: async () => ({
+          kind: 'tests-written',
+          testIds: ['test/coder-diff.test.ts'],
+        }),
+        techLeadReviewTests: async () => ({ approved: true }),
+        coder: async () => ({
+          diff: 'diff before self-review',
+          handoffNotes: ['implemented the guard'],
+        }),
+        coderSelfReview: async () => ({
+          outcome: 'revised',
+          notes: 'TEST-REMOVED: test/live-only.test.ts — needs a live endpoint this sandbox denies.',
+          reviewState: {
+            diff: 'diff after self-review',
+            hash: 'revised-hash',
+            changedPaths: ['src/coder.ts'],
+          },
+        }),
+        qaRevalidateDiff: async () => ({ approved: true }),
+        reviewer: async ({ coderHandoffNotes }) => {
+          reviewerNotes.push(coderHandoffNotes);
+          return cleanVerdict;
+        },
+        techLeadReviewDiff: async ({ coderHandoffNotes }) => {
+          techLeadNotes.push(coderHandoffNotes);
+          return { pass: true };
+        },
+        designer: async () => ({ pass: true }),
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    const expected = [
+      'implemented the guard',
+      'coder self-review (revised): TEST-REMOVED: test/live-only.test.ts — needs a live endpoint this sandbox denies.',
+    ];
+    expect(reviewerNotes).toEqual([expected]);
+    expect(techLeadNotes).toEqual([expected]);
+    expect(ev.handoffNotes).toEqual(expected);
+  });
+
+  it('leaves coder handoff notes untouched when self-review confirms the worktree unchanged', async () => {
+    const reviewerNotes: Array<string[] | undefined> = [];
+
+    await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 1 },
+      makeCoderSelfReviewDeps({
+        qaWriteTests: async () => ({
+          kind: 'tests-written',
+          testIds: ['test/coder-diff.test.ts'],
+        }),
+        techLeadReviewTests: async () => ({ approved: true }),
+        coder: async () => ({
+          diff: 'diff confirmed by self-review',
+          handoffNotes: ['implemented the guard'],
+        }),
+        coderSelfReview: async ({ artifact }) => ({
+          outcome: 'confirmed',
+          notes: 'No changes were needed.',
+          reviewState: {
+            diff: artifact.diff,
+            hash: 'confirmed-hash',
+            changedPaths: ['src/coder.ts'],
+          },
+        }),
+        qaRevalidateDiff: async () => ({ approved: true }),
+        reviewer: async ({ coderHandoffNotes }) => {
+          reviewerNotes.push(coderHandoffNotes);
+          return cleanVerdict;
+        },
+        techLeadReviewDiff: async () => ({ pass: true }),
+        designer: async () => ({ pass: true }),
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(reviewerNotes).toEqual([['implemented the guard']]);
+  });
+
   it('fails the task run when coder self-review fails, before downstream diff review sees the unreviewed diff', async () => {
     let reviewerCalled = false;
     let techLeadDiffCalled = false;
@@ -1947,7 +2115,7 @@ describe('team-task-workflow — coder diff self-review', () => {
         coder: async () => ({ diff: 'diff that still needs self-review', handoffNotes: [] }),
         coderSelfReview: async () => {
           throw new Error(
-            'coder self-review failed: missing self-review-artifact fence after strict-format retry',
+            'coder self-review failed: coder-self-review fence is malformed',
           );
         },
         reviewer: async () => {
@@ -1972,7 +2140,7 @@ describe('team-task-workflow — coder diff self-review', () => {
     expect(designerCalled).toBe(false);
   });
 
-  it('captures the canonical staged HEAD diff and gives that complete surface to every downstream review', async () => {
+  it('gives only the post-self-review canonical state to QA and every downstream review', async () => {
     const completeDiff = [
       'diff --git a/src/tracked.ts b/src/tracked.ts',
       '+tracked change',
@@ -1980,18 +2148,21 @@ describe('team-task-workflow — coder diff self-review', () => {
       'new file mode 100644',
       '+untracked change',
     ].join('\n');
-    const captureCanonicalReviewDiff = vi.fn(async (candidateDiff: string) => ({
-      ok: true as const,
-      diff: candidateDiff,
-    }));
     const qaDiffs: string[] = [];
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
     const deps = makeDeps({
-      ...({ captureCanonicalReviewDiff } as Record<string, unknown>),
-      coder: async () => ({ diff: completeDiff, handoffNotes: [] }),
-      coderSelfReview: async ({ artifact }) => ({ artifact, revised: true }),
+      coder: async () => ({ diff: 'model-returned candidate must be ignored', handoffNotes: [] }),
+      coderSelfReview: async () => ({
+        outcome: 'revised',
+        notes: 'Canonicalized tracked and untracked edits.',
+        reviewState: {
+          diff: completeDiff,
+          hash: 'complete-hash',
+          changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
+        },
+      }),
       qaRevalidateDiff: async ({ diff }) => {
         qaDiffs.push(diff);
         return { approved: true };
@@ -2013,8 +2184,7 @@ describe('team-task-workflow — coder diff self-review', () => {
     const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    expect(captureCanonicalReviewDiff).toHaveBeenCalledOnce();
-    expect(captureCanonicalReviewDiff).toHaveBeenCalledWith(completeDiff);
+    expect(evidence.reviewSurfaceHash).toBe('complete-hash');
     for (const [role, diffs] of [
       ['qa', qaDiffs],
       ['reviewer', reviewerDiffs],
@@ -2025,56 +2195,7 @@ describe('team-task-workflow — coder diff self-review', () => {
       expect(diffs[0]).toContain('src/tracked.ts');
       expect(diffs[0]).toContain('src/new-untracked.ts');
     }
-  });
-
-  it('fails closed on a narrowed or rewritten coder diff without invoking reviewer, tech lead, or designer', async () => {
-    const reviewer = vi.fn(async () => cleanVerdict);
-    const techLeadReviewDiff = vi.fn(async () => ({ pass: true }));
-    const designer = vi.fn(async () => ({ pass: true }));
-    const failure = {
-      kind: 'candidate-mismatch' as const,
-      candidateHash: 'candidate-sha256',
-      canonicalHash: 'canonical-sha256',
-      changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
-    };
-    const captureCanonicalReviewDiff = vi.fn(async () => ({
-      ok: false as const,
-      failure,
-    }));
-    const deps = makeDeps({
-      ...({ captureCanonicalReviewDiff } as Record<string, unknown>),
-      coder: async () => ({
-        diff: 'diff --git a/src/tracked.ts b/src/tracked.ts\n+only the tracked subset',
-        handoffNotes: [],
-      }),
-      coderSelfReview: async () => ({
-        artifact: {
-          diff: 'diff --git a/src/tracked.ts b/src/tracked.ts\n+rewritten narrow subset',
-          handoffNotes: [],
-        },
-        revised: true,
-      }),
-      qaRevalidateDiff: async () => ({ approved: true }),
-      reviewer,
-      techLeadReviewDiff,
-      designer,
-    });
-
-    const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
-
-    expect(captureCanonicalReviewDiff).toHaveBeenCalledWith(
-      'diff --git a/src/tracked.ts b/src/tracked.ts\n+rewritten narrow subset',
-    );
-    expect(evidence).toMatchObject({
-      outcome: 'failed',
-      rolesInvoked: ['qa', 'tech-lead', 'coder'],
-      reviewSurfaceFailure: failure,
-    });
-    expect(evidence.failureReason).toMatch(/review surface|canonical diff|mismatch/i);
-    expect(reviewer).not.toHaveBeenCalled();
-    expect(techLeadReviewDiff).not.toHaveBeenCalled();
-    expect(designer).not.toHaveBeenCalled();
-    expect(JSON.stringify(evidence)).not.toContain('rewritten narrow subset');
+    expect(JSON.stringify(evidence)).not.toContain('model-returned candidate');
   });
 });
 
@@ -3726,6 +3847,7 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'qa', stage: 'test' },
       { role: 'tech-lead', stage: 'test-review' },
       { role: 'coder', stage: 'implementation' },
+      { role: 'coder', stage: 'self-review' },
       { role: 'reviewer', stage: 'review' },
       { role: 'designer', stage: 'design' },
     ]);

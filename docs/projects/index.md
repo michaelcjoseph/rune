@@ -411,7 +411,7 @@ Removes the lossy Planner→PM brief handoff and the block-for-interview bounce:
 - **Retire the specified-enough gate** from `/plan` so no run can bounce the user into a second interview, with a regression test.
 - **One durable approval gate:** the pending approval stores the revised PM spec plus enough state for `/approve` to resume the downstream pipeline (tech-lead breakdown → `pmReviewMatch` → Claude critique → Codex critique → context seed → scaffold) after a restart.
 - **Progress streaming:** every downstream stage emits one informational line; terminal failures and final scaffold success (with the created identifier) are surfaced, human-gate count stays one.
-- **Fix-it self-review:** a reusable `runSelfReview<A>` primitive gives PM (spec), Tech Lead (tech-spec + tasks), and Coder (code diff) one cold fix-pass each — corrected-or-confirmed artifact, no loop, no new gate.
+- **Fix-it self-review:** the reusable text-artifact `runSelfReview<A>` primitive gives PM (spec) and Tech Lead (tech-spec + tasks) one cold fix-pass each. Coder self-review now uses a fresh worktree execution after every implementation round and hands downstream roles only canonical Git state.
 - **Task breakdown & test plan:** see [tasks.md](20-pm-scoping-self-review/tasks.md) and [test-plan.md](20-pm-scoping-self-review/test-plan.md). Test-first per phase.
 
 ## 21-parallel-product-chats — Done

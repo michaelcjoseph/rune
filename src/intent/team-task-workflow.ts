@@ -220,9 +220,44 @@ export interface CoderResult {
   handoffNotes: string[];
 }
 
-/** Evidence that the coder/self-review artifact was not the complete current
- * Git review surface. Only hashes and relative changed paths are durable; raw
- * diffs remain transient. */
+export type CoderSelfReviewOutcome = 'confirmed' | 'revised';
+
+/** Bounds on durable coder-self-review evidence. The parser that admits a
+ * self-review reply (`jobs/team-task-deps`), the in-flight record built below,
+ * and the durable task record (`orch-run-record`) all bound the same fields —
+ * they share these constants so a change in one layer cannot silently truncate
+ * evidence in another. */
+export const SELF_REVIEW_NOTE_MAX_CHARS = 2_000;
+/** Changed paths carried alongside any canonical review state — the capture
+ * itself (`jobs/canonical-git`), the self-review record, and the durable task
+ * record. */
+export const CANONICAL_CHANGED_PATHS_MAX = 200;
+
+/** One successful worktree-editing coder self-review. The canonical diff stays
+ * transient; only this bounded metadata is persisted with task evidence. */
+export interface CoderSelfReviewRecord {
+  round: number;
+  outcome: CoderSelfReviewOutcome;
+  notes: string;
+  canonicalHash: string;
+  changedPaths: string[];
+}
+
+/** The worktree state captured with canonical Git after a coder self-review. */
+export interface CanonicalReviewState {
+  diff: string;
+  hash: string;
+  changedPaths: string[];
+}
+
+export interface CoderSelfReviewResult {
+  outcome: CoderSelfReviewOutcome;
+  notes: string;
+  reviewState: CanonicalReviewState;
+}
+
+/** Evidence that a later mechanical gate changed the canonical surface that
+ * downstream roles approved. Raw diffs never enter durable failure records. */
 export interface ReviewSurfaceFailure {
   kind: 'candidate-mismatch';
   canonicalHash: string;
@@ -287,13 +322,16 @@ export interface TeamTaskDeps {
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderResult>;
-  coderSelfReview?: (input: {
+  coderSelfReview: (input: {
     task: SizedTask;
     artifact: CoderResult;
     spec: string;
     context: string;
     tests: string[] | string;
-  }) => Promise<{ artifact: CoderResult; revised: boolean }>;
+    qa: QaResult;
+    rejectionFeedback?: GateRejectionFeedback[];
+    findingsLedger?: FindingsLedgerEntry[];
+  }) => Promise<CoderSelfReviewResult>;
   qaRevalidateDiff?: (input: {
     task: SizedTask;
     qa: QaResult;
@@ -301,14 +339,6 @@ export interface TeamTaskDeps {
     spec: string;
     context: string;
   }) => Promise<{ approved: boolean; notes?: string }>;
-  /** Stage all Git-visible work and compare the complete canonical `diff HEAD`
-   * with the coder/self-review artifact before any downstream judgment role. */
-  captureCanonicalReviewDiff?: (
-    candidateDiff: string,
-  ) => Promise<
-    | { ok: true; diff: string; hash?: string }
-    | { ok: false; failure: ReviewSurfaceFailure }
-  >;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
     task: SizedTask;
@@ -389,6 +419,9 @@ export interface TaskEvidence {
   reviewSurfaceFailure?: ReviewSurfaceFailure;
   /** Scrubbed canonical review-surface hash approved by downstream roles. */
   reviewSurfaceHash?: string;
+  /** Successful coder self-reviews, one per implementation round. Optional so
+   * historical persisted records remain readable. */
+  coderSelfReviews?: CoderSelfReviewRecord[];
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
@@ -425,11 +458,21 @@ export async function runTeamTaskWorkflow(
   // outcome reaches every terminal — including the outer-catch `failed` path —
   // from one decoration point.
   const repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] } = {};
+  const coderSelfReviews: CoderSelfReviewRecord[] = [];
 
   try {
-    const evidence = await runGated(task, input, deps, roles, handoffNotes, repairEvidence);
+    const evidence = await runGated(
+      task,
+      input,
+      deps,
+      roles,
+      handoffNotes,
+      repairEvidence,
+      coderSelfReviews,
+    );
     return {
       ...evidence,
+      coderSelfReviews: [...coderSelfReviews],
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
         : {}),
@@ -445,6 +488,7 @@ export async function runTeamTaskWorkflow(
         cancellation: err.cancellation,
         findingsLedger: [],
         loopExitReason: 'operational',
+        coderSelfReviews: [...coderSelfReviews],
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
           : {}),
@@ -461,6 +505,7 @@ export async function runTeamTaskWorkflow(
         failureReason: executionFailureSummary(err.failure),
         findingsLedger: [],
         loopExitReason: 'operational',
+        coderSelfReviews: [...coderSelfReviews],
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
           : {}),
@@ -477,6 +522,7 @@ export async function runTeamTaskWorkflow(
       failureReason: (err as Error).message,
       findingsLedger: [],
       loopExitReason: 'operational',
+      coderSelfReviews: [...coderSelfReviews],
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
         : {}),
@@ -491,6 +537,7 @@ async function runGated(
   roles: RoleLog,
   handoffNotes: string[],
   repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] },
+  coderSelfReviews: CoderSelfReviewRecord[],
 ): Promise<TaskEvidence> {
   // Gate 0: reviewer independence, resolved up-front and fail-closed — block
   // before any coder work rather than risk a same-provider review later.
@@ -671,7 +718,6 @@ async function runGated(
   let flatMaxOpenSeverityRounds = 0;
   let continueConvergingPastConfiguredCap = false;
   let approvedReviewSurfaceHash: string | undefined;
-  let coderSelfReviewDone = false;
   const findingsLedger: FindingsLedgerEntry[] = [];
   const explicitNonReversibleFindingIds = new Set<string>();
   while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
@@ -685,7 +731,7 @@ async function runGated(
       'implementation',
       'coder-implementation',
     );
-    let coder = await deps.coder({
+    const coder = await deps.coder({
       task,
       spec: input.spec,
       context: input.contextMd,
@@ -693,39 +739,50 @@ async function runGated(
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
       ...coderFindingsLedger(findingsLedger),
     });
-    if (!coderSelfReviewDone) {
-      coderSelfReviewDone = true;
-      const reviewed = await runCoderSelfReview(deps, {
-        task,
-        artifact: coder,
-        spec: input.spec,
-        context: input.contextMd,
-        tests,
-      });
-      coder = reviewed.artifact;
-    }
-
-    const reviewSurface = deps.captureCanonicalReviewDiff === undefined
-      ? { ok: true as const, diff: coder.diff }
-      : await deps.captureCanonicalReviewDiff(coder.diff);
-    if (!reviewSurface.ok) {
-      return {
-        ...fail(task, roles, handoffNotes, {
-          failureReason: 'review surface mismatch: coder artifact does not match canonical git diff HEAD',
-          findingsLedger,
-          loopExitReason: 'operational',
-          noCodeTestRationale,
-        }),
-        reviewSurfaceFailure: reviewSurface.failure,
-      };
-    }
-    coder = { ...coder, diff: reviewSurface.diff };
-    approvedReviewSurfaceHash = reviewSurface.hash;
+    emitRoleStage(input, 'coder', 'self-review');
+    const reviewed = await deps.coderSelfReview({
+      task,
+      artifact: coder,
+      spec: input.spec,
+      context: input.contextMd,
+      tests,
+      qa,
+      ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
+      ...coderFindingsLedger(findingsLedger),
+    });
+    const selfReviewRecord: CoderSelfReviewRecord = {
+      round,
+      outcome: reviewed.outcome,
+      notes: reviewed.notes,
+      canonicalHash: reviewed.reviewState.hash,
+      changedPaths: reviewed.reviewState.changedPaths.slice(
+        0,
+        CANONICAL_CHANGED_PATHS_MAX,
+      ),
+    };
+    coderSelfReviews.push(selfReviewRecord);
+    emitCoderSelfReview(input, selfReviewRecord);
+    // A `revised` self-review edited the worktree after the coder handed off,
+    // so the canonical diff downstream roles judge is no longer the one the
+    // coder's own notes describe. The self-review notes are the only channel
+    // explaining what changed and why — including a justified test removal,
+    // which the reviewer and tech lead look for in the handoff notes — so they
+    // join the coder's notes rather than staying evidence-only. Already
+    // scrubbed by the self-review parser.
+    const canonicalCoder = {
+      ...coder,
+      diff: reviewed.reviewState.diff,
+      handoffNotes:
+        reviewed.outcome === 'revised'
+          ? [...coder.handoffNotes, `coder self-review (revised): ${reviewed.notes}`]
+          : coder.handoffNotes,
+    };
+    approvedReviewSurfaceHash = reviewed.reviewState.hash;
 
     const qaDiffReview = await revalidateQaDiff(deps, {
       task,
       qa,
-      diff: coder.diff,
+      diff: canonicalCoder.diff,
       spec: input.spec,
       context: input.contextMd,
     });
@@ -748,7 +805,7 @@ async function runGated(
         noCodeTestRationale,
       });
     }
-    handoffNotes.push(...coder.handoffNotes);
+    handoffNotes.push(...canonicalCoder.handoffNotes);
     const roundFeedback: GateRejectionFeedback[] = [];
 
     roles.add('reviewer');
@@ -761,7 +818,7 @@ async function runGated(
     );
     const roundFindingsLedger = openFindingsLedger(findingsLedger);
     const rawReviewerVerdict = await deps.reviewer({
-      diff: coder.diff,
+      diff: canonicalCoder.diff,
       spec: input.spec,
       tests,
       task,
@@ -770,8 +827,8 @@ async function runGated(
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),
-      ...(coder.handoffNotes.length > 0
-        ? { coderHandoffNotes: coder.handoffNotes }
+      ...(canonicalCoder.handoffNotes.length > 0
+        ? { coderHandoffNotes: canonicalCoder.handoffNotes }
         : {}),
     });
     lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
@@ -827,14 +884,14 @@ async function runGated(
 
     lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({
       task,
-      diff: coder.diff,
+      diff: canonicalCoder.diff,
       spec: input.spec,
       context: input.contextMd,
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),
-      ...(coder.handoffNotes.length > 0
-        ? { coderHandoffNotes: coder.handoffNotes }
+      ...(canonicalCoder.handoffNotes.length > 0
+        ? { coderHandoffNotes: canonicalCoder.handoffNotes }
         : {}),
     }));
     mergeFindingsIntoLedger(
@@ -879,7 +936,7 @@ async function runGated(
       );
       lastDesigner = normalizeGateVerdict(await deps.designer({
         task,
-        diff: coder.diff,
+        diff: canonicalCoder.diff,
         ...(roundFindingsLedger.length > 0
           ? { findingsLedger: roundFindingsLedger }
           : {}),
@@ -1154,22 +1211,6 @@ function fail(
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
   };
-}
-
-async function runCoderSelfReview(
-  deps: TeamTaskDeps,
-  input: {
-    task: SizedTask;
-    artifact: CoderResult;
-    spec: string;
-    context: string;
-    tests: string[] | string;
-  },
-): Promise<{ artifact: CoderResult; revised: boolean }> {
-  if (deps.coderSelfReview === undefined) {
-    return { artifact: input.artifact, revised: false };
-  }
-  return deps.coderSelfReview(input);
 }
 
 async function revalidateQaDiff(
@@ -1473,7 +1514,10 @@ const severityRank: Record<ObjectionSeverity, number> = {
   critical: 3,
 };
 
-const SEVERITY_LOOP_HARD_BUDGET = 4;
+/** Hard ceiling on coder rounds, and therefore on coder self-reviews (exactly
+ * one per round). `orch-run-record` bounds durable self-review evidence by the
+ * same constant, so raising it here widens both together. */
+export const SEVERITY_LOOP_HARD_BUDGET = 4;
 
 function maxOpenFindingSeverity(
   ledger: FindingsLedgerEntry[],
@@ -1839,6 +1883,31 @@ function emitTestRepair(
         outcome: repair.kind,
         summary,
         line: `tech-lead: test-intent repair ${repair.kind} - ${summary}`,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitCoderSelfReview(
+  input: TeamTaskRunInput,
+  review: CoderSelfReviewRecord,
+): void {
+  if (input.emit === undefined) return;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'coder-self-review',
+        role: 'coder',
+        stage: 'self-review',
+        round: review.round,
+        outcome: review.outcome,
+        notes: review.notes,
+        canonicalHash: review.canonicalHash,
+        changedPaths: review.changedPaths,
+        line: `coder-self-review: ${review.outcome} - ${review.notes}`,
       },
     });
   } catch {

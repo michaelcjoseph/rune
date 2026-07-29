@@ -62,6 +62,7 @@ vi.mock('../utils/logger.js', () => ({
 import { handleApprove } from '../bot/commands/approve.js';
 import { buildProductionTeamTaskDeps, type JudgmentModelCall } from '../jobs/team-task-deps.js';
 import type { ExecutionAgentResult, RoleModelBinding } from '../jobs/execution-agent.js';
+import { stubCanonicalGit } from '../jobs/canonical-git-test-stub.js';
 import {
   createPlanningSession,
   getPlanningSession,
@@ -441,17 +442,6 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
       return ['```tl-test-review', '{"approved": true}', '```'].join('\n');
     }
 
-    if (role === 'coder') {
-      coderSelfReviewCalls += 1;
-      order.push('coder-self-review');
-      expect(message).toContain('deliberate flaw for coder self-review');
-      return [
-        '```self-review-artifact',
-        JSON.stringify({ diff: reviewedDiff, handoffNotes: ['self-review fixed the acceptance return value'] }, null, 2),
-        '```',
-      ].join('\n');
-    }
-
     if (role === 'qa' && message.includes('## Self-reviewed coder diff')) {
       order.push('qa-diff-revalidation');
       expect(message).toContain(reviewedDiff);
@@ -477,11 +467,26 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
     throw new Error(`unexpected team-task judgment call for ${role}`);
   };
 
-  const runExecution = async (): Promise<ExecutionAgentResult> => {
+  let currentDiff = '';
+  const runExecution = async (opts: { workflowStage?: string }): Promise<ExecutionAgentResult> => {
+    if (opts.workflowStage === 'coder-self-review') {
+      coderSelfReviewCalls += 1;
+      order.push('coder-self-review');
+      currentDiff = reviewedDiff;
+      return {
+        ok: true,
+        diff: reviewedDiff,
+        output: [
+          '```coder-self-review',
+          '{"outcome":"revised","notes":"Fixed the acceptance return value."}',
+          '```',
+        ].join('\n'),
+      };
+    }
     executionCalls += 1;
     if (executionCalls === 1) {
       order.push('qa-execution');
-      return {
+      const result = {
         ok: true,
         diff: [
           'diff --git a/src/acceptance.test.ts b/src/acceptance.test.ts',
@@ -489,11 +494,15 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
           '+expect(acceptanceReady()).toBe(true);',
         ].join('\n'),
         output: 'wrote acceptance test',
-      };
+      } satisfies ExecutionAgentResult;
+      currentDiff = result.diff;
+      return result;
     }
     order.push('coder-execution');
+    currentDiff = flawedDiff;
     return { ok: true, diff: flawedDiff, output: 'implemented acceptanceReady with a deliberate flaw' };
   };
+  const runCanonicalGit = stubCanonicalGit(() => currentDiff, 'src/acceptance.ts');
 
   const models = {
     pm: binding('fable', 'anthropic', 'claude'),
@@ -518,7 +527,7 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
     {
       judgmentCall,
       runExecution,
-      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
+      runCanonicalGit,
     },
   );
 

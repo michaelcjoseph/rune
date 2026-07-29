@@ -12,6 +12,7 @@ const mockConfig = {
 };
 
 vi.mock('../config.js', () => ({
+  PROJECT_ROOT: '/test/project',
   default: mockConfig,
 }));
 

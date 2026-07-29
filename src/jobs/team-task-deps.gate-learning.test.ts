@@ -126,6 +126,8 @@ import { composeRoleContext } from '../roles/loader.js';
 import { runTeamTaskWorkflow } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
+import type { ExecutionAgentResult } from './execution-agent.js';
+import { stubCanonicalGit } from './canonical-git-test-stub.js';
 
 const task: SizedTask = {
   id: 'qa-redaction-retry',
@@ -156,18 +158,6 @@ function sandbox(): SandboxSpec {
     egressAllowlist: [],
     resumed: false,
   } as SandboxSpec;
-}
-
-// Project 20 added a cold coder self-review that routes through judgmentCall
-// with role 'coder' and expects the corrected-or-confirmed coder artifact
-// echoed back in a `self-review-artifact` fence. Echoing the artifact unchanged
-// yields revised=false, so the run proceeds as it did before the step existed.
-function confirmCoderSelfReview(message: string): string {
-  const fence = message.match(/```self-review-artifact[\s\S]*?```/);
-  if (fence === null) {
-    throw new Error('coder self-review prompt missing self-review-artifact fence');
-  }
-  return fence[0];
 }
 
 describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
@@ -253,9 +243,6 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     let techLeadTestReviews = 0;
 
     const judgmentCall: JudgmentModelCall = async ({ role, message }) => {
-      if (role === 'coder') {
-        return confirmCoderSelfReview(message);
-      }
       if (role === 'tech-lead') {
         techLeadTestReviews += 1;
         if (techLeadTestReviews === 1) {
@@ -263,6 +250,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
             '```tl-test-review',
             JSON.stringify({
               approved: false,
+              repairable: false,
               notes: 'tests assert the redacted placeholder instead of proving the raw token is absent',
             }),
             '```',
@@ -282,25 +270,41 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
       return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
     };
 
+    let currentDiff = '';
     const seams: Partial<TeamTaskSeams> = {
       judgmentCall,
-      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
       runExecution: async (opts) => {
+        if (opts.workflowStage === 'coder-self-review') {
+          return {
+            ok: true,
+            diff: currentDiff,
+            output: [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The implementation is ready."}',
+              '```',
+            ].join('\n'),
+          };
+        }
         executionCalls += 1;
         if (executionCalls <= 2) {
           qaPrompts.push(opts.prompt);
-          return {
+          const result = {
             ok: true,
             diff: `diff --git a/src/redaction-${executionCalls}.test.ts b/src/redaction-${executionCalls}.test.ts\n+++ b/src/redaction-${executionCalls}.test.ts\n+expect(output).not.toContain(rawSecret)\n`,
             output: `qa attempt ${executionCalls}`,
-          };
+          } satisfies ExecutionAgentResult;
+          currentDiff = result.diff;
+          return result;
         }
-        return {
+        const result = {
           ok: true,
           diff: 'diff --git a/src/redaction.ts b/src/redaction.ts\n+++ b/src/redaction.ts\n+export const redaction = true\n',
           output: 'coder done',
-        };
+        } satisfies ExecutionAgentResult;
+        currentDiff = result.diff;
+        return result;
       },
+      runCanonicalGit: stubCanonicalGit(() => currentDiff, 'src/redaction.ts'),
     };
 
     const deps = buildProductionTeamTaskDeps(
@@ -399,9 +403,6 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     });
 
     const judgmentCall: JudgmentModelCall = async (call) => {
-      if (call.role === 'coder') {
-        return confirmCoderSelfReview(call.message);
-      }
       if (call.role === 'tech-lead' && call.message.includes('<gate-rejection>')) {
         return [
           '```gate-lesson-candidate',
@@ -425,6 +426,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
             '```tl-test-review',
             JSON.stringify({
               approved: false,
+              repairable: false,
               notes:
                 'QA used an already-redacted placeholder fixture; use a raw token-shaped fixture and assert the raw value is absent.',
             }),
@@ -452,10 +454,21 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
       return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
     };
 
+    let currentDiff = '';
     const seams: Partial<TeamTaskSeams> = {
       judgmentCall,
-      captureCanonicalReviewDiff: async (candidateDiff) => ({ ok: true, diff: candidateDiff }),
       runExecution: async (opts) => {
+        if (opts.workflowStage === 'coder-self-review') {
+          return {
+            ok: true,
+            diff: currentDiff,
+            output: [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The implementation is ready."}',
+              '```',
+            ].join('\n'),
+          };
+        }
         executionCalls += 1;
         if (executionCalls <= 2) {
           qaPrompts.push(opts.prompt);
@@ -476,14 +489,18 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
                   '+expect(output).toMatch(/redacted/i);',
                 ].join('\n');
           qaDiffs.push(diff);
+          currentDiff = diff;
           return { ok: true, diff, output: `qa redaction attempt ${executionCalls}` };
         }
-        return {
+        const result = {
           ok: true,
           diff: 'diff --git a/src/redaction.ts b/src/redaction.ts\n+++ b/src/redaction.ts\n+export const redact = true\n',
           output: 'coder done',
-        };
+        } satisfies ExecutionAgentResult;
+        currentDiff = result.diff;
+        return result;
       },
+      runCanonicalGit: stubCanonicalGit(() => currentDiff, 'src/redaction.ts'),
     };
 
     const deps = buildProductionTeamTaskDeps(

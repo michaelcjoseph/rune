@@ -410,6 +410,9 @@ async function runProjectOrchestrationImpl(
         : {},
       ...warningsField(evidence),
       ...acceptanceField(evidence),
+      ...(evidence.coderSelfReviews !== undefined
+        ? { coderSelfReviews: evidence.coderSelfReviews }
+        : {}),
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
       outcome: 'ready-for-closeout',

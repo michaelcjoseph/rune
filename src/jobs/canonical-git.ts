@@ -12,6 +12,10 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 
 import type { GitRunner } from './sandbox-runtime.js';
+import {
+  CANONICAL_CHANGED_PATHS_MAX,
+  type CanonicalReviewState,
+} from '../intent/team-task-workflow.js';
 import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
@@ -93,11 +97,11 @@ export function canonicalReviewDiffHash(diff: string): string {
   return createHash('sha256').update(normalizeCanonicalReviewDiff(diff)).digest('hex');
 }
 
-export interface CanonicalReviewState {
-  diff: string;
-  hash: string;
-  changedPaths: string[];
-}
+/** Re-exported so callers of `captureCanonicalReviewState` need only this
+ * module. The shape is declared once, next to the workflow contract it feeds
+ * (`intent/team-task-workflow`); duplicating it here let the two drift apart
+ * without a compiler error. */
+export type { CanonicalReviewState };
 
 /** Stage and capture the one canonical review surface used both before
  * judgment roles and after mechanical validation. */
@@ -120,6 +124,6 @@ export async function captureCanonicalReviewState(
       .split(/\r?\n/)
       .map((path) => scrubAbsolutePaths(scrubPathsInText(path.trim())))
       .filter(Boolean)
-      .slice(0, 200),
+      .slice(0, CANONICAL_CHANGED_PATHS_MAX),
   };
 }

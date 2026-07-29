@@ -1003,14 +1003,6 @@ function buildOrchestrationDeps(args: {
         failure,
       );
     },
-    persistReviewSurfaceFailure: async (failure) => {
-      appendDurableValidationFailure(
-        args.workRunsDir,
-        descriptor.id,
-        'review-surface-failures.jsonl',
-        failure,
-      );
-    },
     ...(args.cancel !== undefined ? {
       cancellationDuringBackoff: () => args.cancel?.()
         ? {

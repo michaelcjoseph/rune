@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildProductionTeamTaskDeps,
   createProductionTaskWorkflowRunner,
+  parseCoderSelfReviewResult,
   resolveTeamRoleModels,
   type JudgmentModelCall,
   type TeamRoleModels,
@@ -40,8 +41,10 @@ import {
   __getRuntimeDepsForTest,
   __resetOrchestratedRuntimeForTest,
 } from './orchestrated-work-runner.js';
+import { PROJECT_ROOT } from '../config.js';
 import { parsePolicy, type ModelEntry, type ModelPolicy } from '../intent/model-policy.js';
 import {
+  ExecutionFailureError,
   RoleCancellationError,
   runTeamTaskWorkflow,
   type FindingsLedgerEntry,
@@ -54,7 +57,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 import type { ExecutionFailure } from '../intent/execution-failure.js';
 import { defaultRunGit } from './sandbox-runtime.js';
-import { defaultRunCanonicalGit } from './canonical-git.js';
+import { captureCanonicalReviewState, defaultRunCanonicalGit } from './canonical-git.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -131,13 +134,7 @@ const GREEN_JUDGMENT_REPLY = [
   '```',
 ].join('\n');
 
-function echoSelfReviewArtifact(message: string): string | undefined {
-  const match = /```self-review-artifact\s*\n[\s\S]*?\n```/.exec(message);
-  return match?.[0];
-}
-
-const greenJudgment: JudgmentModelCall = async ({ message }) =>
-  echoSelfReviewArtifact(message) ?? GREEN_JUDGMENT_REPLY;
+const greenJudgment: JudgmentModelCall = async () => GREEN_JUDGMENT_REPLY;
 
 const greenExecution = async (): Promise<ExecutionAgentResult> => ({
   ok: true,
@@ -191,6 +188,9 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
   });
   const runCanonicalGit = overrides.runCanonicalGit ?? overrides.runGit ?? (async (args: string[]) => {
     if (args.includes('add')) return { stdout: '', stderr: '' };
+    if (args.includes('write-tree')) {
+      return { stdout: `tree-${await latestDiff}\n`, stderr: '' };
+    }
     if (args.includes('diff') && args.includes('--name-only')) {
       return { stdout: 'src/x.test.ts\n', stderr: '' };
     }
@@ -208,6 +208,21 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
     ...overrides,
     runExecution: async (opts) => {
       const result = await runExecution(opts);
+      if (
+        opts.workflowStage === 'coder-self-review' &&
+        result.ok &&
+        !result.output.includes('```coder-self-review')
+      ) {
+        return {
+          ok: true,
+          diff: await latestDiff,
+          output: [
+            '```coder-self-review',
+            '{"outcome":"confirmed","notes":"The staged worktree is consistent."}',
+            '```',
+          ].join('\n'),
+        };
+      }
       if (result.ok) latestDiff = Promise.resolve(result.diff);
       return result;
     },
@@ -299,6 +314,125 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     for (const name of seamNames) {
       expect(typeof deps[name], `seam ${String(name)}`).toBe('function');
     }
+  });
+
+  describe('coder-self-review result contract', () => {
+    it('accepts exactly one strict confirmed or revised record', () => {
+      expect(parseCoderSelfReviewResult([
+        '```coder-self-review',
+        '{"outcome":"confirmed","notes":"Validation is green and the change is coherent."}',
+        '```',
+      ].join('\n'))).toEqual({
+        outcome: 'confirmed',
+        notes: 'Validation is green and the change is coherent.',
+      });
+      expect(parseCoderSelfReviewResult([
+        '```coder-self-review',
+        '{"outcome":"revised","notes":"Corrected the retry guard."}',
+        '```',
+      ].join('\n')).outcome).toBe('revised');
+    });
+
+    it.each([
+      ['missing fence', '{"outcome":"confirmed","notes":"ok"}'],
+      ['duplicate fence', [
+        '```coder-self-review',
+        '{"outcome":"confirmed","notes":"ok"}',
+        '```',
+        '```coder-self-review',
+        '{"outcome":"confirmed","notes":"again"}',
+        '```',
+      ].join('\n')],
+      ['unknown outcome', [
+        '```coder-self-review',
+        '{"outcome":"fixed","notes":"ok"}',
+        '```',
+      ].join('\n')],
+      ['extra diff field', [
+        '```coder-self-review',
+        '{"outcome":"revised","notes":"ok","diff":"invented"}',
+        '```',
+      ].join('\n')],
+      ['empty notes', [
+        '```coder-self-review',
+        '{"outcome":"confirmed","notes":"  "}',
+        '```',
+      ].join('\n')],
+      ['oversized notes', [
+        '```coder-self-review',
+        JSON.stringify({ outcome: 'confirmed', notes: 'x'.repeat(2_001) }),
+        '```',
+      ].join('\n')],
+      ['patch content in notes', [
+        '```coder-self-review',
+        JSON.stringify({ outcome: 'revised', notes: 'diff --git a/x b/x\n+change' }),
+        '```',
+      ].join('\n')],
+    ])('rejects %s', (_label, reply) => {
+      expect(() => parseCoderSelfReviewResult(reply)).toThrow(/coder.self.review/i);
+    });
+
+    // The notes are the one free-form field the model controls, and they reach
+    // the transcript, durable task records, and the reviewer's handoff notes.
+    // The scrub chain has to fire on THIS field, not just be available.
+    it('scrubs host paths and secrets out of accepted notes', () => {
+      const parsed = parseCoderSelfReviewResult([
+        '```coder-self-review',
+        JSON.stringify({
+          outcome: 'revised',
+          notes:
+            `Rewrote the guard in ${PROJECT_ROOT}/src/jobs/team-task-deps.ts ` +
+            'after the probe token sk-liveSelfReviewNoteFixture0123456789abcdef leaked into the log.',
+        }),
+        '```',
+      ].join('\n'));
+      expect(parsed.outcome).toBe('revised');
+      expect(parsed.notes).not.toContain(PROJECT_ROOT);
+      expect(parsed.notes).not.toContain('sk-liveSelfReviewNoteFixture0123456789abcdef');
+      // Still legible — scrubbing must not gut the operator's diagnostic.
+      expect(parsed.notes).toContain('team-task-deps.ts');
+    });
+  });
+
+  // The self-review pass has the same worktree-edit authority as the
+  // implementation pass, so it needs the same test-deletion guardrail. It
+  // emits no free-form output, so `notes` is its only justification channel.
+  it('gives the self-review pass the coder test-deletion guardrail and a notes justification channel', async () => {
+    // The static role instruction rides the executor's system channel
+    // (`composeRoleContext`), so that is where the guardrail has to land.
+    const systemPrompts = new Map<string, string>();
+    let currentDiff = '';
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async (opts) => {
+        systemPrompts.set(opts.workflowStage ?? 'unknown', opts.systemPrompt ?? '');
+        if (opts.workflowStage === 'coder-self-review') {
+          return {
+            ok: true,
+            diff: currentDiff,
+            output: [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The worktree is ready."}',
+              '```',
+            ].join('\n'),
+          };
+        }
+        currentDiff =
+          'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n';
+        return { ok: true, diff: currentDiff, output: 'artifact work complete' };
+      },
+    }));
+
+    await runTeamTaskWorkflow(
+      sizedTask,
+      { spec: 'spec', contextMd: 'ctx', coderProvider: 'openai', cap: 1 },
+      deps,
+    );
+
+    const selfReviewInstruction = systemPrompts.get('coder-self-review');
+    expect(selfReviewInstruction).toBeDefined();
+    expect(selfReviewInstruction).toMatch(/NEVER remove or weaken a test/i);
+    expect(selfReviewInstruction).toContain('TEST-REMOVED: <path> — <reason>');
+    expect(selfReviewInstruction).toMatch(/inside `notes`/);
   });
 
   it('resolveReviewerProvider returns the distinct provider from the resolved bindings', () => {
@@ -507,16 +641,35 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(calls.every((c) => c.format === 'claude')).toBe(true);
   });
 
-  it('routes coder self-review through the coder model binding, not the judgment-role binding', async () => {
-    const calls: Array<{ role: string; model: string; provider?: string; format?: string; product?: string; selfReview: boolean }> = [];
-    const judgment: JudgmentModelCall = async ({ role, model, provider, format, product, message }) => {
-      const selfReviewEcho = echoSelfReviewArtifact(message);
-      calls.push({ role, model, provider, format, product, selfReview: selfReviewEcho !== undefined });
-      if (selfReviewEcho !== undefined) return selfReviewEcho;
-      return GREEN_JUDGMENT_REPLY;
-    };
+  it('routes coder self-review through the worktree execution agent with the coder binding', async () => {
+    const executionCalls: Array<{ role: string; model: string; provider: string; format: string; stage?: string }> = [];
+    let currentDiff = '';
     const policy = loadRealPolicy();
-    const deps = buildDeps(resolveTeamRoleModels(policy), makeSeams({ judgmentCall: judgment }));
+    const deps = buildDeps(resolveTeamRoleModels(policy), makeSeams({
+      runExecution: async (opts) => {
+        executionCalls.push({
+          role: opts.role,
+          model: opts.model.alias,
+          provider: opts.model.provider,
+          format: opts.model.format,
+          stage: opts.workflowStage,
+        });
+        if (opts.workflowStage === 'coder-self-review') {
+          return {
+            ok: true,
+            diff: currentDiff,
+            output: [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The worktree is ready."}',
+              '```',
+            ].join('\n'),
+          };
+        }
+        currentDiff =
+          'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n';
+        return { ok: true, diff: currentDiff, output: 'artifact work complete' };
+      },
+    }));
 
     const evidence = await runTeamTaskWorkflow(
       sizedTask,
@@ -525,14 +678,400 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     );
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    expect(calls).toContainEqual({
+    expect(executionCalls).toContainEqual({
       role: 'coder',
       model: policy.roleDefaults['coder'],
       provider: 'openai',
       format: 'codex',
-      product: 'rune',
-      selfReview: true,
+      stage: 'coder-self-review',
     });
+    expect(executionCalls.filter((call) => call.role === 'coder')).toHaveLength(2);
+  });
+
+  it.each([
+    {
+      outcome: 'confirmed' as const,
+      beforeTree: 'tree-before',
+      afterTree: 'tree-before',
+      canonicalDiff: 'diff --git a/src/x.ts b/src/x.ts\n+confirmed\n',
+    },
+    {
+      outcome: 'revised' as const,
+      beforeTree: 'tree-before',
+      afterTree: 'tree-after',
+      canonicalDiff: 'diff --git a/src/x.ts b/src/x.ts\n+revised\n',
+    },
+  ])(
+    'runs a fresh worktree coder self-review and returns canonical state for $outcome',
+    async ({ outcome, beforeTree, afterTree, canonicalDiff }) => {
+      let tree = beforeTree;
+      const execution = vi.fn(async (opts): Promise<ExecutionAgentResult> => {
+        expect(opts).toMatchObject({
+          role: 'coder',
+          workflowStage: 'coder-self-review',
+          model: resolveTeamRoleModels(loadRealPolicy()).coder,
+        });
+        expect(opts.prompt).toContain('## Task');
+        expect(opts.prompt).toContain('## Spec');
+        expect(opts.prompt).toContain('## Project context');
+        expect(opts.prompt).toContain('## QA intent');
+        expect(opts.prompt).toContain('## QA tests or rationale');
+        tree = afterTree;
+        return {
+          ok: true,
+          diff: canonicalDiff,
+          output: [
+            '```coder-self-review',
+            JSON.stringify({ outcome, notes: `${outcome} after inspecting the worktree.` }),
+            '```',
+          ].join('\n'),
+        };
+      });
+      const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+        runExecution: execution,
+        runCanonicalGit: async (args) => {
+          if (args.includes('write-tree')) return { stdout: `${tree}\n`, stderr: '' };
+          if (args.includes('--name-only')) return { stdout: 'src/x.ts\n', stderr: '' };
+          if (args.includes('diff')) return { stdout: canonicalDiff, stderr: '' };
+          return { stdout: '', stderr: '' };
+        },
+      }));
+
+      const result = await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate text is non-authoritative', handoffNotes: ['implemented'] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['src/x.test.ts'],
+        qa: { kind: 'tests-written', testIds: ['src/x.test.ts'] },
+        rejectionFeedback: [{
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          artifact: 'implementation-diff',
+          rejectedArtifact: 'implementation-diff',
+          reason: 'fix retry guard',
+          whatFailed: 'fix retry guard',
+          notes: ['fix retry guard'],
+          actionableNotes: ['add the missing guard'],
+        }],
+        findingsLedger: [{
+          id: 'finding-guard',
+          sourceGate: 'reviewer',
+          class: 'data-integrity',
+          severity: 'high',
+          location: 'src/x.ts:1',
+          rationale: 'guard is missing',
+          reversible: true,
+          raisedRound: 1,
+          status: 'open',
+        }],
+      });
+
+      expect(execution).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        outcome,
+        reviewState: {
+          diff: canonicalDiff,
+          changedPaths: ['src/x.ts'],
+        },
+      });
+      expect(result.reviewState.hash).toMatch(/^[a-f0-9]{64}$/);
+    },
+  );
+
+  it('preserves edits made by the self-review execution in the real worktree', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'coder-self-review-edit-'));
+    try {
+      const git = (args: string[]) => defaultRunGit(args, { cwd: worktree });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(worktree, 'src.ts'), 'export const ready = false;\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+      await writeFile(join(worktree, 'src.ts'), 'export const ready = false; // implementation\n');
+
+      const deps = buildProductionTeamTaskDeps({
+        sandbox: { ...makeSandbox(), worktree },
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        validationCommands: ['npm test'],
+      }, makeSeams({
+        runCanonicalGit: defaultRunCanonicalGit,
+        runExecution: async (opts) => {
+          expect(opts.prompt).toContain('## Validation commands');
+          expect(opts.prompt).toContain('npm test');
+          await writeFile(join(worktree, 'src.ts'), 'export const ready = true;\n');
+          return {
+            ok: true,
+            diff: 'executor diff is ignored',
+            output: [
+              '```coder-self-review',
+              '{"outcome":"revised","notes":"Corrected the readiness value."}',
+              '```',
+            ].join('\n'),
+          };
+        },
+      }));
+
+      const result = await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['src.test.ts'],
+        qa: { kind: 'tests-written', testIds: ['src.test.ts'] },
+      });
+
+      expect(result.outcome).toBe('revised');
+      expect(result.reviewState.diff).toContain('export const ready = true;');
+      expect(await readFile(join(worktree, 'src.ts'), 'utf8')).toBe(
+        'export const ready = true;\n',
+      );
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  // The post-pass snapshot is what stops edits from a failed self-review being
+  // quietly reviewed, so it must run for EVERY throw out of the executor — not
+  // just the cancellation the seam knows how to name.
+  it('snapshots the worktree even when the self-review executor throws an unexpected error', async () => {
+    const canonicalCalls: string[][] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => {
+        throw new Error('sandbox runtime exploded');
+      },
+      runCanonicalGit: async (args) => {
+        canonicalCalls.push(args);
+        if (args.includes('write-tree')) return { stdout: 'tree-x\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['src/x.test.ts'],
+      qa: { kind: 'tests-written', testIds: ['src/x.test.ts'] },
+    })).rejects.toThrow(/coder self-review failed: sandbox runtime exploded/);
+
+    // Twice: the pre-pass baseline and the post-pass snapshot taken after the
+    // throw was caught and held.
+    expect(canonicalCalls.filter((args) => args.includes('write-tree'))).toHaveLength(2);
+    expect(canonicalCalls.filter((args) => args.includes('add'))).toHaveLength(2);
+  });
+
+  it.each([
+    ['confirmed', 'tree-after'],
+    ['revised', 'tree-before'],
+  ] as const)('fails closed when reported %s disagrees with canonical Git', async (outcome, afterTree) => {
+    let writeTreeCalls = 0;
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => ({
+        ok: true,
+        diff: 'diff',
+        output: [
+          '```coder-self-review',
+          JSON.stringify({ outcome, notes: 'Reported result.' }),
+          '```',
+        ].join('\n'),
+      }),
+      runCanonicalGit: async (args) => {
+        if (args.includes('write-tree')) {
+          writeTreeCalls += 1;
+          return {
+            stdout: `${writeTreeCalls === 1 ? 'tree-before' : afterTree}\n`,
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).rejects.toThrow(/reported .* canonical Git/i);
+  });
+
+  it('fails operationally when the self-review executor fails after editing', async () => {
+    let tree = 'tree-before';
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => {
+        tree = 'tree-after-edit';
+        return failedExecution('provider failed after editing');
+      },
+      runCanonicalGit: async (args) => {
+        if (args.includes('write-tree')) return { stdout: `${tree}\n`, stderr: '' };
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).rejects.toThrow(/provider failed after editing/i);
+    expect(tree).toBe('tree-after-edit');
+  });
+
+  it('propagates structured cancellation from the self-review executor', async () => {
+    const cancellation = {
+      operationId: '12345678-1234-1234-1234-123456789abc',
+      source: 'cockpit' as const,
+      requestedAt: '2026-07-28T12:00:00.000Z',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => failedExecution('cancelled by operator', cancellation),
+      runCanonicalGit: async (args) => {
+        if (args.includes('write-tree')) return { stdout: 'tree-before\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).rejects.toMatchObject({
+      cancellation: { role: 'coder', ...cancellation },
+    });
+  });
+
+  it('fails closed when canonical Git cannot snapshot the self-review state', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runCanonicalGit: async (args) => {
+        if (args.includes('write-tree')) throw new Error('canonical Git unavailable');
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).rejects.toThrow(/canonical Git unavailable/i);
+  });
+
+  it('fails closed through the strict parser when the self-review executor returns malformed coder-self-review JSON', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => ({
+        ok: true,
+        diff: 'diff',
+        output: [
+          '```coder-self-review',
+          // Missing the required `notes` field — the executor output must be
+          // rejected by the same strict parser `parseCoderSelfReviewResult`
+          // enforces standalone, proving the production seam actually wires
+          // it in rather than trusting the model-returned text.
+          '{"outcome":"confirmed"}',
+          '```',
+        ].join('\n'),
+      }),
+    }));
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).rejects.toThrow(/coder self-review failed:.*outcome and notes/i);
+  });
+
+  it('persists a coder-self-review-scoped checkpoint and passes it verbatim to the self-review executor', async () => {
+    let persisted: unknown;
+    let invoked: unknown;
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        if (checkpoint.workflowStage === 'coder-self-review') persisted = checkpoint;
+      },
+    }, makeSeams({
+      runExecution: async (opts) => {
+        if (opts.workflowStage === 'coder-self-review') invoked = opts.checkpoint;
+        return greenExecution();
+      },
+    }));
+
+    const result = await deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    });
+
+    expect(result.outcome).toBe('confirmed');
+    expect(persisted).toBeDefined();
+    expect(invoked).toBe(persisted);
+    expect(invoked).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'coder',
+      workflowStage: 'coder-self-review',
+    });
+  });
+
+  it('blocks the self-review executor and fails closed when checkpoint persistence fails for the coder-self-review stage', async () => {
+    let selfReviewExecutorCalled = false;
+    const runExecution = vi.fn(async (opts) => {
+      if (opts.workflowStage === 'coder-self-review') selfReviewExecutorCalled = true;
+      return greenExecution();
+    });
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        if (checkpoint.workflowStage === 'coder-self-review') {
+          throw new Error('/Users/private/operator/cursor write failed');
+        }
+      },
+    }, makeSeams({ runExecution }));
+
+    let caught: unknown;
+    try {
+      await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['test'],
+        qa: { kind: 'tests-written', testIds: ['test'] },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(selfReviewExecutorCalled).toBe(false);
+    expect(caught).toBeInstanceOf(ExecutionFailureError);
+    expect((caught as ExecutionFailureError).failure).toMatchObject({
+      role: 'coder',
+      workflowStage: 'coder-self-review',
+      failureStage: 'orchestration-adjacent',
+    });
+    expect((caught as ExecutionFailureError).failure.diagnostic).not.toContain('/Users/private/operator');
   });
 
   it('prompts reviewer re-review to verify prior findings before discovery and return cited verification statuses', async () => {
@@ -1543,7 +2082,7 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
     const executorLines = events.filter((event) =>
       String(event.data?.['line'] ?? '').includes('executor progress'),
     );
-    expect(executorLines).toHaveLength(2);
+    expect(executorLines).toHaveLength(3);
     const declared = loadRealPolicy().roleDefaults;
     expectAttributedLine(executorLines[0]!, {
       role: 'qa',
@@ -1551,6 +2090,11 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       model: declared['qa']!,
     });
     expectAttributedLine(executorLines[1]!, {
+      role: 'coder',
+      provider: 'openai',
+      model: declared['coder']!,
+    });
+    expectAttributedLine(executorLines[2]!, {
       role: 'coder',
       provider: 'openai',
       model: declared['coder']!,
@@ -1590,7 +2134,7 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
     const executorLines = events.filter((event) =>
       String(event.data?.['line'] ?? '').includes('executor saw'),
     );
-    expect(executorLines).toHaveLength(2);
+    expect(executorLines).toHaveLength(3);
     const declared = loadRealPolicy().roleDefaults;
     for (const line of executorLines) {
       const role = String(line.data?.['role']);
@@ -1667,7 +2211,7 @@ describe('no-stub regression (Phase 8)', () => {
     );
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    expect(runExecution).toHaveBeenCalledTimes(2);
+    expect(runExecution).toHaveBeenCalledTimes(3);
     expect(evidence).not.toHaveProperty('taskValidationFailure');
   });
 
@@ -1829,9 +2373,8 @@ describe('no-stub regression (Phase 8)', () => {
   it('defaults the production workflow runner to four feedback rounds when no cap override is provided', async () => {
     let executionCalls = 0;
     let techLeadTestReviews = 0;
+    let currentDiff = '';
     const judgment: JudgmentModelCall = async ({ role, message }) => {
-      const selfReviewEcho = echoSelfReviewArtifact(message);
-      if (selfReviewEcho !== undefined) return selfReviewEcho;
       if (message.includes('<gate-rejection>')) {
         return 'no reusable lesson for this fixture';
       }
@@ -1864,9 +2407,20 @@ describe('no-stub regression (Phase 8)', () => {
       },
       makeSeams({
         judgmentCall: judgment,
-        runExecution: async () => {
+        runExecution: async (opts) => {
+          if (opts.workflowStage === 'coder-self-review') {
+            return {
+              ok: true,
+              diff: currentDiff,
+              output: [
+                '```coder-self-review',
+                '{"outcome":"confirmed","notes":"The worktree is ready."}',
+                '```',
+              ].join('\n'),
+            };
+          }
           executionCalls += 1;
-          return {
+          const result = {
             ok: true,
             diff: [
               `diff --git a/src/round-${executionCalls}.test.ts b/src/round-${executionCalls}.test.ts`,
@@ -1875,7 +2429,9 @@ describe('no-stub regression (Phase 8)', () => {
               '',
             ].join('\n'),
             output: `execution ${executionCalls}`,
-          };
+          } satisfies ExecutionAgentResult;
+          currentDiff = result.diff;
+          return result;
         },
       }),
     );
@@ -1884,7 +2440,7 @@ describe('no-stub regression (Phase 8)', () => {
 
     expect(evidence.outcome).toBe('ready-for-closeout');
     expect(techLeadTestReviews).toBe(4);
-    expect(executionCalls).toBe(5);
+    expect(executionCalls).toBe(6);
     expect(evidence.rolesInvoked).toEqual(
       expect.arrayContaining(['qa', 'tech-lead', 'coder', 'reviewer']),
     );
@@ -2157,9 +2713,14 @@ describe('canonical reviewer diff production seam', () => {
       await git(['config', 'user.email', 'test@example.com']);
       await git(['config', 'user.name', 'Test']);
       await writeFile(join(worktree, 'tracked.ts'), 'baseline\n');
+      await writeFile(join(worktree, 'staged.ts'), 'baseline staged\n');
+      await writeFile(join(worktree, 'deleted.ts'), 'delete me\n');
       await git(['add', '-A']);
       await git(['commit', '-m', 'baseline']);
       await writeFile(join(worktree, 'tracked.ts'), 'tracked change\n');
+      await writeFile(join(worktree, 'staged.ts'), 'staged change\n');
+      await git(['add', 'staged.ts']);
+      await rm(join(worktree, 'deleted.ts'));
       await writeFile(join(worktree, 'new-untracked.ts'), 'untracked change\n');
 
       // Compute the exact artifact a truthful coder would return, then restore
@@ -2168,26 +2729,13 @@ describe('canonical reviewer diff production seam', () => {
       const expected = (await git(['diff', 'HEAD', '--'])).stdout;
       await git(['reset']);
 
-      const deps = buildProductionTeamTaskDeps(
-        {
-          sandbox: { ...makeSandbox(), worktree },
-          productsConfigPath: '/nonexistent/products.json',
-          models: resolveTeamRoleModels(loadRealPolicy()),
-        },
-        makeSeams({
-          runGit: defaultRunGit,
-          runCanonicalGit: defaultRunCanonicalGit,
-        }),
-      );
-      const capture = deps.captureCanonicalReviewDiff;
+      const result = await captureCanonicalReviewState(defaultRunCanonicalGit, worktree);
 
-      expect(capture).toBeTypeOf('function');
-      if (!capture) throw new Error('canonical review diff seam is missing');
-      const result = await capture(expected);
-
-      expect(result).toMatchObject({ ok: true, diff: expected });
-      if (!result.ok) throw new Error('expected canonical diff match');
+      expect(result).toMatchObject({ diff: expected });
       expect(result.diff).toContain('tracked.ts');
+      expect(result.diff).toContain('staged.ts');
+      expect(result.diff).toContain('deleted.ts');
+      expect(result.diff).toContain('deleted file mode');
       expect(result.diff).toContain('new-untracked.ts');
       expect(result.diff).toContain('new file mode');
       expect((await git(['status', '--porcelain'])).stdout).toContain('A  new-untracked.ts');

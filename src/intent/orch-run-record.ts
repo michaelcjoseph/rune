@@ -10,7 +10,14 @@
  * runtime layer's job.
  */
 
-import type { ObjectionFinding, PmAcceptance } from './team-task-workflow.js';
+import {
+  CANONICAL_CHANGED_PATHS_MAX,
+  SELF_REVIEW_NOTE_MAX_CHARS,
+  SEVERITY_LOOP_HARD_BUDGET,
+  type CoderSelfReviewRecord,
+  type ObjectionFinding,
+  type PmAcceptance,
+} from './team-task-workflow.js';
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -39,6 +46,8 @@ export interface TaskRunRecord {
   warnings?: ObjectionFinding[];
   /** Human/PM rationale for accepting non-objection disagreement. */
   acceptance?: PmAcceptance;
+  /** Successful worktree coder self-reviews. Optional for historical JSONL. */
+  coderSelfReviews?: CoderSelfReviewRecord[];
   /** What happened to `context.md` on this attempt. */
   contextOutcome: TaskContextOutcome;
   /** Gate decisions the orchestrator made. */
@@ -67,6 +76,20 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.acceptance !== undefined
       ? { acceptance: { ...input.acceptance } }
+      : {}),
+    ...(input.coderSelfReviews !== undefined
+      ? {
+          coderSelfReviews: input.coderSelfReviews
+            .slice(0, SEVERITY_LOOP_HARD_BUDGET)
+            .map((review) => ({
+              ...review,
+              notes: review.notes.slice(0, SELF_REVIEW_NOTE_MAX_CHARS),
+              changedPaths: review.changedPaths.slice(
+                0,
+                CANONICAL_CHANGED_PATHS_MAX,
+              ),
+            })),
+        }
       : {}),
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },

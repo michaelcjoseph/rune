@@ -41,7 +41,6 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
-import { runSelfReview } from '../intent/self-review.js';
 import { runGateTriggeredLearning } from '../intent/gate-learning.js';
 import { writeGateLearningLesson } from '../intent/learning-write-path.js';
 import { runPostMortem } from '../intent/postmortem.js';
@@ -51,6 +50,7 @@ import {
   ExecutionFailureError,
   RoleCancellationError,
   runTeamTaskWorkflow,
+  SELF_REVIEW_NOTE_MAX_CHARS,
   type ObjectionClass,
   type ObjectionFinding,
   type ObjectionSeverity,
@@ -61,9 +61,9 @@ import {
   type GateVerdict,
   type GateOutcome,
   type ReviewerVerdict,
-  type ReviewSurfaceFailure,
   type TaskEvidence,
   type CoderResult,
+  type CoderSelfReviewOutcome,
   type TeamTaskDeps,
   type TechLeadTestRepairResult,
   type TestRepairRedCheck,
@@ -72,10 +72,8 @@ import {
 import type { ExecutionPreflightFailure } from '../intent/execution-preflight.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import {
-  canonicalReviewDiffHash,
   captureCanonicalReviewState,
   defaultRunCanonicalGit,
-  normalizeCanonicalReviewDiff,
 } from './canonical-git.js';
 import { runValidationCommands } from './work-run-gate-runtime.js';
 import {
@@ -246,9 +244,6 @@ export interface TeamTaskSeams {
   /** Revalidate the configured command directory immediately before a command
    * run so role writes cannot turn a previously safe path into a symlink escape. */
   resolveValidationCwd: typeof resolveValidationCwd;
-  /** Test seam for canonical review-surface capture. Production leaves this
-   * undefined so the factory stages and reads the real worktree. */
-  captureCanonicalReviewDiff?: NonNullable<TeamTaskDeps['captureCanonicalReviewDiff']>;
 }
 
 /** Production judgment call: SOUL on the system channel, one throwaway
@@ -495,6 +490,30 @@ const CODER_EXEC_INSTRUCTION = [
   'a final output line `TEST-REMOVED: <path> — <reason>`; the reviewer and',
   'tech lead fail unexplained test deletions. NEVER remove or weaken a test',
   'because your implementation fails it.',
+].join('\n');
+
+const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
+  'You are the coder performing one fresh-context self-review of the implementation',
+  'currently checked out in this worktree. Inspect the actual files and staged Git',
+  'state. Fix any issue you find directly in the worktree, run the listed validation',
+  'commands, and do not commit.',
+  '',
+  'Last resort: a test that CANNOT pass in this sandbox (external/live dependency)',
+  'or is demonstrably flaky may be removed — prefer converting it to the',
+  'manual-live-gate strategy over deleting it. NEVER remove or weaken a test',
+  'because the implementation fails it. This pass emits no free-form output, so',
+  'record every removal inside `notes` as `TEST-REMOVED: <path> — <reason>`; those',
+  'notes reach the reviewer and tech lead, who fail unexplained test deletions.',
+  '',
+  'Your final output must be EXACTLY ONE fenced ```coder-self-review JSON block',
+  'and nothing else. Report `confirmed` only when you made no worktree change in',
+  'this pass. Report `revised` only when you edited the worktree in this pass.',
+  'The object contains exactly `outcome` and `notes`; never include a diff, patch,',
+  'replacement artifact, or extra field.',
+  '',
+  '```coder-self-review',
+  '{"outcome":"confirmed","notes":"<brief concrete reason>"}',
+  '```',
 ].join('\n');
 
 const QA_DIFF_REVALIDATION_INSTRUCTION = [
@@ -769,33 +788,51 @@ function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } 
   };
 }
 
-function renderCoderSelfReviewArtifact(artifact: CoderResult): string {
-  return [
-    'Return the corrected-or-confirmed coder artifact as exactly this fenced JSON block.',
-    '',
-    '```self-review-artifact',
-    JSON.stringify(artifact, null, 2),
-    '```',
-  ].join('\n');
-}
+const CODER_SELF_REVIEW_FENCE =
+  /^\s*```coder-self-review[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*\s*$/;
+const DIFF_OR_PATCH_CONTENT =
+  /(^|\n)(?:diff --git |--- (?:a\/|\/dev\/null)|\+\+\+ (?:b\/|\/dev\/null)|@@(?: |$)|```(?:diff|patch)\b)/m;
 
-function parseCoderSelfReviewArtifact(reply: string): CoderResult {
-  const parsed = extractFencedJson(reply, 'self-review-artifact');
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('missing self-review-artifact fence');
+export function parseCoderSelfReviewResult(reply: string): {
+  outcome: CoderSelfReviewOutcome;
+  notes: string;
+} {
+  const match = CODER_SELF_REVIEW_FENCE.exec(reply);
+  if (match === null) {
+    throw new Error('coder self-review must return exactly one coder-self-review fence');
   }
-  const artifact = parsed as Record<string, unknown>;
-  if (typeof artifact['diff'] !== 'string') {
-    throw new Error('self-review-artifact missing diff');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1]!);
+  } catch {
+    throw new Error('coder-self-review fence contains invalid JSON');
   }
-  const handoffNotes = Array.isArray(artifact['handoffNotes'])
-    ? artifact['handoffNotes']
-        .filter((note): note is string => typeof note === 'string')
-        .map((note) => note.slice(0, NOTE_MAX_CHARS))
-    : [];
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('coder-self-review JSON must be an object');
+  }
+  const record = parsed as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.length !== 2 || keys[0] !== 'notes' || keys[1] !== 'outcome') {
+    throw new Error('coder-self-review JSON must contain only outcome and notes');
+  }
+  if (record['outcome'] !== 'confirmed' && record['outcome'] !== 'revised') {
+    throw new Error('coder-self-review outcome must be confirmed or revised');
+  }
+  if (typeof record['notes'] !== 'string' || record['notes'].trim() === '') {
+    throw new Error('coder-self-review notes must be non-empty');
+  }
+  const notes = record['notes'].trim();
+  if (notes.length > SELF_REVIEW_NOTE_MAX_CHARS) {
+    throw new Error(
+      `coder-self-review notes exceed ${SELF_REVIEW_NOTE_MAX_CHARS} characters`,
+    );
+  }
+  if (DIFF_OR_PATCH_CONTENT.test(notes)) {
+    throw new Error('coder-self-review notes must not contain diff or patch content');
+  }
   return {
-    diff: artifact['diff'],
-    handoffNotes,
+    outcome: record['outcome'],
+    notes: redactSecrets(scrubAbsolutePaths(scrubPathsInText(notes))),
   };
 }
 
@@ -824,9 +861,6 @@ export interface BuildTeamTaskDepsArgs {
   /** Persisted before each artifact-role child is invoked. A failed write
    * blocks before spawn so restart attribution never lies. */
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
-  /** Durable evidence sink for a canonical-diff mismatch. The record contains
-   * hashes and changed paths only, never raw diff content. */
-  persistReviewSurfaceFailure?: (failure: ReviewSurfaceFailure) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
@@ -1424,64 +1458,123 @@ export function buildProductionTeamTaskDeps(
       return { diff: result.diff, handoffNotes: tailNote(result.output) };
     },
 
-    coderSelfReview: async ({ task, artifact }) => {
+    coderSelfReview: async ({
+      task,
+      artifact,
+      spec,
+      context,
+      tests,
+      qa,
+      rejectionFeedback,
+      findingsLedger,
+    }) => {
+      const cwd = sandbox.worktree;
       try {
-        return await runSelfReview({
-          role: 'coder',
-          artifact,
-          render: renderCoderSelfReviewArtifact,
-          parse: parseCoderSelfReviewArtifact,
-          model: models.coder.alias,
-          provider: models.coder.provider,
-          modelCall: async ({ sessionId, systemPrompt, message }) => {
-            const checkpoint = executionCheckpoint(
-              task.id,
-              'coder',
-              models.coder,
-              'coder-self-review',
-            );
-            return runCheckpointed(checkpoint, args.persistExecutionCheckpoint, () =>
-              seams.judgmentCall({
-                role: 'coder',
-                model: models.coder.alias,
-                provider: models.coder.provider,
-                format: models.coder.format,
-                product: sandbox.product,
-                systemPrompt,
-                message,
-                sessionId,
-              }),
-            );
-          },
-        });
+        await seams.runCanonicalGit(['add', '-A'], { cwd });
+        const preTree = (
+          await seams.runCanonicalGit(['write-tree'], { cwd })
+        ).stdout.trim();
+        if (preTree === '') {
+          throw new Error('canonical pre-self-review snapshot produced no tree');
+        }
+
+        const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
+        const qaIntent = qa.kind === 'tests-written'
+          ? `tests-written:\n${qa.testIds.join('\n')}`
+          : `no-code-test-rationale:\n${qa.rationale}`;
+        const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
+        const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+        const handoffBlock = formatCoderHandoffNotes(artifact.handoffNotes);
+        const body = [
+          `## Task\n\n${task.text}`,
+          '',
+          `## Spec\n\n${spec}`,
+          '',
+          `## Project context\n\n${scrubPathsInText(context)}`,
+          '',
+          `## QA intent\n\n${qaIntent}`,
+          '',
+          `## QA tests or rationale\n\n${testsBlock}`,
+          ...(validationCommands.length > 0
+            ? [
+                '',
+                `## Validation commands (run all from \`${validationCwdLabel}\` relative to the worktree)\n\n` +
+                  validationCommands.join('\n'),
+              ]
+            : []),
+          ...(handoffBlock !== '' ? ['', handoffBlock] : []),
+          ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
+          // Same prioritization the implementation pass gets: this is a fix-it
+          // pass over the same ledger, so it must not spend itself on residue.
+          ...(findingsBlock !== ''
+            ? [
+                '',
+                'Fix open findings highest-severity-first; do not spend the pass on lower-severity ' +
+                  'residue before higher-severity findings are addressed.',
+              ]
+            : []),
+          ...(findingsBlock !== '' ? ['', findingsBlock] : []),
+        ].join('\n');
+        let result: ExecutionAgentResult | undefined;
+        let executorError: unknown;
+        try {
+          result = await execute(
+            'coder',
+            models.coder,
+            task.id,
+            'coder-self-review',
+            CODER_SELF_REVIEW_EXEC_INSTRUCTION,
+            body,
+          );
+        } catch (err) {
+          // Hold EVERY throw — cancellation and anything else — so the post
+          // snapshot below always runs. Rethrowing here would skip it.
+          executorError = err;
+        }
+
+        // Snapshot even on executor failure: edits made before a failed return
+        // remain untrusted worktree state and the workflow must fail rather
+        // than quietly review them.
+        await seams.runCanonicalGit(['add', '-A'], { cwd });
+        const postTree = (
+          await seams.runCanonicalGit(['write-tree'], { cwd })
+        ).stdout.trim();
+        if (postTree === '') {
+          throw new Error('canonical post-self-review snapshot produced no tree');
+        }
+        if (executorError !== undefined) {
+          throw executorError;
+        }
+        if (result === undefined) {
+          throw new Error('coder self-review executor returned no result');
+        }
+        if (!result.ok) {
+          throw new ExecutionFailureError(result.failure);
+        }
+
+        const parsed = parseCoderSelfReviewResult(result.output);
+        const changed = preTree !== postTree;
+        if (parsed.outcome === 'confirmed' && changed) {
+          throw new Error(
+            'coder self-review reported confirmed but canonical Git changed',
+          );
+        }
+        if (parsed.outcome === 'revised' && !changed) {
+          throw new Error(
+            'coder self-review reported revised but canonical Git was unchanged',
+          );
+        }
+        const reviewState = await captureCanonicalReviewState(
+          seams.runCanonicalGit,
+          cwd,
+        );
+        return { ...parsed, reviewState };
       } catch (err) {
         if (err instanceof RoleCancellationError) throw err;
         if (err instanceof ExecutionFailureError) throw err;
         throw new Error(`coder self-review failed: ${(err as Error).message}`);
       }
     },
-
-    captureCanonicalReviewDiff: seams.captureCanonicalReviewDiff ?? (async (candidateDiff) => {
-      const cwd = sandbox.worktree;
-      const canonical = await captureCanonicalReviewState(seams.runCanonicalGit, cwd);
-      const normalizedCanonical = normalizeCanonicalReviewDiff(canonical.diff);
-      const normalizedArtifact = normalizeCanonicalReviewDiff(candidateDiff);
-      if (normalizedCanonical === normalizedArtifact) {
-        return {
-          ok: true as const,
-          diff: canonical.diff,
-          hash: canonical.hash,
-        };
-      }
-      const failure: ReviewSurfaceFailure = {
-        kind: 'candidate-mismatch',
-        canonicalHash: canonical.hash,
-        candidateHash: canonicalReviewDiffHash(candidateDiff),
-        changedPaths: canonical.changedPaths,
-      };
-      await args.persistReviewSurfaceFailure?.(failure);
-      return { ok: false as const, failure };
-    }),
 
     qaRevalidateDiff: async ({ task, qa, diff, spec, context }) => {
       const qaBlock = qa.kind === 'tests-written'
@@ -1603,7 +1696,6 @@ export interface TaskWorkflowRunnerArgs {
   emit?: (event: WorkflowActivityEvent) => void;
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
   persistTaskValidationFailure?: (failure: TaskValidationFailure) => Promise<void>;
-  persistReviewSurfaceFailure?: (failure: ReviewSurfaceFailure) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
@@ -1845,9 +1937,6 @@ export function createProductionTaskWorkflowRunner(
           await args.persistExecutionCheckpoint?.(checkpoint);
           latestCheckpoint = checkpoint;
         },
-        ...(args.persistReviewSurfaceFailure !== undefined
-          ? { persistReviewSurfaceFailure: args.persistReviewSurfaceFailure }
-          : {}),
         ...(args.cancellationDuringBackoff !== undefined
           ? { cancellationDuringBackoff: args.cancellationDuringBackoff }
           : {}),

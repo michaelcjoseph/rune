@@ -137,6 +137,92 @@ describe('orch-run-record — required fields', () => {
     expect(rec.warnings?.[0]).not.toBe(warning);
     expect(rec.acceptance).not.toBe(acceptance);
   });
+
+  it('bounds coderSelfReviews to at most 4 rounds and truncates notes/changedPaths for durable evidence', () => {
+    const manyPaths = Array.from({ length: 250 }, (_, i) => `src/file-${i}.ts`);
+    const longNotes = 'x'.repeat(2_500);
+    const coderSelfReviews = Array.from({ length: 6 }, (_, i) => ({
+      round: i + 1,
+      outcome: (i % 2 === 0 ? 'confirmed' : 'revised') as 'confirmed' | 'revised',
+      notes: i === 0 ? longNotes : `round ${i + 1} notes`,
+      canonicalHash: `hash-${i + 1}`,
+      changedPaths: i === 0 ? manyPaths : ['src/x.ts'],
+    }));
+
+    const rec: TaskRunRecord = buildTaskRunRecord({
+      taskId: 't4',
+      taskText: 'Bound self-review evidence',
+      attemptId: 'a4',
+      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+      transcriptIds: ['tr-4'],
+      modelChoices: { coder: 'claude' },
+      commitSha: 'deadbee',
+      verdicts: { reviewer: 'pass' },
+      coderSelfReviews,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    // Only the first 4 rounds are retained — repeat self-review after later
+    // coder passes must not grow the durable record without bound.
+    expect(rec.coderSelfReviews).toHaveLength(4);
+    expect(rec.coderSelfReviews?.map((r) => r.round)).toEqual([1, 2, 3, 4]);
+    expect(rec.coderSelfReviews?.[0]?.notes).toHaveLength(2_000);
+    expect(rec.coderSelfReviews?.[0]?.notes).toBe(longNotes.slice(0, 2_000));
+    expect(rec.coderSelfReviews?.[0]?.changedPaths).toHaveLength(200);
+    expect(rec.coderSelfReviews?.[0]?.changedPaths).toEqual(manyPaths.slice(0, 200));
+  });
+
+  it('defensively copies coderSelfReviews so mutating the caller array/objects cannot alter the durable record', () => {
+    const review = {
+      round: 1,
+      outcome: 'confirmed' as const,
+      notes: 'clean pass',
+      canonicalHash: 'hash-1',
+      changedPaths: ['src/x.ts'],
+    };
+    const coderSelfReviews = [review];
+
+    const rec: TaskRunRecord = buildTaskRunRecord({
+      taskId: 't5',
+      taskText: 'Defensive copy of self-review evidence',
+      attemptId: 'a5',
+      rolesInvoked: ['coder'],
+      transcriptIds: ['tr-5'],
+      modelChoices: { coder: 'claude' },
+      commitSha: 'abc1111',
+      verdicts: {},
+      coderSelfReviews,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.coderSelfReviews).toEqual([review]);
+    expect(rec.coderSelfReviews).not.toBe(coderSelfReviews);
+    expect(rec.coderSelfReviews?.[0]).not.toBe(review);
+    expect(rec.coderSelfReviews?.[0]?.changedPaths).not.toBe(review.changedPaths);
+  });
+
+  it('omits coderSelfReviews entirely when the caller does not supply it, keeping historical records readable', () => {
+    const rec: TaskRunRecord = buildTaskRunRecord({
+      taskId: 't6',
+      taskText: 'No self-review evidence on this record',
+      attemptId: 'a6',
+      rolesInvoked: ['coder'],
+      transcriptIds: ['tr-6'],
+      modelChoices: { coder: 'claude' },
+      commitSha: 'abc2222',
+      verdicts: {},
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.coderSelfReviews).toBeUndefined();
+    expect('coderSelfReviews' in rec).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
