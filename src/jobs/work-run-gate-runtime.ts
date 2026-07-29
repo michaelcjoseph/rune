@@ -48,6 +48,16 @@ import { redactSecrets } from './work-run-transcript.js';
 import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import config, { PROJECT_ROOT } from '../config.js';
 import { resolveValidationCwd } from './task-validation.js';
+import {
+  hasValidationCompatibleModeMarker,
+  VALIDATION_COMPATIBLE_MODE_ENV,
+  VALIDATION_COMPATIBLE_MODE_VALUE,
+} from '../utils/validation-confinement.js';
+import {
+  relatedTestInvocationSelectionFits,
+  type RelatedTestStructuredError,
+} from '../intent/related-test-diagnostic.js';
+import { parseVitestRelatedReport } from './vitest-related-report.js';
 
 const log = createLogger('work-run-gate-runtime');
 
@@ -141,6 +151,19 @@ export interface ValidationCommandResult {
   outputHead?: string;
   /** Basenames of durable timeout artifacts written under the requested dir. */
   diagnosticArtifacts?: string[];
+  /** Errors admitted from Vitest's JSON reporter. Never inferred from console
+   * output; absent when the structured report was unavailable or malformed. */
+  structuredErrors?: RelatedTestStructuredError[];
+  /** Total report errors before the retained-entry cap. */
+  structuredErrorsTotal?: number;
+  /** True only when no report entry or field was truncated. */
+  structuredErrorsComplete?: boolean;
+}
+
+export interface ValidationCommandArgvOptions {
+  /** The command remains inside the launcher's outer Seatbelt and passes the
+   * private marker to Rune-owned nested helpers. */
+  compatibleFallback?: boolean;
 }
 
 /**
@@ -245,6 +268,7 @@ export function runValidationCommandArgv(
   cwd: string,
   timeoutMs: number,
   diagnosticDir?: string,
+  options: ValidationCommandArgvOptions = {},
 ): Promise<ValidationCommandResult> {
   return new Promise<ValidationCommandResult>((resolve) => {
     const [bin, ...args] = argv;
@@ -254,6 +278,25 @@ export function runValidationCommandArgv(
       return;
     }
     const command = argv.map((arg) => JSON.stringify(arg)).join(' ');
+    let vitestReportDir: string | undefined;
+    let vitestReportPath: string | undefined;
+    const captureVitestJson =
+      /^(?:npx)(?:\.cmd)?$/.test(basename(bin)) &&
+      args[0] === 'vitest' &&
+      args[1] === 'related';
+    if (captureVitestJson) {
+      try {
+        vitestReportDir = mkdtempSync(join(tmpdir(), 'rune-vitest-related-'));
+        vitestReportPath = join(vitestReportDir, 'report.json');
+      } catch (err) {
+        log.warn('validation Vitest report directory creation failed', {
+          error: (err as Error).message,
+        });
+      }
+    }
+    const commandArgs = vitestReportPath === undefined
+      ? args
+      : [...args, '--reporter=json', `--outputFile=${vitestReportPath}`];
     let rawReportDir: string | undefined;
     try {
       if (diagnosticDir) rawReportDir = mkdtempSync(join(tmpdir(), 'rune-validation-report-'));
@@ -267,10 +310,24 @@ export function runValidationCommandArgv(
     // npm/npx should pass diagnostics to its direct runner; a direct node/test
     // command is itself the runner and strips the options before its workers.
     const initialReportDepth = /^(?:npm|npx)(?:\.cmd)?$/.test(basename(bin)) ? '0' : '1';
-    const spawnBin = process.platform === 'darwin' ? '/usr/bin/sandbox-exec' : bin;
-    const spawnArgs = process.platform === 'darwin'
-      ? ['-p', VALIDATION_SANDBOX_PROFILE, bin, ...args]
-      : args;
+    // `compatibleFallback` marks the NEW child but does not weaken its launch:
+    // the fallback itself still receives the normal outer Seatbelt. Only a
+    // Rune-owned helper running inside that marked child may reuse the already
+    // inherited confinement.
+    // Marker presence alone is not proof. This reuse is safe because this
+    // launcher is the only production caller and marked descendants were
+    // launched beneath its normal outer Seatbelt.
+    const reuseInheritedConfinement = hasValidationCompatibleModeMarker();
+    const spawnBin = process.platform === 'darwin' && !reuseInheritedConfinement
+      ? '/usr/bin/sandbox-exec'
+      : bin;
+    const spawnArgs = process.platform === 'darwin' && !reuseInheritedConfinement
+      ? ['-p', VALIDATION_SANDBOX_PROFILE, bin, ...commandArgs]
+      : commandArgs;
+    const env = buildValidationEnv(cwd, reportOptions, initialReportDepth);
+    if (options.compatibleFallback === true || reuseInheritedConfinement) {
+      env[VALIDATION_COMPATIBLE_MODE_ENV] = VALIDATION_COMPATIBLE_MODE_VALUE;
+    }
     const child = spawn(spawnBin, spawnArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -278,7 +335,7 @@ export function runValidationCommandArgv(
       // Validation runs product-controlled code. Pass shell/toolchain basics,
       // never Rune or integration secrets; Seatbelt also denies non-localhost
       // network so a test cannot exfiltrate even a secret read from disk.
-      env: buildValidationEnv(cwd, reportOptions, initialReportDepth),
+      env,
     });
     registerActiveProcess(child);
 
@@ -357,7 +414,22 @@ export function runValidationCommandArgv(
         ? persistTimeoutDiagnostics({ command, outputHead, outputTail, rawReportDir, diagnosticDir, pid: child.pid })
         : [];
       if (rawReportDir) rmSync(rawReportDir, { recursive: true, force: true });
-      resolve({ exitCode, timedOut, outputHead, outputTail, diagnosticArtifacts });
+      const structuredReport = vitestReportPath === undefined
+        ? undefined
+        : parseVitestRelatedReport(vitestReportPath, cwd);
+      if (vitestReportDir) rmSync(vitestReportDir, { recursive: true, force: true });
+      resolve({
+        exitCode,
+        timedOut,
+        outputHead,
+        outputTail,
+        diagnosticArtifacts,
+        ...(structuredReport !== undefined ? {
+          structuredErrors: structuredReport.errors,
+          structuredErrorsTotal: structuredReport.total,
+          structuredErrorsComplete: structuredReport.complete,
+        } : {}),
+      });
     };
     // `close` is load-bearing: it fires only after both piped streams end, so
     // the captured tail is complete. The `exit`-keyed drain fallback bounds the
@@ -421,6 +493,9 @@ export async function taskChangesRequireFullValidation(
   changedPaths: readonly string[],
   runGit: GitRunner = defaultRunGit,
 ): Promise<boolean> {
+  const pathArgs = changedPaths.map((path) => path.startsWith('-') ? `./${path}` : path);
+  const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
+  if (!relatedTestInvocationSelectionFits(pathArgs, argv)) return true;
   const deleted = await runGit(['diff', '--name-only', '-z', '--diff-filter=D', 'HEAD', '--'], { cwd });
   if (parseGitPathList(deleted.stdout).length > 0) return true;
   return changedPaths.some((path) => /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig(?:\..+)?\.json|(?:vitest|vite|next)\.config\.[^/]+|scripts\/register-ts\.mjs)$/.test(path));

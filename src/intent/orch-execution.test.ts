@@ -223,6 +223,87 @@ describe('orch-run-record — required fields', () => {
     expect(rec.coderSelfReviews).toBeUndefined();
     expect('coderSelfReviews' in rec).toBe(false);
   });
+
+  it('carries a successful related-test fallback diagnostic into durable task evidence', () => {
+    const relatedTestDiagnostic = {
+      state: 'related-fallback-passed' as const,
+      initial: {
+        selectedPaths: ['src/x.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/x.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/x.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputHead: '',
+          outputTail: 'structured host conflict',
+          diagnosticArtifacts: [],
+        },
+        compatibleMode: false,
+      },
+      conflictEvidence: [{
+        kind: 'nested-seatbelt-sandbox-apply' as const,
+        source: 'vitest-json' as const,
+        scope: 'suite' as const,
+        file: 'src/x.test.ts',
+        message: 'sandbox_apply: Operation not permitted',
+        syscall: 'sandbox_apply' as const,
+      }],
+      fallback: {
+        selectedPaths: ['src/x.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/x.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/x.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 0,
+          timedOut: false,
+          outputHead: '',
+          outputTail: '',
+          diagnosticArtifacts: [],
+        },
+        compatibleMode: true,
+      },
+    };
+    const rec = buildTaskRunRecord({
+      taskId: 't7',
+      taskText: 'Confirm a host-conflicted related selection',
+      attemptId: 'a7',
+      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+      transcriptIds: ['tr-7'],
+      modelChoices: { coder: 'claude' },
+      commitSha: 'abc3333',
+      verdicts: { reviewer: 'pass' },
+      relatedTestDiagnostic,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.relatedTestDiagnostic).toEqual(relatedTestDiagnostic);
+    expect(rec.relatedTestDiagnostic).not.toBe(relatedTestDiagnostic);
+    expect(rec.relatedTestDiagnostic?.initial.selectedPaths).not.toBe(
+      relatedTestDiagnostic.initial.selectedPaths,
+    );
+  });
+
+  it('keeps historical task records without related-test diagnostics readable', () => {
+    const rec = buildTaskRunRecord({
+      taskId: 't8',
+      taskText: 'Historical task',
+      attemptId: 'a8',
+      rolesInvoked: ['coder'],
+      transcriptIds: [],
+      modelChoices: { coder: 'claude' },
+      commitSha: 'abc4444',
+      verdicts: {},
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.relatedTestDiagnostic).toBeUndefined();
+    expect('relatedTestDiagnostic' in rec).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

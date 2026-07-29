@@ -208,6 +208,9 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ...(typeof record.contextOutcome === 'string' ? { contextOutcome: record.contextOutcome } : {}),
     ...(typeof record.outcome === 'string' ? { outcome: record.outcome } : {}),
     ...(warnings ? { warnings } : {}),
+    ...(record.relatedTestDiagnostic
+      ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
+      : {}),
   };
 }
 

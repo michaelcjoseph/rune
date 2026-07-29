@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
 import type { GitRunner } from './sandbox-runtime.js';
+import type { ValidationCommandResult } from './work-run-gate-runtime.js';
 import type {
   FinalizerEffects,
   FinalizerInput,
@@ -70,7 +71,8 @@ const mockRunValidationCommands = vi.hoisted(() =>
 );
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
-const mockRunValidationCommandArgv = vi.hoisted(() => vi.fn(async () => ({
+const mockRunValidationCommandArgv = vi.hoisted(() =>
+  vi.fn(async (): Promise<ValidationCommandResult> => ({
   exitCode: 0,
   timedOut: false,
   outputHead: '',
@@ -141,6 +143,7 @@ import type { OrchestrationDeps, OrchestrationResult } from '../intent/project-o
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { isStalled, planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
+import { canonicalReviewDiffHash } from './canonical-git.js';
 
 // ---------------------------------------------------------------------------
 // Phase 5 orchestrated applier (project 14): the mutation applier that runs
@@ -1885,7 +1888,7 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
-    it('repairs a failed closeout validation by re-running the task workflow and proceeding', async () => {
+    it('threads a structured related-test assertion into coder repair feedback and durable failure evidence', async () => {
       const runId = 'mut-closeout-validation-repairs';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-repairs-'));
       const productsFile = join(artifactsDir, 'products.json');
@@ -1893,6 +1896,7 @@ describe('orchestratedWorkApplier', () => {
       const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
       const gitCalls: string[][] = [];
       let capturedRunnerArgs: Record<string, unknown> | undefined;
+      const repairFeedback: unknown[] = [];
 
       mkdirSync(repoPath, { recursive: true });
       writeFileSync(
@@ -1904,24 +1908,32 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            closeoutValidationStrategy: 'vitest-related',
           },
         }),
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
-      // ONE red validation; the beforeEach default restores {ok:true} for the
-      // repair attempt's confirming re-run.
-      mockRunValidationCommands.mockResolvedValueOnce({
-        ok: false,
-        command: 'npm test',
-        result: {
-          exitCode: 1,
-          timedOut: false,
-          outputTail:
-            'FAIL src/streak.test.ts > renders the card\n' +
+      mockCollectTaskChangedPaths.mockResolvedValue(['src/streak.ts']);
+      // ONE red related selection; the beforeEach default restores exit 0 for
+      // the repair attempt's confirming re-run.
+      mockRunValidationCommandArgv.mockResolvedValueOnce({
+        exitCode: 1,
+        timedOut: false,
+        outputHead: '',
+        outputTail: 'JSON report written to a private validation artifact',
+        diagnosticArtifacts: [],
+        structuredErrorsTotal: 1,
+        structuredErrorsComplete: true,
+        structuredErrors: [{
+          source: 'vitest-json',
+          scope: 'assertion',
+          file: 'src/streak.test.ts',
+          testName: 'renders the card',
+          message:
             'AssertionError: expected 3 to be 2\n' +
             ` at ${PROJECT_ROOT}/src/streak.test.ts:42`,
-        },
+        }],
       });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
@@ -1953,16 +1965,21 @@ describe('orchestratedWorkApplier', () => {
         runGit,
         createTaskWorkflowRunner: (runnerArgs) => {
           capturedRunnerArgs = runnerArgs as unknown as Record<string, unknown>;
-          return async (task) => ({
-            taskId: task.id,
-            outcome: 'ready-for-closeout',
-            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
-            findingsLedger: [],
-            loopExitReason: 'all-low',
-            objectionOpen: false,
-            handoffNotes: [`completed ${task.text}`],
-            reviewerVerdict: { pass: true, objections: [] },
-          });
+          return async (task, workflowContext) => {
+            if (workflowContext.rejectionFeedback !== undefined) {
+              repairFeedback.push(workflowContext.rejectionFeedback);
+            }
+            return {
+              taskId: task.id,
+              outcome: 'ready-for-closeout',
+              rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+              findingsLedger: [],
+              loopExitReason: 'all-low',
+              objectionOpen: false,
+              handoffNotes: [`completed ${task.text}`],
+              reviewerVerdict: { pass: true, objections: [] },
+            };
+          };
         },
       });
 
@@ -1997,8 +2014,9 @@ describe('orchestratedWorkApplier', () => {
         expect(existsSync(artifactPath)).toBe(true);
         const artifact = readFileSync(artifactPath, 'utf8');
         expect(artifact.match(/=== closeout validation failure @/g)?.length).toBe(1);
-        expect(artifact).toContain('FAIL src/streak.test.ts > renders the card');
+        expect(artifact).toContain('AssertionError: expected 3 to be 2');
         expect(artifact).not.toContain(PROJECT_ROOT);
+        expect(JSON.stringify(repairFeedback)).toContain('AssertionError: expected 3 to be 2');
         expect(events).toEqual(expect.arrayContaining([
           expect.objectContaining({
             kind: 'activity',
@@ -2157,13 +2175,14 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
-    it('runs passing closeout validation before staging, committing, and emitting closeout progress', async () => {
+    it('confirms a structured loopback host conflict with the exact related selection before hash verification and closeout', async () => {
       const runId = 'mut-closeout-validation-passes';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-passes-'));
       const productsFile = join(artifactsDir, 'products.json');
       const repoPath = join(artifactsDir, 'canonical-repo');
       const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
       const operations: string[] = [];
+      const canonicalDiff = 'diff --git a/src/feature.ts b/src/feature.ts\n+compatible fallback passed\n';
 
       mkdirSync(repoPath, { recursive: true });
       writeFileSync(
@@ -2187,10 +2206,38 @@ describe('orchestratedWorkApplier', () => {
         'harness/src/odd name.test.ts',
         'harness/--config=malicious.ts',
       ]);
-      mockRunValidationCommandArgv.mockImplementation(async () => {
-        operations.push('validation');
-        return { exitCode: 0, timedOut: false, outputHead: '', outputTail: '', diagnosticArtifacts: [] };
-      });
+      mockRunValidationCommandArgv
+        .mockImplementationOnce(async () => {
+          operations.push('validation:initial-conflict');
+          return {
+            exitCode: 1,
+            timedOut: false,
+            outputHead: '',
+            outputTail: 'Vitest worker could not listen on loopback',
+            diagnosticArtifacts: [],
+            structuredErrorsTotal: 1,
+            structuredErrorsComplete: true,
+            structuredErrors: [{
+              source: 'vitest-json',
+              scope: 'suite',
+              file: 'src/server.test.ts',
+              message: 'listen EPERM: operation not permitted 127.0.0.1',
+            }],
+          };
+        })
+        .mockImplementationOnce(async () => {
+          operations.push('validation:compatible-fallback');
+          return {
+            exitCode: 0,
+            timedOut: false,
+            outputHead: '',
+            outputTail: '',
+            diagnosticArtifacts: [],
+            structuredErrorsTotal: 0,
+            structuredErrorsComplete: true,
+            structuredErrors: [],
+          };
+        });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
         if (gitArgs[0] === 'add') operations.push('git:add');
@@ -2201,15 +2248,22 @@ describe('orchestratedWorkApplier', () => {
         if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
         return { stdout: '', stderr: '' };
       });
+      const runCanonicalGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'add') {
+          operations.push('review-surface:stage');
+          return { stdout: '', stderr: '' };
+        }
+        operations.push('review-surface:hash');
+        return {
+          stdout: gitArgs.includes('--name-only') ? 'src/feature.ts\n' : canonicalDiff,
+          stderr: '',
+        };
+      });
 
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {
           created = true;
-          const { sandbox, dir } = makeWorktree('demo', [
-            '- [ ] Build the streak core',
-            '- [ ] Render the streak card',
-            '',
-          ].join('\n'));
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Build the streak core\n');
           writeValidProjectContext(dir);
           mkdirSync(join(dir, 'harness'));
           wtDir = dir;
@@ -2221,6 +2275,7 @@ describe('orchestratedWorkApplier', () => {
         workRunsDir: artifactsDir,
         workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
         runGit,
+        runCanonicalGit,
         createTaskWorkflowRunner: () => async (task) => ({
           taskId: task.id,
           outcome: 'ready-for-closeout',
@@ -2230,6 +2285,7 @@ describe('orchestratedWorkApplier', () => {
           objectionOpen: false,
           handoffNotes: [`completed ${task.text}`],
           reviewerVerdict: { pass: true, objections: [] },
+          reviewSurfaceHash: canonicalReviewDiffHash(canonicalDiff),
         }),
       });
 
@@ -2239,40 +2295,104 @@ describe('orchestratedWorkApplier', () => {
           ctx,
         ));
         const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
-        const progress = events.filter((event) => {
-          const data = (event.data ?? {}) as Record<string, unknown>;
-          return event.kind === 'progress' && data['event'] === 'closeout-commit';
-        });
 
         expect(terminal?.kind).toBe('completed');
-        expect(operations).toEqual(expect.arrayContaining(['validation', 'git:add', 'git:commit']));
-        expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:add'));
-        expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:commit'));
+        expect(terminal?.data).toMatchObject({
+          relatedTestDiagnostic: { state: 'related-fallback-passed' },
+          relatedTestDiagnostics: [{
+            taskId: 'build-the-streak-core',
+            diagnostic: { state: 'related-fallback-passed' },
+          }],
+        });
+        expect(operations).toEqual(expect.arrayContaining([
+          'validation:initial-conflict',
+          'validation:compatible-fallback',
+          'review-surface:hash',
+          'git:add',
+          'git:commit',
+        ]));
+        expect(operations.indexOf('validation:initial-conflict'))
+          .toBeLessThan(operations.indexOf('validation:compatible-fallback'));
+        expect(operations.indexOf('validation:compatible-fallback'))
+          .toBeLessThan(operations.indexOf('review-surface:hash'));
+        expect(operations.indexOf('review-surface:hash')).toBeLessThan(operations.indexOf('git:commit'));
         expect(mockRunValidationCommands).not.toHaveBeenCalled();
         expect(mockCollectTaskChangedPaths).toHaveBeenCalledWith(wtDir, runGit);
-        expect(mockRunValidationCommandArgv).toHaveBeenCalledWith(
+        const exactArgv = [
+          'npx',
+          'vitest',
+          'related',
+          '--run',
+          '--passWithNoTests',
+          'src/feature.ts',
+          'src/odd name.test.ts',
+          './--config=malicious.ts',
+        ];
+        expect(mockRunValidationCommandArgv.mock.calls).toEqual([
           [
-            'npx',
-            'vitest',
-            'related',
-            '--run',
-            '--passWithNoTests',
-            'src/feature.ts',
-            'src/odd name.test.ts',
-            './--config=malicious.ts',
+            exactArgv,
+            join(wtDir!, 'harness'),
+            120_000,
+            join(artifactsDir, runId, 'validation-diagnostics'),
           ],
-          join(wtDir!, 'harness'),
-          120_000,
-          join(artifactsDir, runId, 'validation-diagnostics'),
-        );
-        expect(progress).toEqual(expect.arrayContaining([
+          [
+            exactArgv,
+            join(wtDir!, 'harness'),
+            120_000,
+            join(artifactsDir, runId, 'validation-diagnostics'),
+            { compatibleFallback: true },
+          ],
+        ]);
+        const relatedDiagnostics = readFileSync(
+          join(artifactsDir, runId, 'related-test-diagnostics.jsonl'),
+          'utf8',
+        ).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(relatedDiagnostics).toEqual([
+          expect.objectContaining({
+            taskId: 'build-the-streak-core',
+            state: 'related-validation-host-conflict',
+            initial: expect.objectContaining({
+              selectedPaths: exactArgv.slice(5),
+              argv: exactArgv,
+              validationCwd: 'harness',
+            }),
+            conflictEvidence: expect.arrayContaining([
+              expect.objectContaining({
+                kind: 'loopback-listen-denied',
+                syscall: 'listen',
+                code: 'EPERM',
+              }),
+            ]),
+          }),
+          expect.objectContaining({
+            taskId: 'build-the-streak-core',
+            state: 'related-fallback-passed',
+            fallback: expect.objectContaining({
+              selectedPaths: exactArgv.slice(5),
+              argv: exactArgv,
+              validationCwd: 'harness',
+            }),
+          }),
+        ]);
+        expect(JSON.stringify(relatedDiagnostics)).not.toContain(repoPath);
+        const summary = JSON.parse(
+          readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8'),
+        ) as Record<string, unknown>;
+        expect(summary).toMatchObject({
+          relatedTestDiagnostic: { state: 'related-fallback-passed' },
+          relatedTestDiagnostics: [{
+            taskId: 'build-the-streak-core',
+            diagnostic: { state: 'related-fallback-passed' },
+          }],
+        });
+        expect(events).toEqual(expect.arrayContaining([
           expect.objectContaining({
             mutationId: runId,
-            kind: 'progress',
+            kind: 'activity',
             data: expect.objectContaining({
-              event: 'closeout-commit',
+              event: 'related-fallback-passed',
               taskId: 'build-the-streak-core',
-              commitSha: 'closeout-pass-sha',
+              line: expect.stringMatching(/compatible confirmation passed/i),
             }),
           }),
         ]));
@@ -2357,7 +2477,10 @@ describe('orchestratedWorkApplier', () => {
           makeDescriptor(undefined, runId),
           ctx,
         ));
-        expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+        const terminal = events.find(
+          (event) => event.kind === 'completed' || event.kind === 'failed',
+        );
+        expect(terminal?.kind).toBe('completed');
         expect(validationCwd).toBe(wtDir);
         expect(validationCwd).not.toBe(repoPath);
         expect(validationCwd).not.toBe(integrationWorktree);
@@ -2373,6 +2496,17 @@ describe('orchestratedWorkApplier', () => {
           undefined,
           join(artifactsDir, runId, 'validation-diagnostics'),
         );
+        expect(mockRunValidationCommandArgv).not.toHaveBeenCalled();
+        expect(terminal?.data).not.toHaveProperty('relatedTestDiagnostic');
+        expect(terminal?.data).not.toHaveProperty('relatedTestDiagnostics');
+        expect(existsSync(
+          join(artifactsDir, runId, 'related-test-diagnostics.jsonl'),
+        )).toBe(false);
+        const summary = JSON.parse(
+          readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8'),
+        ) as Record<string, unknown>;
+        expect(summary).not.toHaveProperty('relatedTestDiagnostic');
+        expect(summary).not.toHaveProperty('relatedTestDiagnostics');
       } finally {
         if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
         else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;

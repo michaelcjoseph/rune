@@ -208,6 +208,86 @@ describe('writeSummary', () => {
     });
   });
 
+  it('round-trips related-test fallback evidence while keeping legacy summaries readable', () => {
+    const legacy = makeSummary({ id: 'legacy-without-related-diagnostic' });
+    writeSummary(join(tmpDir, legacy.id), legacy);
+    expect(readWorkRunSummary(tmpDir, legacy.id)).toEqual(legacy);
+    expect(readWorkRunSummary(tmpDir, legacy.id)).not.toHaveProperty('relatedTestDiagnostic');
+
+    const relatedTestDiagnostic = {
+      state: 'related-fallback-failed' as const,
+      initial: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail: 'structured host conflict',
+          diagnosticArtifacts: [],
+          structuredErrorsTotal: 1,
+          structuredErrorsComplete: true,
+          structuredErrors: [{
+            source: 'vitest-json' as const,
+            scope: 'suite' as const,
+            file: 'src/nested.test.ts',
+            message: 'sandbox_apply: Operation not permitted',
+          }],
+        },
+        compatibleMode: false,
+      },
+      conflictEvidence: [{
+        kind: 'nested-seatbelt-sandbox-apply' as const,
+        source: 'vitest-json' as const,
+        scope: 'suite' as const,
+        file: 'src/nested.test.ts',
+        message: 'sandbox_apply: Operation not permitted',
+        syscall: 'sandbox_apply' as const,
+      }],
+      fallback: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: null,
+          timedOut: true,
+          outputTail: 'confirmation timed out',
+          diagnosticArtifacts: ['validation-timeout-1.txt'],
+          structuredErrorsTotal: 0,
+          structuredErrorsComplete: true,
+          structuredErrors: [],
+        },
+        compatibleMode: true,
+      },
+    };
+    const current = makeSummary({
+      id: 'current-with-related-diagnostic',
+      outcome: 'failed',
+      relatedTestDiagnostic,
+      relatedTestDiagnostics: [{
+        taskId: 'build-the-feature',
+        diagnostic: relatedTestDiagnostic,
+      }],
+    });
+    writeSummary(join(tmpDir, current.id), current);
+
+    expect(readWorkRunSummary(tmpDir, current.id)).toMatchObject({
+      relatedTestDiagnostic: {
+        state: 'related-fallback-failed',
+        fallback: { result: { timedOut: true } },
+      },
+      relatedTestDiagnostics: [{
+        taskId: 'build-the-feature',
+        diagnostic: {
+          state: 'related-fallback-failed',
+          fallback: { result: { timedOut: true } },
+        },
+      }],
+    });
+  });
+
   it('round-trips a bounded conflict sample with its larger total count', () => {
     const id = 'bounded-context-conflicts';
     const checkpoint = { kind: 'committed' as const, sha: 'abcdef1234567' };

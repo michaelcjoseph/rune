@@ -128,6 +128,19 @@ function formatWorkRunTerminal(event: BusMutationEvent, opts: { suppressMergeCla
     return lines.join('\n');
   }
 
+  const relatedDiagnostic = data['relatedTestDiagnostic'] &&
+      typeof data['relatedTestDiagnostic'] === 'object' &&
+      !Array.isArray(data['relatedTestDiagnostic'])
+    ? data['relatedTestDiagnostic'] as Record<string, unknown>
+    : null;
+  if (
+    relatedDiagnostic?.['state'] === 'related-validation-host-conflict' ||
+    relatedDiagnostic?.['state'] === 'related-fallback-failed'
+  ) {
+    return `🛠️ ${slug} operational hold · related-test validation-host conflict` +
+      `; compatible confirmation did not pass · id=${id}`;
+  }
+
   const outcome = typeof data['outcome'] === 'string' ? (data['outcome'] as string) : '';
   if (!outcome) {
     // An early-exit work-run terminal (worktree-create / project-not-found /

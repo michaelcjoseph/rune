@@ -627,6 +627,32 @@ describe('TelegramSender', () => {
       expect(button.callback_data).toMatch(/^work-run-release:/);
     });
 
+    it('renders a related-test host conflict as an operational hold, not a product failure', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          held: true,
+          reason:
+            'related-test infrastructure validation conflict; compatible confirmation failed',
+          relatedTestDiagnostic: { state: 'related-fallback-failed' },
+          outcome: 'partial',
+          workProduct: {
+            commitCount: 1,
+            commitShas: ['abcdef1234567'],
+            filesChanged: ['src/feature.ts'],
+            diffstat: '1 file changed',
+          },
+        }),
+      );
+      await flush();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toMatch(/operational hold/i);
+      expect(text).toMatch(/validation-host conflict/i);
+      expect(text).toMatch(/compatible confirmation did not pass/i);
+      expect(text).not.toMatch(/tests failed|coder failed|repair attempt/i);
+    });
+
     it('renders AskUserQuestion parks with answer buttons instead of Release', async () => {
       sender.onMutationEvent(
         workRunEvent('completed', {

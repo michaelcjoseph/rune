@@ -40,6 +40,7 @@ import type {
 import type { SelectedTask } from './orch-task-select.js';
 import type { FinalizerAdapter } from './finalizer-handoff.js';
 import type { TaskRunRecord } from './orch-run-record.js';
+import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 import { reconstructRun } from './orch-reconstruct.js';
 import { seedProjectContext } from './project-context.js';
 
@@ -2395,6 +2396,255 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(h.state.commits).toHaveLength(2);
     expect((h.state.tasksMd.match(/- \[x\]/g) ?? []).length).toBe(2);
   });
+
+  it('keeps an ordinary related-test regression in the bounded coder-repair loop', async () => {
+    let workflowRuns = 0;
+    let closeoutCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowRuns++;
+        return readyEvidence(task);
+      },
+      runCloseoutChecks: async () => {
+        closeoutCalls++;
+        if (closeoutCalls > 1) return { ok: true } as const;
+        return {
+          ok: false,
+          failure: {
+            command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+            exitCode: 1,
+            timedOut: false,
+            outputTail: 'AssertionError: expected 3 to be 2',
+            relatedTestDiagnostic: {
+              state: 'related-test-failure',
+              initial: {
+                selectedPaths: ['src/streak.ts'],
+                argv: ['npx', 'vitest', 'related', '--run', 'src/streak.ts'],
+                command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+                validationCwd: '.',
+                result: {
+                  exitCode: 1,
+                  timedOut: false,
+                  outputHead: '',
+                  outputTail: 'AssertionError: expected 3 to be 2',
+                  diagnosticArtifacts: [],
+                },
+                compatibleMode: false,
+              },
+              conflictEvidence: [],
+            },
+          },
+        } as const;
+      },
+    }, '# Tasks\n- [ ] Build the streak core\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result.kind).toBe('finalized');
+    expect(workflowRuns).toBe(2);
+    expect(closeoutCalls).toBe(2);
+    expect(eventsByName(h.state.events, 'attempt-start')
+      .map((event) => eventData(event)?.['attemptNumber'])).toEqual([1, 2]);
+  });
+
+  it('returns a bounded per-task diagnostic aggregate after successful related fallback closeout', async () => {
+    const diagnostic = {
+      state: 'related-fallback-passed' as const,
+      initial: {
+        selectedPaths: ['src/streak.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/streak.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail: 'listen EPERM: operation not permitted 127.0.0.1',
+          diagnosticArtifacts: [],
+          structuredErrorsTotal: 1,
+          structuredErrorsComplete: true,
+          structuredErrors: [{
+            source: 'vitest-json' as const,
+            scope: 'suite' as const,
+            file: 'src/streak.test.ts',
+            message: 'listen EPERM: operation not permitted 127.0.0.1',
+          }],
+        },
+        compatibleMode: false,
+      },
+      conflictEvidence: [{
+        kind: 'loopback-listen-denied' as const,
+        source: 'vitest-json' as const,
+        scope: 'suite' as const,
+        file: 'src/streak.test.ts',
+        message: 'listen EPERM: operation not permitted 127.0.0.1',
+        code: 'EPERM' as const,
+        syscall: 'listen' as const,
+        address: '127.0.0.1',
+      }],
+      fallback: {
+        selectedPaths: ['src/streak.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/streak.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 0,
+          timedOut: false,
+          outputTail: '',
+          diagnosticArtifacts: [],
+          structuredErrorsTotal: 0,
+          structuredErrorsComplete: true,
+          structuredErrors: [],
+        },
+        compatibleMode: true,
+      },
+    };
+    const h = makeHarness({
+      runCloseoutChecks: async () => ({
+        ok: true,
+        relatedTestDiagnostic: diagnostic,
+      }),
+    }, '# Tasks\n- [ ] Build the streak core\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'finalized',
+      relatedTestDiagnostics: [{
+        taskId: 'build-the-streak-core',
+        diagnostic: { state: 'related-fallback-passed' },
+      }],
+    });
+  });
+
+  it.each([
+    {
+      state: 'related-validation-host-conflict' as const,
+      fallback: undefined,
+      label: 'unsupported compatibility confirmation',
+    },
+    {
+      state: 'related-fallback-failed' as const,
+      fallback: {
+        exitCode: 1,
+        timedOut: false,
+        outputHead: '',
+        outputTail: 'Error: nested sandbox remains unsupported',
+      },
+      label: 'failed compatibility confirmation',
+    },
+    {
+      state: 'related-fallback-failed' as const,
+      fallback: {
+        exitCode: null,
+        timedOut: true,
+        outputHead: '',
+        outputTail: 'confirmation timed out',
+      },
+      label: 'timed-out compatibility confirmation',
+    },
+  ])(
+    'routes $label directly to a WIP-preserving operational hold without consuming repair rounds',
+    async ({ state, fallback }) => {
+      let workflowRuns = 0;
+      const commitWip = vi.fn(async () => ({
+        kind: 'committed' as const,
+        sha: 'wip-host-conflict-1234',
+      }));
+      const writeContextMd = vi.fn(async () => undefined);
+      const writeTasksMd = vi.fn(async () => undefined);
+      const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+        sha: 'must-not-commit',
+        subject: 'must not commit',
+      }));
+      const initial = {
+        selectedPaths: ['src/streak.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/streak.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputHead: '',
+          outputTail: 'structured host capability conflict',
+          diagnosticArtifacts: [],
+        },
+        compatibleMode: false,
+      };
+      const conflictEvidence = [{
+          kind: 'loopback-listen-denied' as const,
+          source: 'vitest-json' as const,
+          scope: 'suite' as const,
+          file: 'src/streak.test.ts',
+          message: 'listen EPERM: operation not permitted 127.0.0.1',
+          code: 'EPERM' as const,
+          syscall: 'listen' as const,
+          address: '127.0.0.1',
+      }];
+      const relatedTestDiagnostic: RelatedTestDiagnostic = fallback === undefined
+        ? {
+            state: 'related-validation-host-conflict',
+            initial,
+            conflictEvidence,
+          }
+        : {
+          state: 'related-fallback-failed',
+          initial,
+          conflictEvidence,
+          fallback: {
+            selectedPaths: ['src/streak.ts'],
+            argv: ['npx', 'vitest', 'related', '--run', 'src/streak.ts'],
+            command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+            validationCwd: '.',
+            result: {
+              ...fallback,
+              diagnosticArtifacts: [],
+            },
+            compatibleMode: true,
+          },
+        };
+      const h = makeHarness({
+        worktreePath: '/tmp/rune-worktrees/aura/host-conflict',
+        runTaskWorkflow: async (task) => {
+          workflowRuns++;
+          return readyEvidence(task);
+        },
+        runCloseoutChecks: async () => ({
+          ok: false,
+          failure: {
+            command: '"npx" "vitest" "related" "--run" "src/streak.ts"',
+            exitCode: fallback?.exitCode ?? 1,
+            timedOut: fallback?.timedOut ?? false,
+            outputTail: fallback?.outputTail ?? 'compatible confirmation unavailable',
+            relatedTestDiagnostic,
+          },
+        } as const),
+        commitWip,
+        writeContextMd,
+        writeTasksMd,
+        commitCloseout,
+      }, '# Tasks\n- [ ] Build the streak core\n');
+
+      const result = await runProjectOrchestration(h.deps);
+
+      expect(result).toMatchObject({
+        kind: 'held',
+        preserveBranch: true,
+        preserveWorktree: true,
+        relatedTestDiagnostic: { state },
+      });
+      expect(String((result as { reason?: string }).reason)).toMatch(
+        /validation host|compatib|infrastructure/i,
+      );
+      expect(workflowRuns).toBe(1);
+      expect(eventsByName(h.state.events, 'attempt-start')
+        .map((event) => eventData(event)?.['attemptNumber'])).toEqual([1]);
+      expect(commitWip).toHaveBeenCalledOnce();
+      expect(writeContextMd).not.toHaveBeenCalled();
+      expect(writeTasksMd).not.toHaveBeenCalled();
+      expect(commitCloseout).not.toHaveBeenCalled();
+      expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    },
+  );
 
   it('exhausts the repair budget, WIP-commits, and PARKS blocked-on-human with branch and worktree preserved', async () => {
     let workflowRuns = 0;

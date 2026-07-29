@@ -12,6 +12,11 @@ type WorkRunFixture = {
   startedAt?: string;
   transcriptExists?: boolean;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
+  relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
+  relatedTestDiagnostics?: Array<{
+    taskId: string;
+    diagnostic: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
+  }>;
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
 };
 
@@ -807,6 +812,158 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       outcome: 'failed',
       contextFailure,
       disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+    });
+  });
+
+  it('projects related-test operational diagnostics into cockpit run history', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const relatedTestDiagnostic = {
+      state: 'related-fallback-failed' as const,
+      initial: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail: 'structured host conflict',
+          diagnosticArtifacts: [],
+        },
+        compatibleMode: false,
+      },
+      conflictEvidence: [{
+        kind: 'loopback-listen-denied' as const,
+        source: 'vitest-json' as const,
+        scope: 'suite' as const,
+        file: 'src/server.test.ts',
+        message: 'listen EPERM: operation not permitted 127.0.0.1',
+        code: 'EPERM' as const,
+        syscall: 'listen' as const,
+        address: '127.0.0.1',
+      }],
+      fallback: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: null,
+          timedOut: true,
+          outputTail: 'confirmation timed out',
+          diagnosticArtifacts: ['validation-timeout-1.txt'],
+        },
+        compatibleMode: true,
+      },
+    };
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [{
+          runId: 'run-related-host-conflict',
+          product: 'aura',
+          target: { kind: 'project', slug: '01-mvp' },
+          outcome: 'failed',
+          endedAt: '2026-06-23T11:45:00.000Z',
+          relatedTestDiagnostic,
+          disposition: {
+            kind: 'preserved',
+            reason: 'operational validation hold',
+            wipSha: 'abcdef1234567',
+          },
+        }]),
+      }),
+    });
+
+    expect(view.runs[0]).toMatchObject({
+      runId: 'run-related-host-conflict',
+      relatedTestDiagnostic: {
+        state: 'related-fallback-failed',
+        fallback: { result: { timedOut: true } },
+      },
+      disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+    });
+  });
+
+  it('projects successful per-task related fallback diagnostics into cockpit run history', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const diagnostic = {
+      state: 'related-fallback-passed' as const,
+      initial: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail: 'structured host conflict',
+          diagnosticArtifacts: [],
+          structuredErrorsTotal: 1,
+          structuredErrorsComplete: true,
+          structuredErrors: [{
+            source: 'vitest-json' as const,
+            scope: 'suite' as const,
+            file: 'src/server.test.ts',
+            message: 'listen EPERM: operation not permitted 127.0.0.1',
+          }],
+        },
+        compatibleMode: false,
+      },
+      conflictEvidence: [{
+        kind: 'loopback-listen-denied' as const,
+        source: 'vitest-json' as const,
+        scope: 'suite' as const,
+        file: 'src/server.test.ts',
+        message: 'listen EPERM: operation not permitted 127.0.0.1',
+        code: 'EPERM' as const,
+        syscall: 'listen' as const,
+        address: '127.0.0.1',
+      }],
+      fallback: {
+        selectedPaths: ['src/feature.ts'],
+        argv: ['npx', 'vitest', 'related', '--run', 'src/feature.ts'],
+        command: '"npx" "vitest" "related" "--run" "src/feature.ts"',
+        validationCwd: '.',
+        result: {
+          exitCode: 0,
+          timedOut: false,
+          outputTail: '',
+          diagnosticArtifacts: [],
+          structuredErrorsTotal: 0,
+          structuredErrorsComplete: true,
+          structuredErrors: [],
+        },
+        compatibleMode: true,
+      },
+    };
+    const relatedTestDiagnostics = [{
+      taskId: 'build-the-feature',
+      diagnostic,
+    }];
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [{
+          runId: 'run-related-fallback-passed',
+          product: 'aura',
+          target: { kind: 'project', slug: '01-mvp' },
+          outcome: 'branch-complete',
+          endedAt: '2026-06-23T11:45:00.000Z',
+          relatedTestDiagnostic: diagnostic,
+          relatedTestDiagnostics,
+        }]),
+      }),
+    });
+
+    expect(view.runs[0]).toMatchObject({
+      relatedTestDiagnostic: { state: 'related-fallback-passed' },
+      relatedTestDiagnostics: [{
+        taskId: 'build-the-feature',
+        diagnostic: { state: 'related-fallback-passed' },
+      }],
     });
   });
 

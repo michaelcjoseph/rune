@@ -76,6 +76,11 @@ import {
 } from './execution-failure.js';
 import type { TaskValidationFailure } from './task-validation.js';
 import type { ReviewSurfaceFailure } from './team-task-workflow.js';
+import {
+  collectRelatedTestTaskDiagnostics,
+  type RelatedTestDiagnostic,
+  type RelatedTestTaskDiagnostic,
+} from './related-test-diagnostic.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output' | 'progress';
@@ -102,10 +107,11 @@ export interface CloseoutCheckFailure {
   validationCwd?: string;
   validationFailure?: TaskValidationFailure;
   reviewSurfaceFailure?: ReviewSurfaceFailure;
+  relatedTestDiagnostic?: RelatedTestDiagnostic;
 }
 
 export type CloseoutCheckResult =
-  | { ok: true }
+  | { ok: true; relatedTestDiagnostic?: RelatedTestDiagnostic }
   | { ok: false; failure: CloseoutCheckFailure };
 
 export interface OrchestrationRunCursor {
@@ -197,7 +203,11 @@ export interface OrchestrationDeps {
 }
 
 export type OrchestrationResult =
-  | { kind: 'finalized'; outcome: string }
+  | {
+      kind: 'finalized';
+      outcome: string;
+      relatedTestDiagnostics?: RelatedTestTaskDiagnostic[];
+    }
   | {
       kind: 'held';
       reason?: string;
@@ -208,6 +218,7 @@ export type OrchestrationResult =
       preserveWorktree?: true;
       executionFailure?: ExecutionFailure;
       contextFailure?: ContextCloseoutFailure;
+      relatedTestDiagnostic?: RelatedTestDiagnostic;
     }
   | {
       kind: 'blocked';
@@ -216,6 +227,7 @@ export type OrchestrationResult =
       parked?: ParkedTaskRun;
       executionFailure?: ExecutionFailure;
       taskValidationFailure?: TaskValidationFailure;
+      relatedTestDiagnostic?: RelatedTestDiagnostic;
     }
   | {
       kind: 'cancelled';
@@ -250,7 +262,12 @@ export async function runProjectOrchestration(
       );
     }
     const failure = adjacentExecutionFailure(checkpoint, err);
-    return buildOperationalHold(deps, executionFailureSummary(failure), [], failure);
+    return buildOperationalHold(
+      deps,
+      executionFailureSummary(failure),
+      [],
+      { executionFailure: failure },
+    );
   }
 }
 
@@ -285,8 +302,13 @@ async function runProjectOrchestrationImpl(
         taskRecords,
       });
       const res = await runFinalizerHandoff(handoff, deps.finalize);
+      const relatedTestDiagnostics = collectRelatedTestTaskDiagnostics(taskRecords);
       return res.kind === 'finalized'
-        ? { kind: 'finalized', outcome: res.outcome }
+        ? {
+            kind: 'finalized',
+            outcome: res.outcome,
+            ...(relatedTestDiagnostics.length > 0 ? { relatedTestDiagnostics } : {}),
+          }
         : { kind: 'held', reason: res.reason, handoff: res.handoff };
     }
 
@@ -314,6 +336,27 @@ async function runProjectOrchestrationImpl(
       // Mechanical validation is a separate gate. Closeout itself is not
       // entered until validation and post-validation review-surface checks pass.
       const checks = await deps.runCloseoutChecks(task, evidence);
+      const relatedTestDiagnostic = checks.ok
+        ? checks.relatedTestDiagnostic
+        : checks.failure.relatedTestDiagnostic;
+      if (relatedTestDiagnostic !== undefined) {
+        evidence = { ...evidence, relatedTestDiagnostic };
+      }
+      if (
+        !checks.ok &&
+        isOperationalRelatedTestDiagnostic(checks.failure.relatedTestDiagnostic)
+      ) {
+        const checkpoint = await checkpointWip(deps, task);
+        const reason =
+          relatedTestOperationalSummary(checks.failure.relatedTestDiagnostic) +
+          `; ${checkpointSummary(checkpoint)}`;
+        return buildOperationalHold(
+          deps,
+          reason,
+          taskRecords,
+          { relatedTestDiagnostic: checks.failure.relatedTestDiagnostic },
+        );
+      }
       closeout = checks.ok
         ? await performCloseout(deps, task, tasksMd, contextMd, evidence)
         : {
@@ -367,6 +410,9 @@ async function runProjectOrchestrationImpl(
             reason,
             task,
             ...(validation !== undefined ? { taskValidationFailure: validation } : {}),
+            ...(closeout.closeoutFailure.relatedTestDiagnostic !== undefined
+              ? { relatedTestDiagnostic: closeout.closeoutFailure.relatedTestDiagnostic }
+              : {}),
             parked: {
               status: 'blocked-on-human',
               branch: deps.branch,
@@ -377,7 +423,15 @@ async function runProjectOrchestrationImpl(
           };
         }
         // No worktree path wired (fixture-only) — preserved hold fallback.
-        return buildOperationalHold(deps, reason, taskRecords);
+        return buildOperationalHold(
+          deps,
+          reason,
+          taskRecords,
+          {
+            relatedTestDiagnostic:
+              closeout.closeoutFailure.relatedTestDiagnostic,
+          },
+        );
       }
       if (closeout.contextFailure !== undefined) {
         const checkpoint = await checkpointWip(deps, task);
@@ -390,8 +444,7 @@ async function runProjectOrchestrationImpl(
           deps,
           contextFailureSummary(contextFailure),
           taskRecords,
-          undefined,
-          contextFailure,
+          { contextFailure },
         );
       }
       return buildOperationalHold(deps, closeout.reason, taskRecords);
@@ -412,6 +465,9 @@ async function runProjectOrchestrationImpl(
       ...acceptanceField(evidence),
       ...(evidence.coderSelfReviews !== undefined
         ? { coderSelfReviews: evidence.coderSelfReviews }
+        : {}),
+      ...(evidence.relatedTestDiagnostic !== undefined
+        ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
         : {}),
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
@@ -895,7 +951,7 @@ async function resolveNonCloseoutEvidence(
       deps,
       evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
       taskRecords,
-      evidence.executionFailure,
+      { executionFailure: evidence.executionFailure },
     );
   }
   const parked = maybeParkedRun(deps, evidence);
@@ -910,6 +966,24 @@ async function resolveNonCloseoutEvidence(
 /** Included prompt tail is bounded; the FULL tail is already persisted to
  *  closeout-validation-failure.txt by the runner adapter. Keep-the-end. */
 const CLOSEOUT_FEEDBACK_TAIL_CHARS = 4_000;
+
+function isOperationalRelatedTestDiagnostic(
+  diagnostic: RelatedTestDiagnostic | undefined,
+): diagnostic is RelatedTestDiagnostic {
+  return diagnostic?.state === 'related-validation-host-conflict' ||
+    diagnostic?.state === 'related-fallback-failed';
+}
+
+function relatedTestOperationalSummary(diagnostic: RelatedTestDiagnostic): string {
+  if (diagnostic.state === 'related-validation-host-conflict') {
+    return 'related-test infrastructure validation conflict could not be confirmed safely';
+  }
+  const fallback = diagnostic.fallback;
+  const outcome = fallback?.result.timedOut
+    ? 'timed out'
+    : `exited ${fallback?.result.exitCode ?? 'unknown'}`;
+  return `related-test infrastructure validation conflict; compatible confirmation ${outcome}`;
+}
 
 /** The closeout gate is the product validation suite — QA's artifact domain —
  *  so the repair feedback is qa-attributed; the reason self-describes as
@@ -996,13 +1070,19 @@ function contextFailureSummary(failure: ContextCloseoutFailure): string {
   );
 }
 
+interface OperationalHoldDetails {
+  executionFailure?: ExecutionFailure;
+  contextFailure?: ContextCloseoutFailure;
+  relatedTestDiagnostic?: RelatedTestDiagnostic;
+}
+
 function buildOperationalHold(
   deps: OrchestrationDeps,
   reason: string,
   taskRecords: TaskRunRecord[],
-  executionFailure?: ExecutionFailure,
-  contextFailure?: ContextCloseoutFailure,
+  details: OperationalHoldDetails = {},
 ): Extract<OrchestrationResult, { kind: 'held' }> {
+  const { executionFailure, contextFailure, relatedTestDiagnostic } = details;
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
     project: deps.project,
@@ -1023,6 +1103,7 @@ function buildOperationalHold(
     } : {}),
     ...(executionFailure !== undefined ? { executionFailure } : {}),
     ...(contextFailure !== undefined ? { contextFailure } : {}),
+    ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
   };
 }
 

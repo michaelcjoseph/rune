@@ -1788,6 +1788,31 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/Disposition preserved/i);
   });
 
+  it('renders the final Cockpit label for every related-test diagnostic state', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const states = [
+      ['related-test-failure', 'Related-test failure'],
+      ['related-validation-host-conflict', 'Related-test validation-host conflict'],
+      ['related-fallback-passed', 'Related-test compatible confirmation passed'],
+      ['related-fallback-failed', 'Operational hold: related-test validation-host conflict'],
+    ] as const;
+    const html = renderProductDeepView(productView({
+      runs: states.map(([state], index) => ({
+        runId: `run-related-${index}`,
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: state === 'related-fallback-passed' ? 'completed' : 'failed',
+        endedAt: `2026-07-27T12:00:0${index}.000Z`,
+        relatedTestDiagnostic: { state },
+      })),
+    }), { activeSidePanel: 'runs' });
+
+    for (const [state, label] of states) {
+      expect(html).toContain(`run-related-${states.findIndex(([candidate]) => candidate === state)}`);
+      expect(html).toContain(label);
+    }
+    expect(html.match(/deep-run-related-validation/g)).toHaveLength(states.length);
+  });
+
   it('labels the run roster as Agent activity, shows each agent model, and renders the classified terminal outcome from live state', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

@@ -20,6 +20,7 @@ import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets } from './work-run-transcript.js';
+import { hasValidationCompatibleModeMarker } from '../utils/validation-confinement.js';
 
 const execFileAsync = promisify(execFile);
 const NETWORK_DENY_PROFILE = [
@@ -45,8 +46,12 @@ export const defaultRunCanonicalGit: GitRunner = async (args, opts) => {
     'credential.helper=',
     ...args,
   ];
-  const bin = process.platform === 'darwin' ? '/usr/bin/sandbox-exec' : 'git';
-  const spawnArgs = process.platform === 'darwin'
+  // This helper is invoked either directly by Rune or as a descendant of the
+  // validation launcher. The marker is meaningful only in the latter case,
+  // where the launch contract already applied the outer Seatbelt.
+  const useSeatbelt = process.platform === 'darwin' && !hasValidationCompatibleModeMarker();
+  const bin = useSeatbelt ? '/usr/bin/sandbox-exec' : 'git';
+  const spawnArgs = useSeatbelt
     ? ['-p', NETWORK_DENY_PROFILE, 'git', ...gitArgs]
     : gitArgs;
   const result = await execFileAsync(bin, spawnArgs, {

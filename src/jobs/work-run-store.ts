@@ -36,6 +36,14 @@ import type {
   ContextCloseoutFailure,
   WipCheckpointResult,
 } from '../intent/context-closeout.js';
+import type {
+  RelatedTestDiagnostic,
+  RelatedTestTaskDiagnostic,
+} from '../intent/related-test-diagnostic.js';
+import {
+  isRelatedTestDiagnostic,
+  isRelatedTestTaskDiagnosticList,
+} from '../intent/related-test-diagnostic.js';
 import {
   CONTEXT_CONFLICTING_HEADINGS_MAX,
   CONTEXT_PROPOSED_REPAIR_MAX_CHARS,
@@ -108,6 +116,10 @@ export interface WorkRunSummary {
   disposition?: ExecutionTerminalDisposition;
   /** Actionable context-closeout failure evidence, absent on unrelated runs. */
   contextFailure?: ContextCloseoutFailure;
+  /** Related-test host-conflict/fallback evidence, absent on legacy runs. */
+  relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Bounded per-task related-test evidence for successful multi-task runs. */
+  relatedTestDiagnostics?: RelatedTestTaskDiagnostic[];
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */
@@ -201,6 +213,10 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const rawTrigger = (parsed as Record<string, unknown>)['trigger'];
   const rawDisposition = (parsed as Record<string, unknown>)['disposition'];
   const rawContextFailure = (parsed as Record<string, unknown>)['contextFailure'];
+  const rawRelatedTestDiagnostic =
+    (parsed as Record<string, unknown>)['relatedTestDiagnostic'];
+  const rawRelatedTestDiagnostics =
+    (parsed as Record<string, unknown>)['relatedTestDiagnostics'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -220,18 +236,37 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     ? undefined
     : parseContextCloseoutFailure(rawContextFailure);
   const contextFailureValid = rawContextFailure === undefined || contextFailure !== undefined;
+  const relatedTestDiagnostic = isRelatedTestDiagnostic(rawRelatedTestDiagnostic)
+    ? rawRelatedTestDiagnostic
+    : undefined;
+  const relatedTestDiagnosticValid =
+    rawRelatedTestDiagnostic === undefined || relatedTestDiagnostic !== undefined;
+  const relatedTestDiagnostics = isRelatedTestTaskDiagnosticList(rawRelatedTestDiagnostics)
+    ? rawRelatedTestDiagnostics
+    : undefined;
+  const relatedTestDiagnosticsValid =
+    rawRelatedTestDiagnostics === undefined || relatedTestDiagnostics !== undefined;
+  const relatedTestProjectionConsistent =
+    relatedTestDiagnostic === undefined ||
+    relatedTestDiagnostics === undefined ||
+    JSON.stringify(relatedTestDiagnostic) ===
+      JSON.stringify(relatedTestDiagnostics.at(-1)?.diagnostic);
   if (
     s.id === id &&
     typeof s.product === 'string' &&
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
     targetValid &&
-    cancellationValid && triggerValid && dispositionValid && contextFailureValid
+    cancellationValid && triggerValid && dispositionValid && contextFailureValid &&
+    relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
+    relatedTestProjectionConsistent
   ) {
     const summary = {
       ...s,
       ...(cancellation !== undefined ? { cancellation } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
+      ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+      ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
     } as WorkRunSummary;
     if (
       contextFailure !== undefined &&

@@ -1,6 +1,7 @@
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { VALIDATION_COMPATIBLE_MODE_ENV } from './utils/validation-confinement.js';
 
 function required(name: string): string {
   const val = process.env[name];
@@ -400,6 +401,11 @@ export default config;
 
 /** Preserve fail-fast startup validation for the full Rune operator process. */
 export function assertOperatorConfig(): void {
+  if (process.env[VALIDATION_COMPATIBLE_MODE_ENV] !== undefined) {
+    throw new Error(
+      `${VALIDATION_COMPATIBLE_MODE_ENV} is reserved for Rune's sanitized validation launcher`,
+    );
+  }
   void config.TELEGRAM_BOT_TOKEN;
   void config.TELEGRAM_USER_ID;
   void config.VAULT_DIR;

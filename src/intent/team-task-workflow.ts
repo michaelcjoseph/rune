@@ -32,6 +32,7 @@ import {
   executionFailureSummary,
   type ExecutionFailure,
 } from './execution-failure.js';
+import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -415,6 +416,8 @@ export interface TaskEvidence {
   executionFailure?: ExecutionFailure;
   /** Missing/unusable/failed mechanical validation evidence. */
   taskValidationFailure?: TaskValidationFailure;
+  /** Typed `vitest related` closeout result. Optional for historical evidence. */
+  relatedTestDiagnostic?: RelatedTestDiagnostic;
   /** Fail-closed review-surface mismatch; never carries raw diff content. */
   reviewSurfaceFailure?: ReviewSurfaceFailure;
   /** Scrubbed canonical review-surface hash approved by downstream roles. */

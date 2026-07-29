@@ -18,6 +18,7 @@ import {
   type ObjectionFinding,
   type PmAcceptance,
 } from './team-task-workflow.js';
+import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -48,6 +49,8 @@ export interface TaskRunRecord {
   acceptance?: PmAcceptance;
   /** Successful worktree coder self-reviews. Optional for historical JSONL. */
   coderSelfReviews?: CoderSelfReviewRecord[];
+  /** Related-test fallback evidence. Optional for historical JSONL. */
+  relatedTestDiagnostic?: RelatedTestDiagnostic;
   /** What happened to `context.md` on this attempt. */
   contextOutcome: TaskContextOutcome;
   /** Gate decisions the orchestrator made. */
@@ -90,6 +93,9 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
               ),
             })),
         }
+      : {}),
+    ...(input.relatedTestDiagnostic !== undefined
+      ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }
       : {}),
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },

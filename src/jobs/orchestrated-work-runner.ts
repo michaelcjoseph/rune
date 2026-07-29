@@ -164,6 +164,20 @@ import {
   type ValidationCommandListResult,
 } from './work-run-gate-runtime.js';
 import {
+  diagnoseRelatedTestFallback,
+  diagnoseRelatedTestResult,
+  formatRelatedTestStructuredErrors,
+  type RelatedTestDiagnostic,
+} from './related-test-diagnostic.js';
+import {
+  collectRelatedTestTaskDiagnostics,
+  isRelatedTestDiagnostic,
+  isRelatedTestTaskDiagnosticList,
+  relatedTestInvocationSelectionFits,
+  RELATED_TEST_TASK_ID_MAX_CHARS,
+  type RelatedTestTaskDiagnostic,
+} from '../intent/related-test-diagnostic.js';
+import {
   taskValidationCommandFailure,
   validateTaskValidationAdmission,
 } from './task-validation.js';
@@ -841,6 +855,7 @@ export interface OrchestratedRuntimeDeps {
    *  inject a canned result so the loop's deps are never exercised. */
   runOrchestration: (deps: OrchestrationDeps) => Promise<OrchestrationResult>;
   runGit: GitRunner;
+  runCanonicalGit: GitRunner;
   verifyWorktree: typeof verifyWorktreeProvisioning;
   /** Isolated teardown status seam; avoids coupling classification Git probes to cleanup. */
   inspectWorktreeStatus: (worktreePath: string) => Promise<string>;
@@ -863,6 +878,9 @@ export interface OrchestratedRuntimeDeps {
   readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
   /** Run the hard merge gate in its throwaway integration worktree. */
   runGate: typeof defaultRunGate;
+  /** Task-scoped validation seams, including the compatible related-test rerun. */
+  runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
+  runValidationCommands: typeof defaultRunValidationCommands;
   /** Build the throwaway integration worktree path used by the gate runtime. */
   integrationWorktree: (product: string, runId: string) => string;
   /** Refresh the rebuildable product/project registry after a branch lands on
@@ -882,6 +900,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     destroyWorktree: defaultDestroyWorktree,
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
+    runCanonicalGit: defaultRunCanonicalGit,
     verifyWorktree: verifyWorktreeProvisioning,
     inspectWorktreeStatus: async (worktreePath) =>
       (await defaultRunGit(['status', '--porcelain'], { cwd: worktreePath })).stdout,
@@ -894,6 +913,8 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
     runGate: defaultRunGate,
+    runValidationCommandArgv: defaultRunValidationCommandArgv,
+    runValidationCommands: defaultRunValidationCommands,
     integrationWorktree: (product, runId) => join(config.WORKTREE_ROOT, `gate-${product}-${runId}`),
     refreshRegistry: () => { rebuildRegistry(); },
     invalidateRunCursor: (runId, reason) => invalidateOrchestratedRunCursor(config.WORK_RUNS_DIR, runId, reason),
@@ -956,6 +977,8 @@ function buildOrchestrationDeps(args: {
   workRunsDir: string;
   runGit: GitRunner;
   runCanonicalGit?: GitRunner;
+  runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
+  runValidationCommands: typeof defaultRunValidationCommands;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
   cancel?: () => boolean;
@@ -1122,12 +1145,13 @@ function buildOrchestrationDeps(args: {
         };
       }
       let validation: ValidationCommandListResult;
+      let relatedTestDiagnostic: RelatedTestDiagnostic | undefined;
       if (task.validationPolicy === 'reviewed-no-validation') {
         validation = { ok: true };
       } else if (args.closeoutValidationStrategy === 'vitest-related') {
         const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
         if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
-          validation = await defaultRunValidationCommands(
+          validation = await args.runValidationCommands(
             args.validationCommands,
             admission.cwd,
             config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
@@ -1142,23 +1166,34 @@ function buildOrchestrationDeps(args: {
             .map((path) => relative(admission.cwd, resolve(sandbox.worktree, path)).replaceAll('\\', '/'))
             .map((path) => path.startsWith('-') ? `./${path}` : path);
           const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
-          const result = await defaultRunValidationCommandArgv(
-            argv,
-            admission.cwd,
-            config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-            diagnosticDir,
-          );
-          validation = result.timedOut || result.exitCode !== 0
-            ? {
-                ok: false,
-                command: argv.map((arg) => JSON.stringify(arg)).join(' '),
-                argv,
-                result,
-              }
-            : { ok: true };
+          if (!relatedTestInvocationSelectionFits(pathArgs, argv)) {
+            validation = await args.runValidationCommands(
+              args.validationCommands,
+              admission.cwd,
+              config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+              undefined,
+              diagnosticDir,
+            );
+          } else {
+            const related = await runRelatedTestCloseout({
+              task,
+              selectedPaths: pathArgs,
+              argv,
+              cwd: admission.cwd,
+              validationCwd: validationCwdLabel,
+              timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+              diagnosticDir,
+              workRunsDir: args.workRunsDir,
+              runId: descriptor.id,
+              runValidationCommandArgv: args.runValidationCommandArgv,
+              emit: args.emit,
+            });
+            validation = related.validation;
+            relatedTestDiagnostic = related.diagnostic;
+          }
         }
       } else {
-        validation = await defaultRunValidationCommands(
+        validation = await args.runValidationCommands(
           args.validationCommands,
           admission.cwd,
           config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
@@ -1168,10 +1203,20 @@ function buildOrchestrationDeps(args: {
       }
       if (validation.ok) {
         const approvedHash = evidence.reviewSurfaceHash;
-        if (approvedHash === undefined) return { ok: true };
+        if (approvedHash === undefined) {
+          return {
+            ok: true,
+            ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+          };
+        }
         const canonicalGit = args.runCanonicalGit ?? runGit;
         const canonical = await captureCanonicalReviewState(canonicalGit, sandbox.worktree);
-        if (canonical.hash === approvedHash) return { ok: true };
+        if (canonical.hash === approvedHash) {
+          return {
+            ok: true,
+            ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+          };
+        }
         const reviewSurfaceFailure: ReviewSurfaceFailure = {
           kind: 'candidate-mismatch',
           canonicalHash: canonical.hash,
@@ -1193,12 +1238,16 @@ function buildOrchestrationDeps(args: {
             outputTail: reviewSurfaceFailure.changedPaths.join('\n').slice(-8_000),
             validationCwd: validationCwdLabel,
             reviewSurfaceFailure,
+            ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
           },
         };
       }
       const command = scrub(validation.command);
       const outputHead = scrub(validation.result.outputHead ?? '');
-      const outputTail = scrub(validation.result.outputTail);
+      const structuredDetails = formatRelatedTestStructuredErrors(validation.result);
+      const outputTail = scrub(
+        [validation.result.outputTail, structuredDetails].filter(Boolean).join('\n'),
+      ).slice(-8_000);
       const diagnosticArtifacts = validation.result.diagnosticArtifacts ?? [];
       const outcome = validation.result.timedOut ? 'timed out' : `exit ${validation.result.exitCode}`;
       const validationFailure = taskValidationCommandFailure(
@@ -1268,6 +1317,7 @@ function buildOrchestrationDeps(args: {
           outputTail,
           validationCwd: validationCwdLabel,
           validationFailure,
+          ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
         },
       };
     },
@@ -1346,6 +1396,113 @@ const TREE_STATE_FILES_MAX_CHARS = 8_000;
 const TREE_STATE_STAT_MAX_CHARS = 8_000;
 const TREE_STATE_DIFF_MAX_CHARS = 20_000;
 
+interface RelatedTestCloseoutArgs {
+  task: SelectedTask;
+  selectedPaths: string[];
+  argv: string[];
+  cwd: string;
+  validationCwd: string;
+  timeoutMs: number;
+  diagnosticDir: string;
+  workRunsDir: string;
+  runId: string;
+  runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
+  emit?: (event: OrchestrationActivityEvent) => void;
+}
+
+async function runRelatedTestCloseout(
+  args: RelatedTestCloseoutArgs,
+): Promise<{
+  validation: ValidationCommandListResult;
+  diagnostic?: RelatedTestDiagnostic;
+}> {
+  const initialResult = await args.runValidationCommandArgv(
+    args.argv,
+    args.cwd,
+    args.timeoutMs,
+    args.diagnosticDir,
+  );
+  if (!initialResult.timedOut && initialResult.exitCode === 0) {
+    return { validation: { ok: true } };
+  }
+
+  const initialDiagnostic = diagnoseRelatedTestResult({
+    selectedPaths: args.selectedPaths,
+    argv: args.argv,
+    validationCwd: args.validationCwd,
+    result: initialResult,
+  });
+  appendRelatedTestDiagnostic(
+    args.workRunsDir,
+    args.runId,
+    args.task.id,
+    initialDiagnostic,
+  );
+  if (initialDiagnostic.state !== 'related-validation-host-conflict') {
+    return {
+      validation: {
+        ok: false,
+        command: initialDiagnostic.initial.command,
+        argv: args.argv,
+        result: initialResult,
+      },
+      diagnostic: initialDiagnostic,
+    };
+  }
+
+  args.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'related-validation-host-conflict',
+      taskId: args.task.id,
+      state: initialDiagnostic.state,
+      conflictKinds: initialDiagnostic.conflictEvidence.map((item) => item.kind),
+      line: 'related-test validation hit a host capability conflict; running the policy-preserving compatible confirmation',
+    },
+  });
+  const fallbackResult = await args.runValidationCommandArgv(
+    args.argv,
+    args.cwd,
+    args.timeoutMs,
+    args.diagnosticDir,
+    { compatibleFallback: true },
+  );
+  const diagnostic = diagnoseRelatedTestFallback(initialDiagnostic, {
+    selectedPaths: args.selectedPaths,
+    argv: args.argv,
+    validationCwd: args.validationCwd,
+    result: fallbackResult,
+  });
+  appendRelatedTestDiagnostic(
+    args.workRunsDir,
+    args.runId,
+    args.task.id,
+    diagnostic,
+  );
+  args.emit?.({
+    kind: 'activity',
+    data: {
+      event: diagnostic.state,
+      taskId: args.task.id,
+      state: diagnostic.state,
+      line: diagnostic.state === 'related-fallback-passed'
+        ? 'related-test compatible confirmation passed under the inherited validation confinement'
+        : 'related-test compatible confirmation failed; preserving WIP on an operational validation hold',
+    },
+  });
+  return {
+    validation: diagnostic.state === 'related-fallback-passed'
+      ? { ok: true }
+      : {
+          ok: false,
+          command: diagnostic.fallback.command,
+          argv: args.argv,
+          result: fallbackResult,
+        },
+    diagnostic,
+  };
+}
+
 function appendDurableValidationFailure(
   workRunsDir: string,
   runId: string,
@@ -1361,6 +1518,29 @@ function appendDurableValidationFailure(
     }))),
   );
   appendFileSync(join(runDir, file), scrubbed + '\n', 'utf8');
+}
+
+function appendRelatedTestDiagnostic(
+  workRunsDir: string,
+  runId: string,
+  taskId: string,
+  diagnostic: RelatedTestDiagnostic,
+): void {
+  const runDir = join(workRunsDir, runId);
+  mkdirSync(runDir, { recursive: true });
+  const scrubbed = redactSecrets(
+    scrubAbsolutePaths(scrubPathsInText(JSON.stringify({
+      recordedAt: new Date().toISOString(),
+      taskId: sanitizeExecutionDiagnostic(taskId)
+        .slice(0, RELATED_TEST_TASK_ID_MAX_CHARS),
+      ...diagnostic,
+    }))),
+  );
+  appendFileSync(
+    join(runDir, RELATED_TEST_DIAGNOSTICS_FILE),
+    scrubbed + '\n',
+    'utf8',
+  );
 }
 
 async function appendBranchTreeStateEvidence(
@@ -1510,6 +1690,7 @@ const ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE = 'notification-publications.j
 // the only post-mortem trace of WHICH test failed. Append-mode so a future
 // closeout repair loop can record multiple attempts.
 const CLOSEOUT_VALIDATION_FAILURE_FILE = 'closeout-validation-failure.txt';
+export const RELATED_TEST_DIAGNOSTICS_FILE = 'related-test-diagnostics.jsonl';
 const CLOSEOUT_LOG_TAIL_CHARS = 2_000;
 
 type OrchestratedNotificationPublicationKind = 'closeout-progress' | 'merge-success';
@@ -2006,7 +2187,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         closeoutValidationStrategy,
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
-        runCanonicalGit: defaultRunCanonicalGit,
+        runCanonicalGit: deps.runCanonicalGit,
+        runValidationCommandArgv: deps.runValidationCommandArgv,
+        runValidationCommands: deps.runValidationCommands,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         cancel: ctx.cancel,
         cancelReason: ctx.cancelReason,
@@ -2027,7 +2210,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           if (!shouldPublishCloseoutProgress(deps.workRunsDir, descriptor.id, mutationEvent)) return;
           enqueue(mutationEvent);
         },
-        finalize: async () => {
+        finalize: async (handoff) => {
+          const relatedTestDiagnostics =
+            collectRelatedTestTaskDiagnostics(handoff.taskRecords);
+          const relatedTestDiagnostic =
+            relatedTestDiagnostics.at(-1)?.diagnostic;
           let gateTasksRemaining = 0;
           let endedAt = '';
           const integrationWorktree = deps.integrationWorktree(product, descriptor.id);
@@ -2070,6 +2257,10 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
               data['product'] = product;
               data['dispatchMode'] = 'orchestrated';
               data['baseBranch'] = baseBranch;
+              if (relatedTestDiagnostics.length > 0) {
+                data['relatedTestDiagnostics'] = relatedTestDiagnostics;
+                data['relatedTestDiagnostic'] = relatedTestDiagnostic;
+              }
               terminalEvent.data = data;
               const workProduct = data['workProduct'] as WorkProductFacts | undefined;
               gateTasksRemaining = workProduct?.transitions.tasksRemaining ?? 0;
@@ -2102,7 +2293,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 sink,
                 workRunsDir: deps.workRunsDir,
                 workProduct: terminalWorkProduct(event),
-                result: { kind: 'finalized', outcome: readOutcome(event) },
+                result: {
+                  kind: 'finalized',
+                  outcome: readOutcome(event),
+                  ...(relatedTestDiagnostics.length > 0
+                    ? { relatedTestDiagnostics }
+                    : {}),
+                },
               });
               try {
                 deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
@@ -2280,6 +2477,10 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           data['projectSlug'] = projectSlug;
           data['product'] = product;
           data['dispatchMode'] = 'orchestrated';
+          if (relatedTestDiagnostics.length > 0) {
+            data['relatedTestDiagnostics'] = relatedTestDiagnostics;
+            data['relatedTestDiagnostic'] = relatedTestDiagnostic;
+          }
           if (readOutcome(finalizerResult.terminalEvent) === 'branch-complete') {
             data['merged'] = finalizerResult.merged;
             data['branchDeleted'] = finalizerResult.branchDeleted;
@@ -2290,7 +2491,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           finalizerTerminal = finalizerDisposition === null
             ? finalizerResult.terminalEvent
             : withTerminalDisposition(finalizerResult.terminalEvent, finalizerDisposition, runSandbox, branch, baseBranch);
-          return { kind: 'finalized', outcome: readOutcome(finalizerResult.terminalEvent) };
+          return {
+            kind: 'finalized',
+            outcome: readOutcome(finalizerResult.terminalEvent),
+            ...(relatedTestDiagnostics.length > 0
+              ? { relatedTestDiagnostics }
+              : {}),
+          };
         },
       });
 
@@ -2737,6 +2944,14 @@ function buildOrchestratedSummary(args: {
       !Array.isArray(data['contextFailure'])
     ? data['contextFailure'] as ContextCloseoutFailure
     : undefined;
+  const relatedTestDiagnostics = isRelatedTestTaskDiagnosticList(
+    data['relatedTestDiagnostics'],
+  )
+    ? data['relatedTestDiagnostics']
+    : undefined;
+  const relatedTestDiagnostic = isRelatedTestDiagnostic(data['relatedTestDiagnostic'])
+    ? data['relatedTestDiagnostic']
+    : relatedTestDiagnostics?.at(-1)?.diagnostic;
   const cancelReason = trigger.kind === 'cancellation' ? trigger.cancellationSource : data['cancelReason'];
   const exit: ExitFacts = {
     exitCode:
@@ -2781,6 +2996,8 @@ function buildOrchestratedSummary(args: {
     trigger,
     ...(disposition !== undefined ? { disposition } : {}),
     ...(contextFailure !== undefined ? { contextFailure } : {}),
+    ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+    ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
   };
 }
 
@@ -2913,14 +3130,28 @@ function mapResultToTerminal(
 ): MutationEvent {
   const base = { projectSlug, product, dispatchMode: 'orchestrated' as const };
   if (result.kind === 'finalized') {
-    return term(mutationId, 'completed', { ...base, outcome: result.outcome, baseBranch });
+    const relatedTestDiagnostic = result.relatedTestDiagnostics?.at(-1)?.diagnostic;
+    return term(mutationId, 'completed', {
+      ...base,
+      outcome: result.outcome,
+      baseBranch,
+      ...(result.relatedTestDiagnostics !== undefined
+        ? { relatedTestDiagnostics: result.relatedTestDiagnostics }
+        : {}),
+      ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+    });
   }
   if (result.kind === 'held') {
     const executionFailure = result.executionFailure;
     const contextFailure = result.contextFailure;
+    const relatedTestDiagnostic = result.relatedTestDiagnostic;
     return term(
       mutationId,
-      executionFailure === undefined && contextFailure === undefined ? 'completed' : 'failed',
+      executionFailure === undefined &&
+          contextFailure === undefined &&
+          relatedTestDiagnostic === undefined
+        ? 'completed'
+        : 'failed',
       {
       ...base,
       held: true,
@@ -2935,6 +3166,7 @@ function mapResultToTerminal(
         executionFailure,
       } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
+      ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
     });
   }
   if (result.kind === 'cancelled') {
@@ -2974,12 +3206,18 @@ function mapResultToTerminal(
       baseBranch,
       preserveBranch: result.parked.preserveBranch,
       preserveWorktree: result.parked.preserveWorktree,
+      ...(result.relatedTestDiagnostic !== undefined
+        ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
+        : {}),
     });
   }
   // blocked
   return term(mutationId, 'failed', {
     ...base,
     reason: scrubPathsInText(`orchestration blocked on "${result.task.text}": ${result.reason}`),
+    ...(result.relatedTestDiagnostic !== undefined
+      ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
+      : {}),
   });
 }
 

@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
@@ -35,6 +35,12 @@ import {
   type GateRuntimeIO,
   type ValidationCommandResult,
 } from './work-run-gate-runtime.js';
+import { diagnoseRelatedTestResult } from './related-test-diagnostic.js';
+import {
+  RELATED_TEST_ARGUMENT_MAX_CHARS,
+  RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS,
+  RELATED_TEST_SELECTED_PATHS_MAX,
+} from '../intent/related-test-diagnostic.js';
 
 let repoPath: string;
 let integrationWorktree: string;
@@ -42,6 +48,23 @@ let tmpRoot: string;
 const BASE = 'main';
 const BRANCH = 'rune-work/feature';
 const TRACKED_FILE = 'app.txt';
+
+function fakeNpxWritingReport(name: string, reportExpression: string): string {
+  const executable = join(tmpRoot, name, 'npx');
+  mkdirSync(join(tmpRoot, name), { recursive: true });
+  writeFileSync(executable, [
+    `#!${process.execPath}`,
+    "const fs=require('node:fs');",
+    "const arg=process.argv.find((value)=>value.startsWith('--outputFile='));",
+    "if(!arg)throw new Error('missing private report path');",
+    `const report=${reportExpression};`,
+    "fs.writeFileSync(arg.slice('--outputFile='.length),typeof report==='string'?report:JSON.stringify(report));",
+    "process.exit(1);",
+    '',
+  ].join('\n'));
+  chmodSync(executable, 0o755);
+  return executable;
+}
 
 /** Run a git subcommand synchronously in `cwd`, returning trimmed stdout. */
 function git(cwd: string, ...args: string[]): string {
@@ -322,6 +345,75 @@ describe('runValidationCommands', () => {
     await expect(taskChangesRequireFullValidation(tmpRoot, ['src/feature.ts'], cleanGit)).resolves.toBe(false);
   });
 
+  it.each([
+    {
+      label: 'path-count limit',
+      paths: Array.from(
+        { length: RELATED_TEST_SELECTED_PATHS_MAX + 1 },
+        (_, index) => `src/${index}.ts`,
+      ),
+    },
+    {
+      label: 'per-path length limit',
+      paths: [`src/${'x'.repeat(RELATED_TEST_ARGUMENT_MAX_CHARS)}.ts`],
+    },
+    {
+      label: 'selection total-length limit',
+      paths: Array.from(
+        {
+          length:
+            Math.floor(
+              RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS /
+                RELATED_TEST_ARGUMENT_MAX_CHARS,
+            ) + 1,
+        },
+        (_, index) =>
+          `${String(index).padStart(4, '0')}${'x'.repeat(
+            RELATED_TEST_ARGUMENT_MAX_CHARS - 4,
+          )}`,
+      ),
+    },
+  ])('routes selections beyond the durable $label to full validation', async ({
+    paths,
+  }) => {
+    const cleanGit = vi.fn(async () => ({ stdout: '', stderr: '' }));
+
+    await expect(
+      taskChangesRequireFullValidation(tmpRoot, paths, cleanGit),
+    ).resolves.toBe(true);
+  });
+
+  it('accounts for fixed Vitest argv overhead before admitting a path-total boundary', async () => {
+    const paths = Array.from(
+      {
+        length:
+          RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS /
+          RELATED_TEST_ARGUMENT_MAX_CHARS,
+      },
+      (_, index) =>
+        `${String(index).padStart(4, '0')}${'x'.repeat(
+          RELATED_TEST_ARGUMENT_MAX_CHARS - 4,
+        )}`,
+    );
+    expect(paths.reduce((total, path) => total + path.length, 0))
+      .toBe(RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS);
+    const cleanGit = vi.fn(async () => ({ stdout: '', stderr: '' }));
+
+    await expect(
+      taskChangesRequireFullValidation(tmpRoot, paths, cleanGit),
+    ).resolves.toBe(true);
+  });
+
+  it('accounts for the leading-dash safety prefix before admitting an item boundary', async () => {
+    const path = `-${'x'.repeat(RELATED_TEST_ARGUMENT_MAX_CHARS - 1)}`;
+    expect(path.length).toBe(RELATED_TEST_ARGUMENT_MAX_CHARS);
+    const cleanGit = vi.fn(async () => ({ stdout: '', stderr: '' }));
+
+    await expect(
+      taskChangesRequireFullValidation(tmpRoot, [path], cleanGit),
+    ).resolves.toBe(true);
+  });
+
   it('passes unusual path arguments literally through the argv-safe runner', async () => {
     const marker = 'odd name;$(touch SHOULD_NOT_EXIST)';
     const result = await runValidationCommandArgv(
@@ -436,6 +528,165 @@ describe('runValidationCommands', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('injects the private compatible-mode marker only for fallback while retaining credential stripping', async () => {
+    vi.stubEnv('TELEGRAM_BOT_TOKEN', 'parent-secret-must-not-cross');
+    try {
+      const inspect = [
+        'console.error(JSON.stringify({',
+        '  marker: process.env.RUNE_INTERNAL_VALIDATION_COMPATIBLE_MODE,',
+        '  token: process.env.TELEGRAM_BOT_TOKEN,',
+        '}));',
+        'process.exit(1);',
+      ].join('');
+      const ordinary = await runValidationCommandArgv(
+        [process.execPath, '-e', inspect],
+        tmpRoot,
+        5_000,
+      );
+      const fallback = await runValidationCommandArgv(
+        [process.execPath, '-e', inspect],
+        tmpRoot,
+        5_000,
+        undefined,
+        { compatibleFallback: true },
+      );
+
+      expect(ordinary.outputTail).toContain('{}');
+      expect(ordinary.outputTail).not.toContain('related-fallback-v1');
+      expect(fallback.outputTail).toContain('"marker":"related-fallback-v1"');
+      expect(fallback.outputTail).not.toContain('parent-secret-must-not-cross');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('admits structured failures only from the private Vitest JSON report', async () => {
+    const report = {
+      testResults: [{
+        name: join(tmpRoot, 'src', 'server.test.ts'),
+        status: 'failed',
+        assertionResults: [{
+          fullName: 'server starts a loopback fixture',
+          status: 'failed',
+          failureMessages: [
+            'Error: listen EPERM: operation not permitted 127.0.0.1:43127',
+          ],
+        }],
+      }],
+    };
+    const fakeNpx = fakeNpxWritingReport('structured-report', JSON.stringify(report));
+
+    const result = await runValidationCommandArgv(
+      [fakeNpx, 'vitest', 'related', '--run', 'src/server.ts'],
+      tmpRoot,
+      5_000,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      timedOut: false,
+      structuredErrorsTotal: 1,
+      structuredErrorsComplete: true,
+      structuredErrors: [{
+        source: 'vitest-json',
+        scope: 'assertion',
+        file: 'src/server.test.ts',
+        testName: 'server starts a loopback fixture',
+        message: 'Error: listen EPERM: operation not permitted 127.0.0.1:43127',
+      }],
+    });
+    expect(result.structuredErrors?.map((error) => error.message).join('\n'))
+      .not.toContain('arbitrary console assertion text');
+  });
+
+  it.each([
+    {
+      label: 'oversized',
+      reportExpression: `({
+        testResults:[{
+          name:'/validation-worktree/src/oversized.test.ts',
+          status:'failed',
+          message:'x'.repeat(8*1024*1024),
+          assertionResults:[],
+        }],
+      })`,
+    },
+    {
+      label: 'malformed',
+      reportExpression: JSON.stringify('{not-json'),
+    },
+  ])('omits structured evidence for a $label Vitest report so classification fails closed', async ({
+    label,
+    reportExpression,
+  }) => {
+    const fakeNpx = fakeNpxWritingReport(`${label}-report`, reportExpression);
+    const argv = [fakeNpx, 'vitest', 'related', '--run', 'src/feature.ts'];
+    const result = await runValidationCommandArgv(argv, tmpRoot, 5_000);
+
+    expect(result.structuredErrors).toBeUndefined();
+    expect(result.structuredErrorsTotal).toBeUndefined();
+    expect(result.structuredErrorsComplete).toBeUndefined();
+    expect(diagnoseRelatedTestResult({
+      selectedPaths: ['src/feature.ts'],
+      argv,
+      validationCwd: '.',
+      result,
+    }).state).toBe('related-test-failure');
+  });
+
+  it('bounds retained Vitest errors and records total/truncation metadata', async () => {
+    const assertionCount = 1_000;
+    const fakeNpx = fakeNpxWritingReport('many-errors-report', `({
+      testResults:[{
+        name:${JSON.stringify(join(tmpRoot, 'src', 'many.test.ts'))},
+        status:'failed',
+        assertionResults:Array.from({length:${assertionCount}},(_,index)=>({
+          fullName:'failure '+index,
+          status:'failed',
+          failureMessages:['AssertionError: expected '+index+' to pass'],
+        })),
+      }],
+    })`);
+    const result = await runValidationCommandArgv(
+      [fakeNpx, 'vitest', 'related', '--run', 'src/many.ts'],
+      tmpRoot,
+      5_000,
+    );
+
+    expect(result.structuredErrorsTotal).toBe(assertionCount);
+    expect(result.structuredErrorsComplete).toBe(false);
+    expect(result.structuredErrors?.length).toBeGreaterThan(0);
+    expect(result.structuredErrors!.length).toBeLessThan(assertionCount);
+  });
+
+  it('bounds structured error fields and marks the retained report incomplete', async () => {
+    const long = 'z'.repeat(20_000);
+    const fakeNpx = fakeNpxWritingReport('long-fields-report', `({
+      testResults:[{
+        name:${JSON.stringify(join(tmpRoot, long + '.test.ts'))},
+        status:'failed',
+        assertionResults:[{
+          fullName:${JSON.stringify(long)},
+          status:'failed',
+          failureMessages:[${JSON.stringify(long)}],
+        }],
+      }],
+    })`);
+    const result = await runValidationCommandArgv(
+      [fakeNpx, 'vitest', 'related', '--run', 'src/long.ts'],
+      tmpRoot,
+      5_000,
+    );
+    const error = result.structuredErrors?.[0];
+
+    expect(result.structuredErrorsTotal).toBe(1);
+    expect(result.structuredErrorsComplete).toBe(false);
+    expect(error).toBeDefined();
+    expect(error!.file.length).toBeLessThan(long.length);
+    expect(error!.testName?.length).toBeLessThan(long.length);
+    expect(error!.message.length).toBeLessThan(long.length);
   });
 
   it('adds the Node runtime bin dir to the validation child PATH even when the inherited PATH omits it (launchd sparse-PATH fix)', async () => {

@@ -456,9 +456,23 @@ function contextFailureWipSha(run) {
     : '';
 }
 
+function relatedTestStatus(run) {
+  const aggregate = Array.isArray(run.relatedTestDiagnostics)
+    ? run.relatedTestDiagnostics
+    : [];
+  const state = run.relatedTestDiagnostic?.state ??
+    aggregate[aggregate.length - 1]?.diagnostic?.state;
+  if (state === 'related-fallback-passed') return 'Related-test compatible confirmation passed';
+  if (state === 'related-fallback-failed') return 'Operational hold: related-test validation-host conflict';
+  if (state === 'related-validation-host-conflict') return 'Related-test validation-host conflict';
+  if (state === 'related-test-failure') return 'Related-test failure';
+  return '';
+}
+
 function renderRuns(view, liveRuns = {}) {
-  const history = list(view.runs).map(run =>
-    `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
+  const history = list(view.runs).map((run) => {
+    const relatedStatus = relatedTestStatus(run);
+    return `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
       `<div class="deep-row-head">` +
         `<strong>${escHtml(run.runId)}</strong>` +
         `<span>${escHtml(run.outcome)}</span>` +
@@ -489,9 +503,14 @@ function renderRuns(view, liveRuns = {}) {
               : '') +
           `</div>`
         : '') +
+      (relatedStatus
+        ? `<div class="deep-run-meta deep-run-related-validation">` +
+            `<span>${escHtml(relatedStatus)}</span>` +
+          `</div>`
+        : '') +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +
-    `</article>`
-  ).join('');
+    `</article>`;
+  }).join('');
   return `<section class="deep-panel deep-panel--runs" data-surface="runs">` +
     `<div class="deep-panel-head"><h3>Runs</h3><span>${list(view.runs).length}</span></div>` +
     renderActiveRun(view.activeRun, liveRuns) +

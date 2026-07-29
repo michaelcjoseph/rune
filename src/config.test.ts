@@ -30,6 +30,18 @@ describe('config', () => {
     expect(() => assertOperatorConfig()).toThrow('Missing required env var: TELEGRAM_USER_ID');
   });
 
+  it('rejects the private compatible-validation marker in an operator environment', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_INTERNAL_VALIDATION_COMPATIBLE_MODE'] = 'related-fallback-v1';
+    const { assertOperatorConfig } = await import('./config.js');
+
+    expect(() => assertOperatorConfig()).toThrow(
+      /RUNE_INTERNAL_VALIDATION_COMPATIBLE_MODE.*reserved|reserved.*RUNE_INTERNAL_VALIDATION_COMPATIBLE_MODE/i,
+    );
+  });
+
   it('loads the product-chat subsystem without placeholder Telegram credentials', async () => {
     delete process.env['TELEGRAM_BOT_TOKEN'];
     delete process.env['TELEGRAM_USER_ID'];
