@@ -75,6 +75,7 @@ function deps(roleModels: TeamRoleModels) {
     sandbox,
     productsConfigPath: '/nonexistent/products.json',
     models: roleModels,
+    taskBaseTree: '1111111111111111111111111111111111111111',
   });
 }
 

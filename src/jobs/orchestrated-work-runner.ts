@@ -182,8 +182,12 @@ import {
   validateTaskValidationAdmission,
 } from './task-validation.js';
 import {
+  captureCleanTaskBaseTree,
+  captureCanonicalChangedPaths,
   captureCanonicalReviewState,
   defaultRunCanonicalGit,
+  treeForCommit,
+  verifyTaskBaseTree,
 } from './canonical-git.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
@@ -277,6 +281,7 @@ export interface OrchestratedRecoveryPreflightDeps {
   readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
   readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
   readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  writeRunCursor?: (cursor: OrchestrationRunCursor) => Promise<void>;
   worktreeExists: (path: string) => boolean;
   runGit: GitRunner;
   runCanonicalGit?: GitRunner;
@@ -319,6 +324,8 @@ function defaultRecoveryPreflightDeps(): OrchestratedRecoveryPreflightDeps {
     readRunCursor: async (runId) => readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId),
     readTaskRunRecords: async (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
     readTasksMd: readTasksMdForRecoveredCursor,
+    writeRunCursor: async (cursor) =>
+      writeOrchestratedRunCursor(config.WORK_RUNS_DIR, cursor.runId, cursor),
     worktreeExists: existsSync,
     runGit: defaultRunGit,
     resolveProduct: (product) => {
@@ -411,7 +418,69 @@ export async function preflightOrchestratedRecovery(
     if (reconstruction.drift) {
       return { kind: 'not-resumable', reason: 'completed task records disagree with tasks.md' };
     }
-    return { kind: 'recoverable', cursor, reconstruction };
+    let recoveredCursor = cursor;
+    const currentTaskId = cursor.cursor.currentTaskId;
+    if (currentTaskId === null) {
+      if (cursor.taskBase !== undefined) {
+        return {
+          kind: 'not-resumable',
+          reason: 'between-task cursor unexpectedly retains an in-progress task base',
+        };
+      }
+    } else {
+      if (reconstruction.nextTask?.id !== currentTaskId) {
+        return {
+          kind: 'not-resumable',
+          reason: 'in-progress cursor task disagrees with reconstructed next task',
+        };
+      }
+      const canonicalGit = deps.runCanonicalGit ?? deps.runGit;
+      let treeOid: string;
+      if (cursor.taskBase !== undefined) {
+        if (cursor.taskBase.taskId !== currentTaskId) {
+          return {
+            kind: 'not-resumable',
+            reason: 'durable task base belongs to a different task',
+          };
+        }
+        treeOid = await verifyTaskBaseTree(
+          canonicalGit,
+          expectedPath,
+          cursor.taskBase.treeOid,
+        );
+      } else {
+        const preceding = [...records]
+          .reverse()
+          .find((record) =>
+            record.outcome === 'ready-for-closeout' &&
+            record.commitSha !== null
+          );
+        if (preceding?.commitSha === undefined || preceding.commitSha === null) {
+          return {
+            kind: 'not-resumable',
+            reason:
+              'legacy interrupted-task cursor has no authoritative preceding closeout commit',
+          };
+        }
+        if (deps.writeRunCursor === undefined) {
+          return {
+            kind: 'not-resumable',
+            reason: 'derived task base could not be persisted',
+          };
+        }
+        treeOid = await treeForCommit(
+          canonicalGit,
+          expectedPath,
+          preceding.commitSha,
+        );
+        recoveredCursor = {
+          ...cursor,
+          taskBase: { taskId: currentTaskId, treeOid },
+        };
+        await deps.writeRunCursor(recoveredCursor);
+      }
+    }
+    return { kind: 'recoverable', cursor: recoveredCursor, reconstruction };
   } catch {
     return { kind: 'not-resumable', reason: 'project tasks and durable task records could not be reconstructed' };
   }
@@ -856,6 +925,7 @@ export interface OrchestratedRuntimeDeps {
   runOrchestration: (deps: OrchestrationDeps) => Promise<OrchestrationResult>;
   runGit: GitRunner;
   runCanonicalGit: GitRunner;
+  captureTaskBaseTree: (runGit: GitRunner, cwd: string) => Promise<string>;
   verifyWorktree: typeof verifyWorktreeProvisioning;
   /** Isolated teardown status seam; avoids coupling classification Git probes to cleanup. */
   inspectWorktreeStatus: (worktreePath: string) => Promise<string>;
@@ -901,6 +971,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
     runCanonicalGit: defaultRunCanonicalGit,
+    captureTaskBaseTree: captureCleanTaskBaseTree,
     verifyWorktree: verifyWorktreeProvisioning,
     inspectWorktreeStatus: async (worktreePath) =>
       (await defaultRunGit(['status', '--porcelain'], { cwd: worktreePath })).stdout,
@@ -977,6 +1048,7 @@ function buildOrchestrationDeps(args: {
   workRunsDir: string;
   runGit: GitRunner;
   runCanonicalGit?: GitRunner;
+  captureTaskBaseTree: (runGit: GitRunner, cwd: string) => Promise<string>;
   runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
   runValidationCommands: typeof defaultRunValidationCommands;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
@@ -993,6 +1065,7 @@ function buildOrchestrationDeps(args: {
   const tasksPath = join(projectDir, 'tasks.md');
   const contextPath = join(projectDir, 'context.md');
   const cwd = sandbox.worktree;
+  const canonicalGit = args.runCanonicalGit ?? runGit;
   const relativeContextFile = relative(cwd, contextPath).replaceAll('\\', '/');
   const contextFile = relativeContextFile === '..' ||
       relativeContextFile.startsWith('../') ||
@@ -1079,6 +1152,30 @@ function buildOrchestrationDeps(args: {
     readTasksMd: async () => readManagedWorktreeFile(cwd, tasksPath, false),
     readContextMd: async () => readManagedWorktreeFile(cwd, contextPath, true),
     readSpec: async () => readManagedWorktreeFile(cwd, specPath, false),
+    captureTaskBase: async (task) => {
+      const durable = sandbox.resumed === true
+        ? readOrchestratedRunCursor(
+            args.workRunsDir,
+            descriptor.id,
+          )?.taskBase
+        : undefined;
+      if (durable !== undefined) {
+        if (durable.taskId !== task.id) {
+          throw new Error('durable task base belongs to a different task');
+        }
+        const treeOid = await verifyTaskBaseTree(
+          canonicalGit,
+          sandbox.worktree,
+          durable.treeOid,
+        );
+        return { taskId: task.id, treeOid };
+      }
+      const treeOid = await args.captureTaskBaseTree(
+        canonicalGit,
+        sandbox.worktree,
+      );
+      return { taskId: task.id, treeOid };
+    },
 
     // Phase 8: the LIVE per-task role-spawn binding — runTeamTaskWorkflow over
     // the production TeamTaskDeps (execution-agent artifact sessions, charter
@@ -1149,7 +1246,13 @@ function buildOrchestrationDeps(args: {
       if (task.validationPolicy === 'reviewed-no-validation') {
         validation = { ok: true };
       } else if (args.closeoutValidationStrategy === 'vitest-related') {
-        const changedPaths = await collectTaskChangedPaths(sandbox.worktree, runGit);
+        const changedPaths = evidence.taskBaseTree !== undefined
+          ? await captureCanonicalChangedPaths(
+              canonicalGit,
+              sandbox.worktree,
+              evidence.taskBaseTree,
+            )
+          : await collectTaskChangedPaths(sandbox.worktree, runGit);
         if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
           validation = await args.runValidationCommands(
             args.validationCommands,
@@ -1209,9 +1312,40 @@ function buildOrchestrationDeps(args: {
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
           };
         }
-        const canonicalGit = args.runCanonicalGit ?? runGit;
-        const canonical = await captureCanonicalReviewState(canonicalGit, sandbox.worktree);
-        if (canonical.hash === approvedHash) {
+        if (
+          evidence.taskBaseTree === undefined ||
+          evidence.currentReviewTree === undefined ||
+          evidence.fullTaskReviewHash === undefined
+        ) {
+          const reviewSurfaceFailure: ReviewSurfaceFailure = {
+            kind: 'candidate-mismatch',
+            canonicalHash: 'missing',
+            candidateHash: approvedHash,
+            changedPaths: [],
+          };
+          return {
+            ok: false,
+            failure: {
+              command: 'full-task review-surface verification',
+              exitCode: null,
+              timedOut: false,
+              outputTail: 'canonical review tree identities are missing',
+              validationCwd: validationCwdLabel,
+              reviewSurfaceFailure,
+              ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+            },
+          };
+        }
+        const canonical = await captureCanonicalReviewState(
+          canonicalGit,
+          sandbox.worktree,
+          evidence.taskBaseTree,
+        );
+        if (
+          canonical.hash === evidence.fullTaskReviewHash &&
+          canonical.hash === approvedHash &&
+          canonical.currentTree === evidence.currentReviewTree
+        ) {
           return {
             ok: true,
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
@@ -1221,6 +1355,9 @@ function buildOrchestrationDeps(args: {
           kind: 'candidate-mismatch',
           canonicalHash: canonical.hash,
           candidateHash: approvedHash,
+          taskBaseTree: canonical.baseTree,
+          canonicalTree: canonical.currentTree,
+          candidateTree: evidence.currentReviewTree,
           changedPaths: canonical.changedPaths,
         };
         appendDurableValidationFailure(
@@ -1232,7 +1369,7 @@ function buildOrchestrationDeps(args: {
         return {
           ok: false,
           failure: {
-            command: 'git diff HEAD review-surface verification',
+            command: 'full-task review-surface verification',
             exitCode: null,
             timedOut: false,
             outputTail: reviewSurfaceFailure.changedPaths.join('\n').slice(-8_000),
@@ -2188,6 +2325,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         runCanonicalGit: deps.runCanonicalGit,
+        captureTaskBaseTree: deps.captureTaskBaseTree,
         runValidationCommandArgv: deps.runValidationCommandArgv,
         runValidationCommands: deps.runValidationCommands,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,

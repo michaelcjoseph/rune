@@ -51,6 +51,12 @@ export interface TaskRunRecord {
   coderSelfReviews?: CoderSelfReviewRecord[];
   /** Related-test fallback evidence. Optional for historical JSONL. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Stable pre-mutation task tree. Optional for historical JSONL. */
+  taskBaseTree?: string;
+  /** Exact tree judged by QA and downstream reviewers. */
+  currentReviewTree?: string;
+  /** Hash of the full-task diff between the two review trees. */
+  fullTaskReviewHash?: string;
   /** What happened to `context.md` on this attempt. */
   contextOutcome: TaskContextOutcome;
   /** Gate decisions the orchestrator made. */
@@ -96,6 +102,15 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }
+      : {}),
+    ...(input.taskBaseTree !== undefined
+      ? { taskBaseTree: input.taskBaseTree }
+      : {}),
+    ...(input.currentReviewTree !== undefined
+      ? { currentReviewTree: input.currentReviewTree }
+      : {}),
+    ...(input.fullTaskReviewHash !== undefined
+      ? { fullTaskReviewHash: input.fullTaskReviewHash }
       : {}),
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },

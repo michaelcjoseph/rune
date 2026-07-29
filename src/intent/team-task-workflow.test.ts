@@ -81,6 +81,8 @@ function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
       reviewState: {
         diff: artifact.diff,
         hash: 'canonical-hash',
+        baseTree: '1111111111111111111111111111111111111111',
+        currentTree: '2222222222222222222222222222222222222222',
         changedPaths: ['x'],
       },
     }),
@@ -206,6 +208,28 @@ describe('team-task-workflow — structured role cancellation', () => {
       expect(evidence.blockedReason).toBeUndefined();
     },
   );
+
+  it('retains the full-task base/current tree and hash evidence when a downstream role is cancelled after self-review', async () => {
+    // The reviewer runs AFTER coder self-review has already captured the
+    // canonical review state — a cancellation here must not discard that
+    // already-durable task-base/current-tree/hash evidence.
+    const deps = makeDeps({
+      reviewer: async () => {
+        throw new RoleCancellationError('reviewer', CANCELLATION);
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'cancelled',
+      cancellation: { role: 'reviewer', ...CANCELLATION },
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'canonical-hash',
+      reviewSurfaceHash: 'canonical-hash',
+    });
+  });
 });
 
 describe('team-task-workflow — QA-first', () => {
@@ -1765,6 +1789,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
                 ? 'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW'
                 : 'diff --git a/app.ts b/app.ts\nFIXED-IN-ROUND-TWO',
               hash: `hash-${round}`,
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['app.ts'],
             },
           };
@@ -1819,6 +1845,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
         outcome: 'revised',
         notes: 'Fixed the missing guard.',
         canonicalHash: 'hash-1',
+        taskBaseTree: '1111111111111111111111111111111111111111',
+        currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
       },
       {
@@ -1826,6 +1854,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
         outcome: 'confirmed',
         notes: 'Retry is internally consistent.',
         canonicalHash: 'hash-2',
+        taskBaseTree: '1111111111111111111111111111111111111111',
+        currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
       },
     ]);
@@ -1880,6 +1910,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
             reviewState: {
               diff: 'diff after self-review with behavior-preserving guard',
               hash: 'revised-hash',
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['src/guard.ts'],
             },
           };
@@ -1958,6 +1990,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
             reviewState: {
               diff: artifact.diff,
               hash: 'confirmed-hash',
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['src/coder.ts'],
             },
           };
@@ -1992,6 +2026,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
       outcome: 'confirmed',
       notes: 'No changes were needed.',
       canonicalHash: 'confirmed-hash',
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
       changedPaths: ['src/coder.ts'],
     }]);
     expect(revalidateCalled).toBe(true);
@@ -2007,6 +2043,29 @@ describe('team-task-workflow — worktree coder self-review', () => {
       'tech-lead-diff',
       'designer',
     ]);
+  });
+
+  it('retains canonical tree/hash evidence when QA revalidation rejects fail-closed', async () => {
+    const evidence = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        qaRevalidateDiff: async () => ({
+          approved: false,
+          notes: 'QA verdict was malformed and cannot approve the artifact.',
+        }),
+      }),
+    );
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      blockedReason: expect.stringContaining('malformed'),
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'canonical-hash',
+      reviewSurfaceHash: 'canonical-hash',
+    });
+    expect(JSON.stringify(evidence)).not.toContain('diff --git');
   });
 
   // A `revised` self-review edits the worktree AFTER the coder handed off, so
@@ -2037,6 +2096,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
           reviewState: {
             diff: 'diff after self-review',
             hash: 'revised-hash',
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: '2222222222222222222222222222222222222222',
             changedPaths: ['src/coder.ts'],
           },
         }),
@@ -2086,6 +2147,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
           reviewState: {
             diff: artifact.diff,
             hash: 'confirmed-hash',
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: '2222222222222222222222222222222222222222',
             changedPaths: ['src/coder.ts'],
           },
         }),
@@ -2152,6 +2215,7 @@ describe('team-task-workflow — worktree coder self-review', () => {
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
+    const roleStates: unknown[] = [];
     const deps = makeDeps({
       coder: async () => ({ diff: 'model-returned candidate must be ignored', handoffNotes: [] }),
       coderSelfReview: async () => ({
@@ -2160,23 +2224,29 @@ describe('team-task-workflow — worktree coder self-review', () => {
         reviewState: {
           diff: completeDiff,
           hash: 'complete-hash',
+          baseTree: '1111111111111111111111111111111111111111',
+          currentTree: '2222222222222222222222222222222222222222',
           changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
         },
       }),
-      qaRevalidateDiff: async ({ diff }) => {
+      qaRevalidateDiff: async ({ diff, reviewState, artifactPass }) => {
         qaDiffs.push(diff);
+        roleStates.push({ role: 'qa', reviewState, artifactPass });
         return { approved: true };
       },
-      reviewer: async ({ diff }) => {
+      reviewer: async ({ diff, reviewState }) => {
         reviewerDiffs.push(diff);
+        roleStates.push({ role: 'reviewer', reviewState });
         return cleanVerdict;
       },
-      techLeadReviewDiff: async ({ diff }) => {
+      techLeadReviewDiff: async ({ diff, reviewState }) => {
         techLeadDiffs.push(diff);
+        roleStates.push({ role: 'tech-lead', reviewState });
         return { pass: true };
       },
-      designer: async ({ diff }) => {
+      designer: async ({ diff, reviewState }) => {
         designerDiffs.push(diff);
+        roleStates.push({ role: 'designer', reviewState });
         return { pass: true };
       },
     });
@@ -2185,6 +2255,11 @@ describe('team-task-workflow — worktree coder self-review', () => {
 
     expect(evidence.outcome).toBe('ready-for-closeout');
     expect(evidence.reviewSurfaceHash).toBe('complete-hash');
+    expect(evidence).toMatchObject({
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'complete-hash',
+    });
     for (const [role, diffs] of [
       ['qa', qaDiffs],
       ['reviewer', reviewerDiffs],
@@ -2195,7 +2270,87 @@ describe('team-task-workflow — worktree coder self-review', () => {
       expect(diffs[0]).toContain('src/tracked.ts');
       expect(diffs[0]).toContain('src/new-untracked.ts');
     }
+    expect(roleStates).toEqual([
+      {
+        role: 'qa',
+        artifactPass: 'first-pass',
+        reviewState: {
+          hash: 'complete-hash',
+          baseTree: '1111111111111111111111111111111111111111',
+          currentTree: '2222222222222222222222222222222222222222',
+          changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
+        },
+      },
+      expect.objectContaining({
+        role: 'reviewer',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+      expect.objectContaining({
+        role: 'tech-lead',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+      expect.objectContaining({
+        role: 'designer',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+    ]);
     expect(JSON.stringify(evidence)).not.toContain('model-returned candidate');
+  });
+
+  it('keeps an earlier-round helper in the complete artifact shown on a later coder retry', async () => {
+    const secondRoundDiff = [
+      'diff --git a/src/helper.ts b/src/helper.ts',
+      'new file mode 100644',
+      '+export const durableHelper = true;',
+      'diff --git a/src/consumer.ts b/src/consumer.ts',
+      '+import { durableHelper } from "./helper.js";',
+    ].join('\n');
+    const qaArtifacts: Array<{ diff: string; pass?: string }> = [];
+    let round = 0;
+    const deps = makeDeps({
+      coderSelfReview: async () => {
+        round += 1;
+        return {
+          outcome: 'confirmed',
+          notes: `Round ${round} is canonical.`,
+          reviewState: {
+            diff: round === 1
+              ? 'diff --git a/src/helper.ts b/src/helper.ts\n+export const durableHelper = true;'
+              : secondRoundDiff,
+            hash: `hash-${round}`,
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: round === 1
+              ? '2222222222222222222222222222222222222222'
+              : '3333333333333333333333333333333333333333',
+            changedPaths: round === 1
+              ? ['src/helper.ts']
+              : ['src/helper.ts', 'src/consumer.ts'],
+          },
+        };
+      },
+      qaRevalidateDiff: async ({ diff, artifactPass }) => {
+        qaArtifacts.push({ diff, pass: artifactPass });
+        return { approved: true };
+      },
+      reviewer: async () =>
+        round === 1
+          ? { outcome: 'fail', findings: [], notes: 'wire the helper into the consumer' }
+          : cleanVerdict,
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(qaArtifacts).toHaveLength(2);
+    expect(qaArtifacts[1]).toMatchObject({ pass: 'coder-retry' });
+    expect(qaArtifacts[1]?.diff).toContain('durableHelper');
+    expect(qaArtifacts[1]?.diff).toContain('src/helper.ts');
+    expect(evidence).toMatchObject({
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '3333333333333333333333333333333333333333',
+      fullTaskReviewHash: 'hash-2',
+    });
   });
 });
 

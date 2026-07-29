@@ -226,6 +226,45 @@ describe('product-scoped work-run diagnostics', () => {
     expect(serialized).not.toContain('operatorWorktreePath');
   });
 
+  it('projects well-formed full-task base/current-tree/hash evidence and drops malformed values', async () => {
+    const deps = makeDeps();
+    deps.readTaskRunRecords.mockReturnValue([
+      taskRecord({
+        taskId: 'valid-evidence',
+        taskBaseTree: '1'.repeat(40),
+        currentReviewTree: '2'.repeat(40),
+        fullTaskReviewHash: 'a'.repeat(64),
+      }),
+      taskRecord({
+        taskId: 'malformed-evidence',
+        taskBaseTree: '/Users/example/workspace/leaked-path' as unknown as string,
+        currentReviewTree: 'not-a-tree-oid' as unknown as string,
+        fullTaskReviewHash: 'short-hash' as unknown as string,
+      }),
+    ]);
+    const service = createWorkRunDiagnostics(deps, 'assay');
+
+    const result = await service.inspectRun({ runId: 'assay-run-1' }) as {
+      taskRecords: Array<Record<string, unknown>>;
+    };
+
+    expect(result.taskRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'valid-evidence',
+        taskBaseTree: '1'.repeat(40),
+        currentReviewTree: '2'.repeat(40),
+        fullTaskReviewHash: 'a'.repeat(64),
+      }),
+      expect.not.objectContaining({
+        taskBaseTree: expect.anything(),
+        currentReviewTree: expect.anything(),
+        fullTaskReviewHash: expect.anything(),
+      }),
+    ]);
+    expect(result.taskRecords[1]).toMatchObject({ taskId: 'malformed-evidence' });
+    expect(JSON.stringify(result)).not.toContain('/Users/example');
+  });
+
   it('returns only active or parked runs for the authorized product with a capped safe log tail', async () => {
     const service = createWorkRunDiagnostics(makeDeps(), 'assay');
     const result = await service.activeRuns() as { runs: Array<Record<string, unknown>> };

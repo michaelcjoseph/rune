@@ -11,6 +11,7 @@ import { scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
+import { isGitObjectId } from '../intent/team-task-workflow.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets, parseStreamJsonLine, streamJsonToDisplay } from './work-run-transcript.js';
 import type { WorkRunSummary, WorkRunSummaryReadResult } from './work-run-store.js';
@@ -211,7 +212,24 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ...(record.relatedTestDiagnostic
       ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
       : {}),
+    ...(isObjectId(record.taskBaseTree)
+      ? { taskBaseTree: record.taskBaseTree }
+      : {}),
+    ...(isObjectId(record.currentReviewTree)
+      ? { currentReviewTree: record.currentReviewTree }
+      : {}),
+    ...(isReviewHash(record.fullTaskReviewHash)
+      ? { fullTaskReviewHash: record.fullTaskReviewHash }
+      : {}),
   };
+}
+
+function isObjectId(value: unknown): value is string {
+  return typeof value === 'string' && isGitObjectId(value);
+}
+
+function isReviewHash(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
 function transcriptResult(source: TranscriptTail, limit: number): {

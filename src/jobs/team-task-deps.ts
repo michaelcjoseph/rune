@@ -64,6 +64,7 @@ import {
   type TaskEvidence,
   type CoderResult,
   type CoderSelfReviewOutcome,
+  type CanonicalReviewState,
   type TeamTaskDeps,
   type TechLeadTestRepairResult,
   type TestRepairRedCheck,
@@ -89,6 +90,7 @@ import {
 } from '../intent/execution-failure.js';
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
+import type { TaskBaseRecord } from '../intent/project-orchestrator.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
@@ -346,20 +348,12 @@ const REVIEWER_INSTRUCTION = [
   'to have grepped, searched, read files, or "verified on disk / on the tree" —',
   'you cannot, and any such claim is a fabrication that invalidates your verdict.',
   '',
-  'The diff is a PARTIAL view: changed hunks only, not the whole repository or',
-  'the whole branch. A symbol, export, import, type, field, or call site that is',
-  'not visible in the diff may still exist elsewhere in the repo, or may already',
-  'have landed in an earlier commit on this branch. When present, the `## Project',
-  'context / tree-state evidence` block below shows what is already on the branch',
-  'before this task diff; treat a deliverable as satisfied when the diff, spec, or',
-  'that tree-state evidence shows it exists. Do NOT raise an objection that',
-  'asserts something is absent or unsatisfied — "exported nowhere", "defined',
-  'nowhere", "never invoked", "field missing", "unwired", "won\'t compile" — when',
-  'that conclusion rests only on its absence from this task diff while the',
-  'provided context/spec/tree-state evidence shows it already exists. If a',
-  'suspected defect cannot be confirmed from the artifacts you were actually',
-  'given, withhold the objection: report it as a non-objection note on a fail or',
-  'pass-with-warnings outcome, never as an objection-class finding.',
+  'The diff is the COMPLETE implementation for this task relative to its durable',
+  'pre-mutation task-base tree. It includes task-owned changes from earlier coder',
+  'rounds and role-created commits even when HEAD advanced. Absence from this',
+  'artifact is therefore a genuine signal that the task did not implement it.',
+  'The diff is not the whole repository: pre-existing code outside this task may',
+  'still satisfy dependencies described by the spec or project context.',
   '',
   'If an open findings ledger is present, review in this order:',
   '1. Regression pass: verify every prior finding by id before looking for new',
@@ -432,14 +426,11 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   'to open or search files. You see ONLY the artifacts in this prompt. Never claim',
   'to have grepped, searched, read files, or verified on disk.',
   '',
-  'The diff is a PARTIAL view: changed hunks only, not the whole repository or',
-  'the whole branch. A task deliverable may already exist on the branch even if',
-  'it is absent from this task diff. Judge completeness against the provided',
-  'task, spec, project context / tree-state evidence, and diff together. Do NOT',
-  'fail or raise a finding solely because a deliverable is missing-from-this-diff',
-  'when the provided context/spec indicates it already exists on the tree. Only',
-  'treat a deliverable as missing when it is absent from both the current diff and',
-  'the provided tree-state/context evidence, or when the diff regresses it.',
+  'The diff is the COMPLETE implementation for this task relative to its durable',
+  'pre-mutation task-base tree. It includes task-owned changes from earlier coder',
+  'rounds and role-created commits even when HEAD advanced. Treat a required',
+  'deliverable as missing when it is absent from this full-task artifact and is',
+  'not pre-existing behavior established by the spec or project context.',
   'For every finding, include `suggestedChange`: the concrete change that would',
   'clear that finding. For a fail outcome without findings, include a verdict-',
   'level `suggestedChange` that tells the coder what to change.',
@@ -518,10 +509,13 @@ const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
 
 const QA_DIFF_REVALIDATION_INSTRUCTION = [
   'You are QA. Re-evaluate the existing test intent against the coder\'s',
-  'self-reviewed diff before downstream code review starts.',
+  'self-reviewed complete task implementation before downstream code review starts.',
   '',
   'Approve only when the existing tests or no-code-test rationale still pin the',
-  'behavior represented by the revised diff. If the self-review changed behavior',
+  'behavior represented by the full-task diff relative to the durable task base.',
+  'The artifact includes every task-owned change even if an earlier coder round',
+  'or role-created commit advanced HEAD. Therefore, absence from this artifact is',
+  'a genuine missing-implementation signal. If the self-review changed behavior',
   'outside the agreed test intent, reject with a concrete note.',
   '',
   'Respond with EXACTLY ONE fenced ```qa-diff-revalidation block containing JSON:',
@@ -844,6 +838,8 @@ export interface BuildTeamTaskDepsArgs {
   sandbox: SandboxSpec;
   productsConfigPath: string;
   models: TeamRoleModels;
+  /** Durable tree captured before QA/coder mutation for this task. */
+  taskBaseTree: string;
   /** The product's `validationCommands` (products.json), rendered into the
    *  coder prompt so the coder self-gates on full-suite green before handback;
    *  closeout re-runs the same commands as the confirming backstop. Optional
@@ -938,6 +934,28 @@ function filesFromDiff(diff: string): string[] {
     files.add(match[1]!);
   }
   return [...files];
+}
+
+/** The one place the full-task artifact header is rendered. Every judgment role
+ * (QA revalidation, reviewer, tech lead, designer) must see byte-identical
+ * base/current/hash identities for a given pass, so they cannot be hand-built
+ * per call site. QA additionally gets a `pass:` line — it is the only role that
+ * distinguishes a first-pass artifact from a retry-derived one. */
+function formatFullTaskReviewArtifact(
+  diff: string,
+  reviewState?: Omit<CanonicalReviewState, 'diff'>,
+  artifactPass?: string,
+): string {
+  return [
+    '## Complete task implementation relative to durable task base',
+    '',
+    ...(artifactPass !== undefined ? [`pass: ${artifactPass}`] : []),
+    `task-base-tree: ${reviewState?.baseTree ?? 'unavailable'}`,
+    `current-review-tree: ${reviewState?.currentTree ?? 'unavailable'}`,
+    `full-task-review-hash: ${reviewState?.hash ?? 'unavailable'}`,
+    '',
+    diff,
+  ].join('\n');
 }
 
 /** Keep-the-end cap on the confirm-red output tail carried into the re-review
@@ -1567,6 +1585,7 @@ export function buildProductionTeamTaskDeps(
         const reviewState = await captureCanonicalReviewState(
           seams.runCanonicalGit,
           cwd,
+          args.taskBaseTree,
         );
         return { ...parsed, reviewState };
       } catch (err) {
@@ -1576,7 +1595,15 @@ export function buildProductionTeamTaskDeps(
       }
     },
 
-    qaRevalidateDiff: async ({ task, qa, diff, spec, context }) => {
+    qaRevalidateDiff: async ({
+      task,
+      qa,
+      diff,
+      spec,
+      context,
+      reviewState,
+      artifactPass,
+    }) => {
       const qaBlock = qa.kind === 'tests-written'
         ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
         : `## QA no-code-test rationale\n\n${qa.rationale}`;
@@ -1587,7 +1614,7 @@ export function buildProductionTeamTaskDeps(
         '',
         qaBlock,
         '',
-        `## Self-reviewed coder diff\n\n${diff}`,
+        formatFullTaskReviewArtifact(diff, reviewState, artifactPass ?? 'first-pass'),
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
       ].join('\n');
@@ -1603,7 +1630,16 @@ export function buildProductionTeamTaskDeps(
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
     // provider identity is baked into `models.reviewer` at construction time
     // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
-    reviewer: async ({ diff, spec, tests, task, context, findingsLedger, coderHandoffNotes }) => {
+    reviewer: async ({
+      diff,
+      spec,
+      tests,
+      task,
+      context,
+      findingsLedger,
+      coderHandoffNotes,
+      reviewState,
+    }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
@@ -1616,7 +1652,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        `## Diff\n\n${diff}`,
+        formatFullTaskReviewArtifact(diff, reviewState),
         '',
         `## Spec\n\n${spec}`,
         '',
@@ -1630,13 +1666,21 @@ export function buildProductionTeamTaskDeps(
       return parseReviewerVerdict(reply);
     },
 
-    techLeadReviewDiff: async ({ task, diff, spec, context, findingsLedger, coderHandoffNotes }) => {
+    techLeadReviewDiff: async ({
+      task,
+      diff,
+      spec,
+      context,
+      findingsLedger,
+      coderHandoffNotes,
+      reviewState,
+    }) => {
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        `## Diff\n\n${diff}`,
+        formatFullTaskReviewArtifact(diff, reviewState),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
@@ -1646,12 +1690,12 @@ export function buildProductionTeamTaskDeps(
       return parseGateVerdict(reply, 'tl-diff-review');
     },
 
-    designer: async ({ task, diff, findingsLedger }) => {
+    designer: async ({ task, diff, findingsLedger, reviewState }) => {
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        `## Diff\n\n${diff}`,
+        formatFullTaskReviewArtifact(diff, reviewState),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body, task.id, 'designer-review');
@@ -1842,7 +1886,13 @@ export function createProductionTaskWorkflowRunner(
   seamOverrides: Partial<TeamTaskSeams> = {},
 ): (
   task: SelectedTask,
-  ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
+  ctx: {
+    handoff: string;
+    contextMd: string;
+    taskBase: TaskBaseRecord;
+    workflowAttempt: number;
+    rejectionFeedback?: GateRejectionFeedback;
+  },
 ) => Promise<TaskEvidence> {
   const seams: TeamTaskSeams = { ...defaultSeams, ...seamOverrides };
   let preflightPassed = false;
@@ -1927,6 +1977,7 @@ export function createProductionTaskWorkflowRunner(
         sandbox: args.sandbox,
         productsConfigPath: args.productsConfigPath,
         models,
+        taskBaseTree: ctx.taskBase.treeOid,
         ...(args.validationCommands !== undefined
           ? { validationCommands: args.validationCommands }
           : {}),
@@ -1955,6 +2006,7 @@ export function createProductionTaskWorkflowRunner(
         spec: ctx.handoff,
         contextMd: ctx.contextMd,
         coderProvider: models.coder.provider,
+        workflowAttempt: ctx.workflowAttempt,
         ...(ctx.rejectionFeedback !== undefined
           ? { rejectionFeedback: ctx.rejectionFeedback }
           : {}),

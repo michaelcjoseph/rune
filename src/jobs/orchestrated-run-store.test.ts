@@ -254,6 +254,37 @@ describe('orchestrated run store', () => {
     await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toEqual(checkpointed);
   });
 
+  it('round-trips a task base while rejecting malformed or cross-task identities', async () => {
+    const taskBase = {
+      taskId: 'persist-records-and-cursor',
+      treeOid: '1111111111111111111111111111111111111111',
+    };
+    const checkpointed = cursor({
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: taskBase.taskId,
+        nextTaskId: taskBase.taskId,
+      },
+      taskBase,
+    });
+    await store.writeOrchestratedRunCursor!(tmpDir, checkpointed.runId, checkpointed);
+    expect(store.readOrchestratedRunCursor!(tmpDir, checkpointed.runId)).toEqual(
+      checkpointed,
+    );
+
+    const cursorPath = join(tmpDir, checkpointed.runId, 'cursor.json');
+    writeFileSync(
+      cursorPath,
+      JSON.stringify({ ...checkpointed, taskBase: { ...taskBase, treeOid: '/Users/private/tree' } }),
+    );
+    expect(store.readOrchestratedRunCursor!(tmpDir, checkpointed.runId)).toBeNull();
+    writeFileSync(
+      cursorPath,
+      JSON.stringify({ ...checkpointed, taskBase: { ...taskBase, taskId: 'other-task' } }),
+    );
+    expect(store.readOrchestratedRunCursor!(tmpDir, checkpointed.runId)).toBeNull();
+  });
+
   it('does not return a cursor unless the on-disk marker is explicitly resumable for that run', async () => {
     expect(typeof store.readOrchestratedRunCursor).toBe('function');
 

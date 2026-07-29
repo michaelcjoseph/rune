@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import type { GitRunner } from './sandbox-runtime.js';
 import {
   CANONICAL_CHANGED_PATHS_MAX,
+  isGitObjectId,
   type CanonicalReviewState,
 } from '../intent/team-task-workflow.js';
 import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
@@ -108,27 +109,151 @@ export function canonicalReviewDiffHash(diff: string): string {
  * without a compiler error. */
 export type { CanonicalReviewState };
 
-/** Stage and capture the one canonical review surface used both before
+/** Re-exported for the same reason as `CanonicalReviewState`: the shape is
+ * declared once beside the workflow contract, and callers of this module need
+ * only this import. */
+export { isGitObjectId };
+
+async function resolveTreeOid(
+  runGit: GitRunner,
+  cwd: string,
+  treeish: string,
+): Promise<string> {
+  if (!isGitObjectId(treeish)) {
+    throw new Error('canonical Git received a malformed tree OID');
+  }
+  const resolved = (
+    await runGit(['rev-parse', '--verify', `${treeish}^{tree}`], { cwd })
+  ).stdout.trim();
+  if (!isGitObjectId(resolved)) {
+    throw new Error('canonical Git could not verify the tree OID');
+  }
+  return resolved;
+}
+
+function requireTreeOid(treeOid: string): string {
+  if (!isGitObjectId(treeOid)) {
+    throw new Error('canonical Git received a malformed tree OID');
+  }
+  return treeOid;
+}
+
+/** Capture the clean, durable tree from which one task begins. The caller must
+ * persist this record before allowing QA or coder mutation. */
+export async function captureCleanTaskBaseTree(
+  runGit: GitRunner,
+  cwd: string,
+): Promise<string> {
+  const status = await runGit(
+    ['status', '--porcelain=v1', '--untracked-files=all'],
+    { cwd },
+  );
+  if (status.stdout.trim() !== '') {
+    throw new Error('task-base capture requires a clean worktree');
+  }
+  await runGit(['add', '-A'], { cwd });
+  // `resolveTreeOid` rejects a malformed OID on entry, so no pre-check here.
+  const written = (await runGit(['write-tree'], { cwd })).stdout.trim();
+  return resolveTreeOid(runGit, cwd, written);
+}
+
+/** Verify an already-durable task base (for restart recovery) without deriving
+ * a new baseline from the possibly mutated worktree. */
+export async function verifyTaskBaseTree(
+  runGit: GitRunner,
+  cwd: string,
+  treeOid: string,
+): Promise<string> {
+  return resolveTreeOid(runGit, cwd, treeOid);
+}
+
+/** Resolve a closeout commit to its authoritative tree for legacy-cursor
+ * recovery. */
+export async function treeForCommit(
+  runGit: GitRunner,
+  cwd: string,
+  commitOid: string,
+): Promise<string> {
+  if (!isGitObjectId(commitOid)) {
+    throw new Error('canonical Git received a malformed commit OID');
+  }
+  return resolveTreeOid(runGit, cwd, commitOid);
+}
+
+/** Stage the worktree and resolve the base/current tree pair every full-task
+ * capture compares. The task base was verified before the cursor was persisted
+ * and `write-tree` is itself authoritative for the current tree, so this only
+ * re-asserts object-id syntax — which is also what prevents either value from
+ * being parsed as a Git option in the diff argv below. */
+async function stageFullTaskTrees(
+  runGit: GitRunner,
+  cwd: string,
+  taskBaseTree: string,
+): Promise<{ baseTree: string; currentTree: string }> {
+  const baseTree = requireTreeOid(taskBaseTree);
+  await runGit(['add', '-A'], { cwd });
+  const currentTree = requireTreeOid(
+    (await runGit(['write-tree'], { cwd })).stdout.trim(),
+  );
+  return { baseTree, currentTree };
+}
+
+function fullTaskDiffArgs(
+  baseTree: string,
+  currentTree: string,
+  ...extra: string[]
+): string[] {
+  return [
+    '--no-pager',
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    ...extra,
+    baseTree,
+    currentTree,
+  ];
+}
+
+/** Stage and capture the one full-task review surface used both before
  * judgment roles and after mechanical validation. */
 export async function captureCanonicalReviewState(
   runGit: GitRunner,
   cwd: string,
+  taskBaseTree: string,
 ): Promise<CanonicalReviewState> {
-  await runGit(['add', '-A'], { cwd });
+  const { baseTree, currentTree } = await stageFullTaskTrees(runGit, cwd, taskBaseTree);
   const [diffResult, pathsResult] = await Promise.all([
-    runGit(['--no-pager', 'diff', '--no-ext-diff', '--no-textconv', 'HEAD'], { cwd }),
-    runGit(
-      ['--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD'],
-      { cwd },
-    ),
+    runGit(fullTaskDiffArgs(baseTree, currentTree), { cwd }),
+    runGit(fullTaskDiffArgs(baseTree, currentTree, '--name-only'), { cwd }),
   ]);
   return {
     diff: scrubCanonicalReviewDiff(diffResult.stdout),
     hash: canonicalReviewDiffHash(diffResult.stdout),
-    changedPaths: pathsResult.stdout
-      .split(/\r?\n/)
-      .map((path) => scrubAbsolutePaths(scrubPathsInText(path.trim())))
-      .filter(Boolean)
-      .slice(0, CANONICAL_CHANGED_PATHS_MAX),
+    baseTree,
+    currentTree,
+    changedPaths: canonicalChangedPaths(pathsResult.stdout),
   };
+}
+
+/** Capture only full-task changed paths for mechanical-test selection. The
+ * authoritative diff/hash/tree comparison still happens after validation. */
+export async function captureCanonicalChangedPaths(
+  runGit: GitRunner,
+  cwd: string,
+  taskBaseTree: string,
+): Promise<string[]> {
+  const { baseTree, currentTree } = await stageFullTaskTrees(runGit, cwd, taskBaseTree);
+  const paths = await runGit(
+    fullTaskDiffArgs(baseTree, currentTree, '--name-only'),
+    { cwd },
+  );
+  return canonicalChangedPaths(paths.stdout);
+}
+
+function canonicalChangedPaths(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map((path) => scrubAbsolutePaths(scrubPathsInText(path.trim())))
+    .filter(Boolean)
+    .slice(0, CANONICAL_CHANGED_PATHS_MAX);
 }

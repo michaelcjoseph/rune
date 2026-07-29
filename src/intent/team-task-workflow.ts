@@ -241,13 +241,35 @@ export interface CoderSelfReviewRecord {
   outcome: CoderSelfReviewOutcome;
   notes: string;
   canonicalHash: string;
+  /** Optional for historical records written before full-task review capture. */
+  taskBaseTree?: string;
+  /** Optional for historical records written before full-task review capture. */
+  currentReviewTree?: string;
   changedPaths: string[];
+}
+
+/** Git object-id shape (SHA-1, or SHA-256 for a repo using that hash). Declared
+ * here, beside `CanonicalReviewState`, because every consumer of a tree/commit
+ * OID in that contract must agree on the shape: the capture boundary
+ * (`jobs/canonical-git`, which re-exports this), the orchestrator's cursor
+ * guard, the durable cursor store, and the Cockpit diagnostics projection. A
+ * second copy could silently widen or narrow what one of them accepts. This
+ * module holds it rather than `jobs/canonical-git` so `intent/` consumers keep
+ * their no-import-from-`jobs/` purity boundary. */
+const GIT_OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+export function isGitObjectId(value: string): boolean {
+  return GIT_OBJECT_ID.test(value);
 }
 
 /** The worktree state captured with canonical Git after a coder self-review. */
 export interface CanonicalReviewState {
   diff: string;
   hash: string;
+  /** Stable tree captured before any mutation for this task. */
+  baseTree: string;
+  /** Staged tree whose full-task diff was presented to every judgment role. */
+  currentTree: string;
   changedPaths: string[];
 }
 
@@ -263,12 +285,16 @@ export interface ReviewSurfaceFailure {
   kind: 'candidate-mismatch';
   canonicalHash: string;
   candidateHash: string;
+  taskBaseTree?: string;
+  canonicalTree?: string;
+  candidateTree?: string;
   changedPaths: string[];
 }
 
 /** What the reviewer receives — artifacts only, never coder hidden reasoning. */
 export interface ReviewerInput {
   diff: string;
+  reviewState?: Omit<CanonicalReviewState, 'diff'>;
   spec: string;
   tests: string[] | string;
   task: SizedTask;
@@ -339,6 +365,8 @@ export interface TeamTaskDeps {
     diff: string;
     spec: string;
     context: string;
+    reviewState?: Omit<CanonicalReviewState, 'diff'>;
+    artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
   }) => Promise<{ approved: boolean; notes?: string }>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
@@ -350,11 +378,13 @@ export interface TeamTaskDeps {
     /** Coder handoff notes for THIS round — carries the TEST-REMOVED
      *  justifications the test-deletion guardrail keys on. */
     coderHandoffNotes?: string[];
+    reviewState?: Omit<CanonicalReviewState, 'diff'>;
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
     diff: string;
     findingsLedger?: FindingsLedgerEntry[];
+    reviewState?: Omit<CanonicalReviewState, 'diff'>;
   }) => Promise<GateReviewVerdict>;
   pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
     resolved: boolean;
@@ -386,6 +416,8 @@ export interface TeamTaskRunInput {
   emit?: (event: WorkflowActivityEvent) => void;
   /** Per-task round cap. */
   cap: number;
+  /** Whole-workflow attempt number: 1 initially, >1 for closeout repair. */
+  workflowAttempt?: number;
 }
 
 export type WorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed' | 'cancelled';
@@ -420,8 +452,26 @@ export interface TaskEvidence {
   relatedTestDiagnostic?: RelatedTestDiagnostic;
   /** Fail-closed review-surface mismatch; never carries raw diff content. */
   reviewSurfaceFailure?: ReviewSurfaceFailure;
-  /** Scrubbed canonical review-surface hash approved by downstream roles. */
+  /** Scrubbed canonical review-surface hash approved by downstream roles.
+   *
+   * Deliberately separate from `fullTaskReviewHash` below even though the two
+   * currently always hold the same value. They answer different questions and
+   * are populated from different scopes: this one is the *approval* identity —
+   * set only where the gates actually cleared (`approvedReviewSurfaceHash` on
+   * the `ready-for-closeout` terminals), and it is what closeout re-verifies
+   * before committing. `fullTaskReviewHash` is *evidence* — recorded from the
+   * per-round collector onto every terminal, including cancelled and failed
+   * ones that never produced an approval. Collapsing them would make an
+   * unapproved terminal's evidence hash indistinguishable from an approval and
+   * silently weaken the closeout gate. */
   reviewSurfaceHash?: string;
+  /** Stable task-start tree. Optional so historical evidence remains readable. */
+  taskBaseTree?: string;
+  /** Exact staged tree judged by downstream roles. */
+  currentReviewTree?: string;
+  /** Hash of the complete implementation diff relative to task base. Evidence
+   * on every terminal — see `reviewSurfaceHash` for why the two are distinct. */
+  fullTaskReviewHash?: string;
   /** Successful coder self-reviews, one per implementation round. Optional so
    * historical persisted records remain readable. */
   coderSelfReviews?: CoderSelfReviewRecord[];
@@ -462,6 +512,10 @@ export async function runTeamTaskWorkflow(
   // from one decoration point.
   const repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] } = {};
   const coderSelfReviews: CoderSelfReviewRecord[] = [];
+  const reviewEvidence: Pick<
+    TaskEvidence,
+    'taskBaseTree' | 'currentReviewTree' | 'fullTaskReviewHash' | 'reviewSurfaceHash'
+  > = {};
 
   try {
     const evidence = await runGated(
@@ -472,9 +526,11 @@ export async function runTeamTaskWorkflow(
       handoffNotes,
       repairEvidence,
       coderSelfReviews,
+      reviewEvidence,
     );
     return {
       ...evidence,
+      ...reviewEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
@@ -491,6 +547,7 @@ export async function runTeamTaskWorkflow(
         cancellation: err.cancellation,
         findingsLedger: [],
         loopExitReason: 'operational',
+        ...reviewEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
@@ -508,6 +565,7 @@ export async function runTeamTaskWorkflow(
         failureReason: executionFailureSummary(err.failure),
         findingsLedger: [],
         loopExitReason: 'operational',
+        ...reviewEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
@@ -525,6 +583,7 @@ export async function runTeamTaskWorkflow(
       failureReason: (err as Error).message,
       findingsLedger: [],
       loopExitReason: 'operational',
+      ...reviewEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
@@ -541,6 +600,10 @@ async function runGated(
   handoffNotes: string[],
   repairEvidence: { testIntentRepair?: TaskEvidence['testIntentRepair'] },
   coderSelfReviews: CoderSelfReviewRecord[],
+  reviewEvidence: Pick<
+    TaskEvidence,
+    'taskBaseTree' | 'currentReviewTree' | 'fullTaskReviewHash' | 'reviewSurfaceHash'
+  >,
 ): Promise<TaskEvidence> {
   // Gate 0: reviewer independence, resolved up-front and fail-closed — block
   // before any coder work rather than risk a same-provider review later.
@@ -758,6 +821,8 @@ async function runGated(
       outcome: reviewed.outcome,
       notes: reviewed.notes,
       canonicalHash: reviewed.reviewState.hash,
+      taskBaseTree: reviewed.reviewState.baseTree,
+      currentReviewTree: reviewed.reviewState.currentTree,
       changedPaths: reviewed.reviewState.changedPaths.slice(
         0,
         CANONICAL_CHANGED_PATHS_MAX,
@@ -780,7 +845,22 @@ async function runGated(
           ? [...coder.handoffNotes, `coder self-review (revised): ${reviewed.notes}`]
           : coder.handoffNotes,
     };
+    // Same value, three destinations, on purpose: `approvedReviewSurfaceHash`
+    // reaches only the ready-for-closeout terminals (the approval identity
+    // closeout re-verifies), while the `reviewEvidence` collector reaches every
+    // terminal — including cancelled/failed — so a run that never approved
+    // still carries the trees and hash it was judged on. See `TaskEvidence`.
     approvedReviewSurfaceHash = reviewed.reviewState.hash;
+    reviewEvidence.taskBaseTree = reviewed.reviewState.baseTree;
+    reviewEvidence.currentReviewTree = reviewed.reviewState.currentTree;
+    reviewEvidence.fullTaskReviewHash = reviewed.reviewState.hash;
+    reviewEvidence.reviewSurfaceHash = reviewed.reviewState.hash;
+    const reviewState = {
+      hash: reviewed.reviewState.hash,
+      baseTree: reviewed.reviewState.baseTree,
+      currentTree: reviewed.reviewState.currentTree,
+      changedPaths: reviewed.reviewState.changedPaths,
+    };
 
     const qaDiffReview = await revalidateQaDiff(deps, {
       task,
@@ -788,6 +868,13 @@ async function runGated(
       diff: canonicalCoder.diff,
       spec: input.spec,
       context: input.contextMd,
+      reviewState,
+      artifactPass:
+        (input.workflowAttempt ?? 1) > 1
+          ? 'closeout-retry'
+          : round > 1
+            ? 'coder-retry'
+            : 'first-pass',
     });
     if (!qaDiffReview.approved) {
       const reason = qaDiffReview.notes?.trim() ||
@@ -827,6 +914,7 @@ async function runGated(
       task,
       context: input.contextMd,
       reviewerProvider,
+      reviewState,
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),
@@ -890,6 +978,7 @@ async function runGated(
       diff: canonicalCoder.diff,
       spec: input.spec,
       context: input.contextMd,
+      reviewState,
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),
@@ -940,6 +1029,7 @@ async function runGated(
       lastDesigner = normalizeGateVerdict(await deps.designer({
         task,
         diff: canonicalCoder.diff,
+        reviewState,
         ...(roundFindingsLedger.length > 0
           ? { findingsLedger: roundFindingsLedger }
           : {}),
@@ -1224,6 +1314,8 @@ async function revalidateQaDiff(
     diff: string;
     spec: string;
     context: string;
+    reviewState?: Omit<CanonicalReviewState, 'diff'>;
+    artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
   },
 ): Promise<{ approved: boolean; notes?: string }> {
   if (deps.qaRevalidateDiff === undefined) {
@@ -1909,6 +2001,12 @@ function emitCoderSelfReview(
         outcome: review.outcome,
         notes: review.notes,
         canonicalHash: review.canonicalHash,
+        ...(review.taskBaseTree !== undefined
+          ? { taskBaseTree: review.taskBaseTree }
+          : {}),
+        ...(review.currentReviewTree !== undefined
+          ? { currentReviewTree: review.currentReviewTree }
+          : {}),
         changedPaths: review.changedPaths,
         line: `coder-self-review: ${review.outcome} - ${review.notes}`,
       },

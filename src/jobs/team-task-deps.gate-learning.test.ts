@@ -129,6 +129,8 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 import { stubCanonicalGit } from './canonical-git-test-stub.js';
 
+const FIXTURE_TASK_BASE_TREE = '1111111111111111111111111111111111111111';
+
 const task: SizedTask = {
   id: 'qa-redaction-retry',
   text: 'Write tests for redaction of token-shaped secrets',
@@ -221,7 +223,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     };
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: FIXTURE_TASK_BASE_TREE },
       { judgmentCall },
     );
 
@@ -308,7 +310,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     };
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: FIXTURE_TASK_BASE_TREE },
       seams,
     );
 
@@ -337,7 +339,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
 
   it('passes the persisted project exemplar directory into QA role context loading', async () => {
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: FIXTURE_TASK_BASE_TREE },
       {
         judgmentCall: async (call) => {
           if (call.role === 'tech-lead' && call.message.includes('## QA tests')) {
@@ -504,7 +506,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     };
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: FIXTURE_TASK_BASE_TREE },
       seams,
     );
 

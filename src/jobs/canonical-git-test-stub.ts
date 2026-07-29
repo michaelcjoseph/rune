@@ -3,8 +3,8 @@
  *
  * Since coder self-review became a worktree-editing pass, every workflow test
  * has to satisfy the same canonical sequence — `add -A` → `write-tree` (before
- * and after the pass) → `diff HEAD` (+ `--name-only`) — and each suite was
- * hand-rolling the identical four-branch runner.
+ * and after the pass) → task-base/current-tree `diff` (+ `--name-only`) — and
+ * each suite was hand-rolling the identical four-branch runner.
  *
  * The tree id is derived from the *current* diff on purpose: a self-review that
  * edits the worktree changes the diff and therefore the tree, which is exactly
@@ -16,14 +16,23 @@
  */
 
 import type { GitRunner } from './sandbox-runtime.js';
+import { createHash } from 'node:crypto';
 
 export function stubCanonicalGit(
   currentDiff: () => string,
   changedPath: string,
 ): GitRunner {
   return async (args) => {
+    const treeId = createHash('sha1').update(currentDiff()).digest('hex');
     if (args.includes('write-tree')) {
-      return { stdout: `tree:${currentDiff()}\n`, stderr: '' };
+      return { stdout: `${treeId}\n`, stderr: '' };
+    }
+    if (args.includes('rev-parse')) {
+      const treeish = args.at(-1)?.replace(/\^\{tree\}$/, '') ?? treeId;
+      return {
+        stdout: `${/^[0-9a-f]{40}$/.test(treeish) ? treeish : treeId}\n`,
+        stderr: '',
+      };
     }
     if (args.includes('--name-only')) return { stdout: `${changedPath}\n`, stderr: '' };
     if (args.includes('diff')) return { stdout: currentDiff(), stderr: '' };

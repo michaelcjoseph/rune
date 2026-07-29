@@ -144,6 +144,7 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 import { isStalled, planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
 import { canonicalReviewDiffHash } from './canonical-git.js';
+import { writeOrchestratedRunCursor } from './orchestrated-run-store.js';
 
 // ---------------------------------------------------------------------------
 // Phase 5 orchestrated applier (project 14): the mutation applier that runs
@@ -437,6 +438,8 @@ describe('orchestratedWorkApplier', () => {
       __setOrchestratedRuntimeForTest({
         refreshRegistry: refreshRegistrySpy as () => void,
         inspectWorktreeStatus: async () => '',
+        captureTaskBaseTree: async () =>
+          '1111111111111111111111111111111111111111',
         invalidateRunCursor: () => {},
         verifyWorktree: async (opts) => ({
           ok: true,
@@ -1144,6 +1147,8 @@ describe('orchestratedWorkApplier', () => {
           destroyWorktree: async () => {
             destroyed = true;
           },
+          captureTaskBaseTree: async () =>
+            '1111111111111111111111111111111111111111',
           runGit,
           workRunsDir: artifactsDir,
           workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
@@ -1844,6 +1849,7 @@ describe('orchestratedWorkApplier', () => {
 
       expect(lifecycle.map((event) => (event.data as Record<string, unknown>)['event'])).toEqual([
         'task-selected',
+        'task-base-captured',
         'attempt-start',
         'closeout-start',
         'closeout-complete',
@@ -2201,11 +2207,15 @@ describe('orchestratedWorkApplier', () => {
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
-      mockCollectTaskChangedPaths.mockResolvedValue([
+      // Sourced from the canonical full-task capture below, not
+      // `collectTaskChangedPaths` — any task carrying a `taskBaseTree` (every
+      // fresh run) takes that path. The odd-name and leading-dash entries keep
+      // the argv-sanitization guard covered on it.
+      const canonicalChangedPathsOutput = [
         'harness/src/feature.ts',
         'harness/src/odd name.test.ts',
         'harness/--config=malicious.ts',
-      ]);
+      ].join('\n') + '\n';
       mockRunValidationCommandArgv
         .mockImplementationOnce(async () => {
           operations.push('validation:initial-conflict');
@@ -2253,9 +2263,18 @@ describe('orchestratedWorkApplier', () => {
           operations.push('review-surface:stage');
           return { stdout: '', stderr: '' };
         }
+        if (gitArgs[0] === 'write-tree') {
+          return {
+            stdout: '2222222222222222222222222222222222222222\n',
+            stderr: '',
+          };
+        }
+        if (gitArgs.includes('--name-only')) {
+          return { stdout: canonicalChangedPathsOutput, stderr: '' };
+        }
         operations.push('review-surface:hash');
         return {
-          stdout: gitArgs.includes('--name-only') ? 'src/feature.ts\n' : canonicalDiff,
+          stdout: canonicalDiff,
           stderr: '',
         };
       });
@@ -2286,6 +2305,9 @@ describe('orchestratedWorkApplier', () => {
           handoffNotes: [`completed ${task.text}`],
           reviewerVerdict: { pass: true, objections: [] },
           reviewSurfaceHash: canonicalReviewDiffHash(canonicalDiff),
+          taskBaseTree: '1111111111111111111111111111111111111111',
+          currentReviewTree: '2222222222222222222222222222222222222222',
+          fullTaskReviewHash: canonicalReviewDiffHash(canonicalDiff),
         }),
       });
 
@@ -2317,7 +2339,14 @@ describe('orchestratedWorkApplier', () => {
           .toBeLessThan(operations.indexOf('review-surface:hash'));
         expect(operations.indexOf('review-surface:hash')).toBeLessThan(operations.indexOf('git:commit'));
         expect(mockRunValidationCommands).not.toHaveBeenCalled();
-        expect(mockCollectTaskChangedPaths).toHaveBeenCalledWith(wtDir, runGit);
+        expect(mockCollectTaskChangedPaths).not.toHaveBeenCalled();
+        expect(runCanonicalGit).toHaveBeenCalledWith(
+          expect.arrayContaining(['--name-only']),
+          { cwd: wtDir },
+        );
+        // Paths are rebased from worktree-relative to the validation cwd
+        // (`<worktree>/harness`), and a rebased path that would read as a flag
+        // is prefixed `./` — `vitest related` has no `--` terminator.
         const exactArgv = [
           'npx',
           'vitest',
@@ -2772,7 +2801,6 @@ describe('orchestratedWorkApplier', () => {
       const createdDirs: string[] = [];
       const closeoutShas = [
         '1111111aaaaaaa',
-        '1111111aaaaaaa',
         '2222222bbbbbbb',
       ];
       let revParseCalls = 0;
@@ -2830,7 +2858,9 @@ describe('orchestratedWorkApplier', () => {
             created = true;
             const { sandbox, dir } = makeWorktree('demo', [
               '## Phase 1',
-              '- [ ] Build the streak core',
+              applierRun === 1
+                ? '- [ ] Build the streak core'
+                : '- [x] Build the streak core',
               '- [ ] Render the streak card',
               '',
             ].join('\n'));
@@ -2839,6 +2869,8 @@ describe('orchestratedWorkApplier', () => {
             writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), validContext, 'utf8');
             return sandbox;
           },
+          captureTaskBaseTree: async () =>
+            '1111111111111111111111111111111111111111',
           destroyWorktree: async () => {
             destroyed = true;
           },
@@ -4693,6 +4725,373 @@ describe('orchestratedWorkApplier', () => {
         }
         vi.useRealTimers();
       }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The production `buildOrchestrationDeps` closures. Every other suite in this
+// file injects `runOrchestration` wholesale, so `captureTaskBase` and the
+// review-surface half of `runCloseoutChecks` were constructed on each dispatch
+// but never actually called. Here `runOrchestration` is injected as a probe: it
+// receives the REAL deps the applier built and invokes one closure directly, so
+// these tests exercise production code rather than a re-description of it.
+// ---------------------------------------------------------------------------
+describe('buildOrchestrationDeps — production closures', () => {
+  let wtDir: string | undefined;
+  let artifactsDir: string | undefined;
+
+  beforeEach(() => {
+    activeRuns.clear();
+    mockAppendMutationLine.mockClear();
+    mockUpsertRun.mockClear();
+    mockRunValidationCommands.mockReset();
+    mockRunValidationCommands.mockResolvedValue({ ok: true });
+    __setOrchestratedRuntimeForTest({
+      refreshRegistry: (() => {}) as () => void,
+      inspectWorktreeStatus: async () => '',
+      invalidateRunCursor: () => {},
+      verifyWorktree: async (opts) => ({
+        ok: true,
+        projectDir: join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo'),
+        specContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'spec.md'), 'utf8'),
+        tasksContent: readFileSync(join(opts.worktree, 'docs', 'projects', opts.project ?? 'demo', 'tasks.md'), 'utf8'),
+      }),
+    });
+  });
+
+  afterEach(() => {
+    __resetOrchestratedRuntimeForTest();
+    activeRuns.clear();
+    if (wtDir) rmSync(wtDir, { recursive: true, force: true });
+    if (artifactsDir) rmSync(artifactsDir, { recursive: true, force: true });
+    wtDir = undefined;
+    artifactsDir = undefined;
+  });
+
+  const TASK = {
+    id: 'task-one',
+    text: 'task one',
+    section: 'Phase 1',
+    validationPolicy: 'reviewed-no-validation' as const,
+  };
+
+  /** Dispatch the applier, but replace the orchestration loop with `probe`, so
+   *  the probe runs against the real `OrchestrationDeps` the applier built. */
+  async function withRealDeps(args: {
+    runId: string;
+    resumed: boolean;
+    runCanonicalGit: GitRunner;
+    captureTaskBaseTree?: (runGit: GitRunner, cwd: string) => Promise<string>;
+    seedCursor?: (dir: string, runId: string, worktree: string) => void;
+    probe: (deps: OrchestrationDeps) => Promise<void>;
+  }): Promise<void> {
+    const runsDir = mkdtempSync(join(tmpdir(), 'orch-real-deps-'));
+    artifactsDir = runsDir;
+    const { sandbox, dir } = makeWorktree();
+    wtDir = dir;
+    args.seedCursor?.(runsDir, args.runId, dir);
+    // Probe failures are captured, not propagated: letting one reject
+    // `runOrchestration` would route it into the applier's terminal/cleanup
+    // machinery and surface as a hang instead of a readable assertion.
+    let probeError: unknown;
+    __setOrchestratedRuntimeForTest({
+      workRunsDir: runsDir,
+      workRunsIndexFile: join(runsDir, 'index.jsonl'),
+      runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+      runCanonicalGit: args.runCanonicalGit,
+      captureTaskBaseTree: args.captureTaskBaseTree ??
+        (async () => { throw new Error('fresh capture must not run for this case'); }),
+      createWorktree: async () => ({ ...sandbox, resumed: args.resumed }),
+      destroyWorktree: async () => {},
+      runOrchestration: async (deps) => {
+        try {
+          await args.probe(deps);
+        } catch (err) {
+          probeError = err;
+        }
+        return { kind: 'blocked', reason: 'probe complete', task: TASK };
+      },
+    });
+    await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, args.runId), ctx));
+    if (probeError !== undefined) throw probeError;
+  }
+
+  describe('captureTaskBase', () => {
+    it('reuses and verifies a resumed run\'s durable task base instead of re-capturing', async () => {
+      const durableTree = '1111111111111111111111111111111111111111';
+      const revParseArgs: string[][] = [];
+      let captured: { taskId: string; treeOid: string } | undefined;
+      let freshCaptureCalls = 0;
+
+      await withRealDeps({
+        runId: 'mut-capture-durable',
+        resumed: true,
+        runCanonicalGit: vi.fn(async (gitArgs: string[]) => {
+          if (gitArgs[0] === 'rev-parse') {
+            revParseArgs.push([...gitArgs]);
+            return { stdout: `${durableTree}\n`, stderr: '' };
+          }
+          throw new Error(`unexpected canonical git call: ${gitArgs.join(' ')}`);
+        }),
+        captureTaskBaseTree: async () => {
+          freshCaptureCalls += 1;
+          return '9999999999999999999999999999999999999999';
+        },
+        seedCursor: (dir, runId, worktree) => {
+          writeOrchestratedRunCursor(dir, runId, {
+            runId,
+            product: 'rune',
+            project: 'demo',
+            branch: 'rune-work/demo',
+            baseBranch: 'main',
+            worktreePath: worktree,
+            resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: TASK.id, nextTaskId: TASK.id },
+            taskBase: { taskId: TASK.id, treeOid: durableTree },
+          });
+        },
+        probe: async (deps) => {
+          captured = await deps.captureTaskBase(TASK);
+        },
+      });
+
+      // The durable base is verified, never re-derived: re-capturing on resume
+      // would rebase the task onto work the interrupted attempt already did,
+      // which is exactly the incremental-diff misjudgment the base prevents.
+      expect(captured).toEqual({ taskId: TASK.id, treeOid: durableTree });
+      expect(freshCaptureCalls).toBe(0);
+      expect(revParseArgs).toEqual([['rev-parse', '--verify', `${durableTree}^{tree}`]]);
+    });
+
+    it('throws rather than reusing a durable task base recorded for a different task', async () => {
+      let thrown: Error | undefined;
+
+      await withRealDeps({
+        runId: 'mut-capture-mismatch',
+        resumed: true,
+        runCanonicalGit: vi.fn(async () => {
+          throw new Error('canonical git must not run for a mismatched base');
+        }),
+        seedCursor: (dir, runId, worktree) => {
+          writeOrchestratedRunCursor(dir, runId, {
+            runId,
+            product: 'rune',
+            project: 'demo',
+            branch: 'rune-work/demo',
+            baseBranch: 'main',
+            worktreePath: worktree,
+            resumeMarker: 'resumable',
+            cursor: {
+              completedTaskIds: [],
+              currentTaskId: 'a-different-task',
+              nextTaskId: 'a-different-task',
+            },
+            taskBase: { taskId: 'a-different-task', treeOid: '1111111111111111111111111111111111111111' },
+          });
+        },
+        probe: async (deps) => {
+          await deps.captureTaskBase(TASK).catch((err: Error) => { thrown = err; });
+        },
+      });
+
+      expect(thrown?.message).toBe('durable task base belongs to a different task');
+    });
+
+    it('captures a fresh base for a non-resumed run even when a cursor task base exists on disk', async () => {
+      const freshTree = '3333333333333333333333333333333333333333';
+      let captured: { taskId: string; treeOid: string } | undefined;
+
+      await withRealDeps({
+        runId: 'mut-capture-fresh',
+        resumed: false,
+        runCanonicalGit: vi.fn(async () => {
+          throw new Error('verification must not run when capturing fresh');
+        }),
+        captureTaskBaseTree: async () => freshTree,
+        seedCursor: (dir, runId, worktree) => {
+          writeOrchestratedRunCursor(dir, runId, {
+            runId,
+            product: 'rune',
+            project: 'demo',
+            branch: 'rune-work/demo',
+            baseBranch: 'main',
+            worktreePath: worktree,
+            resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: TASK.id, nextTaskId: TASK.id },
+            taskBase: { taskId: TASK.id, treeOid: '1111111111111111111111111111111111111111' },
+          });
+        },
+        probe: async (deps) => {
+          captured = await deps.captureTaskBase(TASK);
+        },
+      });
+
+      // `resumed` is the only signal that a prior attempt owns the baseline. A
+      // stale cursor from an earlier run of the same id must not silently
+      // become a fresh dispatch's base.
+      expect(captured).toEqual({ taskId: TASK.id, treeOid: freshTree });
+    });
+
+    it('captures a fresh base when a resumed run has no durable task base', async () => {
+      const freshTree = '4444444444444444444444444444444444444444';
+      let captured: { taskId: string; treeOid: string } | undefined;
+
+      await withRealDeps({
+        runId: 'mut-capture-resumed-no-base',
+        resumed: true,
+        runCanonicalGit: vi.fn(async () => {
+          throw new Error('verification must not run without a durable base');
+        }),
+        captureTaskBaseTree: async () => freshTree,
+        seedCursor: (dir, runId, worktree) => {
+          writeOrchestratedRunCursor(dir, runId, {
+            runId,
+            product: 'rune',
+            project: 'demo',
+            branch: 'rune-work/demo',
+            baseBranch: 'main',
+            worktreePath: worktree,
+            resumeMarker: 'resumable',
+            cursor: { completedTaskIds: [], currentTaskId: null, nextTaskId: TASK.id },
+          });
+        },
+        probe: async (deps) => {
+          captured = await deps.captureTaskBase(TASK);
+        },
+      });
+
+      expect(captured).toEqual({ taskId: TASK.id, treeOid: freshTree });
+    });
+  });
+
+  describe('runCloseoutChecks — full-task review-surface verification', () => {
+    const canonicalDiff = 'diff --git a/src/feature.ts b/src/feature.ts\n+shipped\n';
+    const currentTree = '2222222222222222222222222222222222222222';
+
+    function canonicalGitStub(): GitRunner {
+      return vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'add') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'write-tree') return { stdout: `${currentTree}\n`, stderr: '' };
+        if (gitArgs.includes('--name-only')) return { stdout: 'src/feature.ts\n', stderr: '' };
+        return { stdout: canonicalDiff, stderr: '' };
+      });
+    }
+
+    function evidence(overrides: Partial<TaskEvidence>): TaskEvidence {
+      return {
+        taskId: TASK.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer'],
+        findingsLedger: [],
+        loopExitReason: 'all-low',
+        objectionOpen: false,
+        handoffNotes: [],
+        reviewerVerdict: { pass: true, objections: [] },
+        ...overrides,
+      } as TaskEvidence;
+    }
+
+    it('fails closed when an approved surface carries no canonical tree identities', async () => {
+      let checks: Awaited<ReturnType<OrchestrationDeps['runCloseoutChecks']>> | undefined;
+
+      await withRealDeps({
+        runId: 'mut-closeout-missing-identities',
+        resumed: false,
+        runCanonicalGit: vi.fn(async () => {
+          throw new Error('canonical capture must not run before the identity guard');
+        }),
+        probe: async (deps) => {
+          checks = await deps.runCloseoutChecks(
+            TASK,
+            // An approval hash with no trees: unverifiable, so closeout must
+            // refuse rather than fall through to the ok-path above it.
+            evidence({ reviewSurfaceHash: canonicalReviewDiffHash(canonicalDiff) }),
+          );
+        },
+      });
+
+      expect(checks).toMatchObject({
+        ok: false,
+        failure: {
+          command: 'full-task review-surface verification',
+          outputTail: 'canonical review tree identities are missing',
+          reviewSurfaceFailure: { kind: 'candidate-mismatch', canonicalHash: 'missing' },
+        },
+      });
+    });
+
+    it('fails closed when the hash still matches but the current tree drifted', async () => {
+      let checks: Awaited<ReturnType<OrchestrationDeps['runCloseoutChecks']>> | undefined;
+      let runsDirSeen: string | undefined;
+      const approvedHash = canonicalReviewDiffHash(canonicalDiff);
+
+      await withRealDeps({
+        runId: 'mut-closeout-tree-drift',
+        resumed: false,
+        runCanonicalGit: canonicalGitStub(),
+        probe: async (deps) => {
+          runsDirSeen = artifactsDir;
+          checks = await deps.runCloseoutChecks(
+            TASK,
+            evidence({
+              reviewSurfaceHash: approvedHash,
+              fullTaskReviewHash: approvedHash,
+              taskBaseTree: '1111111111111111111111111111111111111111',
+              // Both hashes agree, but the tree the roles judged is not the
+              // tree on disk — the third leg of the equality check is the only
+              // thing that catches this.
+              currentReviewTree: '5555555555555555555555555555555555555555',
+            }),
+          );
+        },
+      });
+
+      expect(checks).toMatchObject({
+        ok: false,
+        failure: {
+          command: 'full-task review-surface verification',
+          reviewSurfaceFailure: {
+            kind: 'candidate-mismatch',
+            canonicalHash: approvedHash,
+            candidateHash: approvedHash,
+            canonicalTree: currentTree,
+            candidateTree: '5555555555555555555555555555555555555555',
+          },
+        },
+      });
+
+      // Durable evidence records identities only — never raw diff content.
+      const durable = readFileSync(
+        join(runsDirSeen!, 'mut-closeout-tree-drift', 'review-surface-failures.jsonl'),
+        'utf8',
+      );
+      expect(durable).toContain('"candidateTree":"5555555555555555555555555555555555555555"');
+      expect(durable).not.toContain('+shipped');
+    });
+
+    it('passes closeout when hash and current tree both match the approved surface', async () => {
+      let checks: Awaited<ReturnType<OrchestrationDeps['runCloseoutChecks']>> | undefined;
+      const approvedHash = canonicalReviewDiffHash(canonicalDiff);
+
+      await withRealDeps({
+        runId: 'mut-closeout-match',
+        resumed: false,
+        runCanonicalGit: canonicalGitStub(),
+        probe: async (deps) => {
+          checks = await deps.runCloseoutChecks(
+            TASK,
+            evidence({
+              reviewSurfaceHash: approvedHash,
+              fullTaskReviewHash: approvedHash,
+              taskBaseTree: '1111111111111111111111111111111111111111',
+              currentReviewTree: currentTree,
+            }),
+          );
+        },
+      });
+
+      expect(checks).toEqual({ ok: true });
     });
   });
 });
