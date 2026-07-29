@@ -12,9 +12,11 @@
 
 import {
   CANONICAL_CHANGED_PATHS_MAX,
+  JUDGMENT_SUMMARY_MAX_CHARS,
   SELF_REVIEW_NOTE_MAX_CHARS,
   SEVERITY_LOOP_HARD_BUDGET,
   type CoderSelfReviewRecord,
+  type JudgmentOutcomeEvidence,
   type ObjectionFinding,
   type PmAcceptance,
 } from './team-task-workflow.js';
@@ -51,6 +53,14 @@ export interface TaskRunRecord {
   coderSelfReviews?: CoderSelfReviewRecord[];
   /** Related-test fallback evidence. Optional for historical JSONL. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Stable, bounded post-coder fan-in outcomes. Optional for historical JSONL. */
+  judgmentOutcomes?: JudgmentOutcomeEvidence[];
+  /** Stable pre-mutation task tree. Optional for historical JSONL. */
+  taskBaseTree?: string;
+  /** Exact tree judged by QA and downstream reviewers. */
+  currentReviewTree?: string;
+  /** Hash of the full-task diff between the two review trees. */
+  fullTaskReviewHash?: string;
   /** What happened to `context.md` on this attempt. */
   contextOutcome: TaskContextOutcome;
   /** Gate decisions the orchestrator made. */
@@ -96,6 +106,26 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }
+      : {}),
+    ...(input.judgmentOutcomes !== undefined
+      ? {
+          judgmentOutcomes: input.judgmentOutcomes.slice(0, 4).map((outcome) => ({
+            role: outcome.role,
+            status: outcome.status,
+            ...(outcome.summary !== undefined
+              ? { summary: outcome.summary.slice(0, JUDGMENT_SUMMARY_MAX_CHARS) }
+              : {}),
+          })),
+        }
+      : {}),
+    ...(input.taskBaseTree !== undefined
+      ? { taskBaseTree: input.taskBaseTree }
+      : {}),
+    ...(input.currentReviewTree !== undefined
+      ? { currentReviewTree: input.currentReviewTree }
+      : {}),
+    ...(input.fullTaskReviewHash !== undefined
+      ? { fullTaskReviewHash: input.fullTaskReviewHash }
       : {}),
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },

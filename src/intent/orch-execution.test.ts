@@ -138,6 +138,39 @@ describe('orch-run-record — required fields', () => {
     expect(rec.acceptance).not.toBe(acceptance);
   });
 
+  it('bounds and defensively copies judgment batch outcomes for durable evidence', () => {
+    const judgmentOutcomes = [
+      { role: 'qa' as const, status: 'pass' as const },
+      {
+        role: 'reviewer' as const,
+        status: 'failed' as const,
+        summary: 'x'.repeat(750),
+      },
+      { role: 'tech-lead' as const, status: 'cancelled' as const },
+      { role: 'designer' as const, status: 'reject' as const },
+      { role: 'qa' as const, status: 'reject' as const },
+    ];
+    const rec = buildTaskRunRecord({
+      taskId: 'judgment-evidence',
+      taskText: 'Persist judgment evidence',
+      attemptId: 'a-judgment',
+      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      judgmentOutcomes,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'failed',
+    });
+
+    expect(rec.judgmentOutcomes).toHaveLength(4);
+    expect(rec.judgmentOutcomes?.[1]?.summary).toHaveLength(500);
+    expect(rec.judgmentOutcomes).not.toBe(judgmentOutcomes);
+    expect(rec.judgmentOutcomes?.[0]).not.toBe(judgmentOutcomes[0]);
+  });
+
   it('bounds coderSelfReviews to at most 4 rounds and truncates notes/changedPaths for durable evidence', () => {
     const manyPaths = Array.from({ length: 250 }, (_, i) => `src/file-${i}.ts`);
     const longNotes = 'x'.repeat(2_500);

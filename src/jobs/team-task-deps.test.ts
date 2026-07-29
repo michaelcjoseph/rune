@@ -27,10 +27,11 @@ import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 import {
-  buildProductionTeamTaskDeps,
-  createProductionTaskWorkflowRunner,
+  buildProductionTeamTaskDeps as buildProductionTeamTaskDepsRaw,
+  createProductionTaskWorkflowRunner as createProductionTaskWorkflowRunnerRaw,
   parseCoderSelfReviewResult,
   resolveTeamRoleModels,
   type JudgmentModelCall,
@@ -55,7 +56,10 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
-import type { ExecutionFailure } from '../intent/execution-failure.js';
+import type {
+  ExecutionCheckpoint,
+  ExecutionFailure,
+} from '../intent/execution-failure.js';
 import { defaultRunGit } from './sandbox-runtime.js';
 import { captureCanonicalReviewState, defaultRunCanonicalGit } from './canonical-git.js';
 
@@ -67,6 +71,39 @@ import { captureCanonicalReviewState, defaultRunCanonicalGit } from './canonical
 // direct config.js import (and its required-env-var reads) for a path constant.
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REAL_POLICY_PATH = join(REPO_ROOT, 'policies', 'model-policy.json');
+const FIXTURE_TASK_BASE_TREE = '1111111111111111111111111111111111111111';
+
+function fixtureTreeOid(value: string): string {
+  return createHash('sha1').update(value).digest('hex');
+}
+
+function buildProductionTeamTaskDeps(
+  args: Omit<
+    Parameters<typeof buildProductionTeamTaskDepsRaw>[0],
+    'taskBaseTree'
+  > & { taskBaseTree?: string },
+  seams?: Parameters<typeof buildProductionTeamTaskDepsRaw>[1],
+) {
+  return buildProductionTeamTaskDepsRaw(
+    { taskBaseTree: FIXTURE_TASK_BASE_TREE, ...args },
+    seams,
+  );
+}
+
+function createProductionTaskWorkflowRunner(
+  ...args: Parameters<typeof createProductionTaskWorkflowRunnerRaw>
+) {
+  const run = createProductionTaskWorkflowRunnerRaw(...args);
+  return (
+    task: Parameters<typeof run>[0],
+    ctx: Omit<Parameters<typeof run>[1], 'taskBase' | 'workflowAttempt'> &
+      Partial<Pick<Parameters<typeof run>[1], 'taskBase' | 'workflowAttempt'>>,
+  ) => run(task, {
+    taskBase: { taskId: task.id, treeOid: FIXTURE_TASK_BASE_TREE },
+    workflowAttempt: 1,
+    ...ctx,
+  });
+}
 
 function loadRealPolicy(): ModelPolicy {
   return parsePolicy(readFileSync(REAL_POLICY_PATH, 'utf8'));
@@ -189,7 +226,7 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
   const runCanonicalGit = overrides.runCanonicalGit ?? overrides.runGit ?? (async (args: string[]) => {
     if (args.includes('add')) return { stdout: '', stderr: '' };
     if (args.includes('write-tree')) {
-      return { stdout: `tree-${await latestDiff}\n`, stderr: '' };
+      return { stdout: `${fixtureTreeOid(await latestDiff)}\n`, stderr: '' };
     }
     if (args.includes('diff') && args.includes('--name-only')) {
       return { stdout: 'src/x.test.ts\n', stderr: '' };
@@ -730,7 +767,9 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
         runExecution: execution,
         runCanonicalGit: async (args) => {
-          if (args.includes('write-tree')) return { stdout: `${tree}\n`, stderr: '' };
+          if (args.includes('write-tree')) {
+            return { stdout: `${fixtureTreeOid(tree)}\n`, stderr: '' };
+          }
           if (args.includes('--name-only')) return { stdout: 'src/x.ts\n', stderr: '' };
           if (args.includes('diff')) return { stdout: canonicalDiff, stderr: '' };
           return { stdout: '', stderr: '' };
@@ -790,15 +829,17 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       await writeFile(join(worktree, 'src.ts'), 'export const ready = false;\n');
       await git(['add', '-A']);
       await git(['commit', '-m', 'baseline']);
+      const taskBaseTree = (await git(['rev-parse', 'HEAD^{tree}'])).stdout.trim();
       await writeFile(join(worktree, 'src.ts'), 'export const ready = false; // implementation\n');
 
       const deps = buildProductionTeamTaskDeps({
         sandbox: { ...makeSandbox(), worktree },
         productsConfigPath: '/nonexistent/products.json',
         models: resolveTeamRoleModels(loadRealPolicy()),
+        taskBaseTree,
         validationCommands: ['npm test'],
       }, makeSeams({
-        runCanonicalGit: defaultRunCanonicalGit,
+        runCanonicalGit: defaultRunGit,
         runExecution: async (opts) => {
           expect(opts.prompt).toContain('## Validation commands');
           expect(opts.prompt).toContain('npm test');
@@ -1148,7 +1189,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     });
   });
 
-  it('instructs the reviewer it has no repo access and must not object to absence inferred from a partial diff', async () => {
+  it('instructs the reviewer that the full-task diff makes absence meaningful without claiming repo access', async () => {
     // Regression: the reviewer is a text-only judge with no tools, yet it raised
     // a critical objection claiming a symbol was "exported nowhere (verified via
     // grep over src/)" — a fabricated verification against a partial diff that
@@ -1177,17 +1218,11 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(lower).toContain('no tools');
     expect(lower).toContain('no repository access');
     expect(lower).toContain('fabrication');
-    // No objection-class finding from mere absence in a partial diff.
-    expect(lower).toContain('partial view');
-    expect(lower).toContain('exported nowhere');
-    expect(lower).toContain('never as an objection-class finding');
-    // Diff-vs-tree dead-loop fix: the reviewer (the historical primary trigger)
-    // must treat the now-provided branch tree-state evidence as positive proof a
-    // deliverable already landed out-of-sequence, not only suppress absence
-    // objections. Mirrors the tech-lead diff gate.
-    expect(lower).toContain('whole branch');
-    expect(lower).toContain('earlier commit on this branch');
-    expect(lower).toContain('tree-state evidence');
+    expect(lower).toContain('complete implementation for this task');
+    expect(lower).toContain('durable');
+    expect(lower).toContain('absence from this');
+    expect(lower).toContain('artifact is therefore');
+    expect(lower).toContain('genuine signal');
     // Test-deletion guardrail: an unjustified deleted/weakened test is an
     // ordinary fail, judged against the coder's handoff-note justification.
     expect(lower).toContain('test-deletion guardrail');
@@ -1197,7 +1232,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(lower).toContain('not an objection class');
   });
 
-  it('instructs the tech-lead diff gate to judge provided tree state, not only absence from a partial diff', async () => {
+  it('instructs the tech-lead diff gate to judge the complete task artifact', async () => {
     // Regression: a task deliverable already present on the branch was absent
     // from the current task diff, so the tech-lead diff gate kept treating the
     // task as incomplete and the workflow exhausted the round cap.
@@ -1226,10 +1261,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const lowerPrompt = techLeadSystemPrompt.toLowerCase();
     expect(lowerPrompt).toContain('no tools');
     expect(lowerPrompt).toContain('no repository access');
-    expect(lowerPrompt).toContain('partial view');
-    expect(lowerPrompt).toContain('missing-from-this-diff');
-    expect(lowerPrompt).toContain('tree-state/context evidence');
-    expect(lowerPrompt).toContain('diff regresses it');
+    expect(lowerPrompt).toContain('complete implementation for this task');
+    expect(lowerPrompt).toContain('durable');
+    expect(lowerPrompt).toContain('earlier coder');
+    expect(lowerPrompt).toContain('absent from this full-task artifact');
     expect(lowerPrompt).toContain('test-deletion guardrail');
     expect(lowerPrompt).toContain('deletes or weakens a test');
     expect(lowerPrompt).toContain('coder handoff notes');
@@ -1347,6 +1382,116 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       reviewerProvider: 'anthropic',
     });
     expect(messages.find((entry) => entry.role === 'reviewer')?.message ?? '').not.toContain('## Coder handoff notes');
+  });
+
+  it('labels reviewer, tech-lead, and designer bodies with the full-task base/current tree and hash identities', async () => {
+    const messages: Array<{ role: string; message: string }> = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        messages.push({ role, message });
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+    const reviewState = {
+      hash: 'full-task-hash-abc',
+      baseTree: '1111111111111111111111111111111111111111',
+      currentTree: '2222222222222222222222222222222222222222',
+      changedPaths: ['src/x.ts'],
+    };
+
+    await deps.reviewer({
+      diff: 'diff --git a/src/x.ts',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+      reviewState,
+    });
+    await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff --git a/src/x.ts', reviewState });
+    await deps.designer({ task: sizedTask, diff: 'diff --git a/src/x.ts', reviewState });
+
+    for (const role of ['reviewer', 'tech-lead', 'designer']) {
+      const message = messages.find((entry) => entry.role === role)?.message ?? '';
+      expect(message).toContain('## Complete task implementation relative to durable task base');
+      expect(message).toContain(`task-base-tree: ${reviewState.baseTree}`);
+      expect(message).toContain(`current-review-tree: ${reviewState.currentTree}`);
+      expect(message).toContain(`full-task-review-hash: ${reviewState.hash}`);
+    }
+  });
+
+  it('falls back to explicit "unavailable" review-state labels when no reviewState is supplied', async () => {
+    const messages: Array<{ role: string; message: string }> = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        messages.push({ role, message });
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    for (const role of ['tech-lead', 'designer']) {
+      const message = messages.find((entry) => entry.role === role)?.message ?? '';
+      expect(message).toContain('task-base-tree: unavailable');
+      expect(message).toContain('current-review-tree: unavailable');
+      expect(message).toContain('full-task-review-hash: unavailable');
+    }
+  });
+
+  it('labels the QA revalidation artifact with the artifact pass kind and full-task review-state identities', async () => {
+    const qaMessages: string[] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        if (role === 'qa') qaMessages.push(message);
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+    const reviewState = {
+      hash: 'full-task-hash-xyz',
+      baseTree: '1111111111111111111111111111111111111111',
+      currentTree: '3333333333333333333333333333333333333333',
+      changedPaths: ['src/y.ts'],
+    };
+
+    await deps.qaRevalidateDiff?.({
+      task: sizedTask,
+      qa: { kind: 'no-code-test-rationale', rationale: 'covered by an existing behavioral test' },
+      diff: 'diff --git a/src/y.ts',
+      spec: 'spec',
+      context: 'ctx',
+      reviewState,
+      artifactPass: 'closeout-retry',
+    });
+
+    expect(qaMessages).toHaveLength(1);
+    expect(qaMessages[0]).toContain('## Complete task implementation relative to durable task base');
+    expect(qaMessages[0]).toContain('pass: closeout-retry');
+    expect(qaMessages[0]).toContain(`task-base-tree: ${reviewState.baseTree}`);
+    expect(qaMessages[0]).toContain(`current-review-tree: ${reviewState.currentTree}`);
+    expect(qaMessages[0]).toContain(`full-task-review-hash: ${reviewState.hash}`);
+  });
+
+  it('defaults the QA revalidation artifact pass label to "first-pass" when omitted', async () => {
+    const qaMessages: string[] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        if (role === 'qa') qaMessages.push(message);
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    await deps.qaRevalidateDiff?.({
+      task: sizedTask,
+      qa: { kind: 'no-code-test-rationale', rationale: 'covered by an existing behavioral test' },
+      diff: 'diff --git a/src/y.ts',
+      spec: 'spec',
+      context: 'ctx',
+    });
+
+    expect(qaMessages[0]).toContain('pass: first-pass');
+    expect(qaMessages[0]).toContain('task-base-tree: unavailable');
   });
 
   it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {
@@ -1876,17 +2021,21 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       makeSeams({ judgmentCall: async () => 'no fenced block here' }),
     );
 
-    const verdict = await deps.reviewer({
+    await expect(deps.reviewer({
       diff: 'd',
       spec: 's',
       tests: 't',
       task: sizedTask,
       context: 'c',
       reviewerProvider: 'anthropic',
+    })).rejects.toMatchObject({
+      name: 'ExecutionFailureError',
+      failure: expect.objectContaining({
+        role: 'reviewer',
+        workflowStage: 'reviewer-review',
+        failureStage: 'orchestration-adjacent',
+      }),
     });
-    const structured = verdict as unknown as Record<string, unknown>;
-    expect(structured['outcome']).toBe('fail');
-    expect(structured).not.toHaveProperty('pass');
 
     const tl = await deps.techLeadReviewTests({ task: sizedTask, qa: { kind: 'tests-written', testIds: [] } });
     expect(tl.approved).toBe(false);
@@ -1988,6 +2137,57 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       role: 'qa',
       workflowStage: 'qa-tests',
     });
+  });
+
+  it('persists one bounded judgment-batch checkpoint before concurrent judgments spawn', async () => {
+    const persisted: ExecutionCheckpoint[] = [];
+    const spawnedJudgments: string[] = [];
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        persisted.push(checkpoint);
+      },
+    }, makeSeams({
+      judgmentCall: async ({ role }) => {
+        spawnedJudgments.push(role);
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const evidence = await runTeamTaskWorkflow(
+      sizedTask,
+      { spec: 's', contextMd: 'c', coderProvider: 'openai', cap: 1 },
+      deps,
+    );
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const batches = persisted.filter((checkpoint) => checkpoint.judgmentBatch !== undefined);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'judgment-batch',
+      workflowStage: 'post-coder-judgments',
+      judgmentBatch: {
+        members: [
+          { role: 'qa', workflowStage: 'qa-diff-revalidation' },
+          { role: 'reviewer', workflowStage: 'reviewer-review' },
+          { role: 'tech-lead', workflowStage: 'tech-lead-diff-review' },
+        ],
+      },
+    });
+    expect(persisted.at(-1)).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'orchestrator',
+      workflowStage: 'post-coder-judgments-complete',
+    });
+    expect(persisted.at(-1)?.judgmentBatch).toBeUndefined();
+    expect(spawnedJudgments).toEqual(expect.arrayContaining([
+      'qa',
+      'reviewer',
+      'tech-lead',
+    ]));
   });
 });
 
@@ -2367,7 +2567,7 @@ describe('no-stub regression (Phase 8)', () => {
   it('the orchestrated applier production runtime binds createProductionTaskWorkflowRunner', () => {
     __resetOrchestratedRuntimeForTest();
     const runtime = __getRuntimeDepsForTest();
-    expect(runtime.createTaskWorkflowRunner).toBe(createProductionTaskWorkflowRunner);
+    expect(runtime.createTaskWorkflowRunner).toBe(createProductionTaskWorkflowRunnerRaw);
   });
 
   it('defaults the production workflow runner to four feedback rounds when no cap override is provided', async () => {
@@ -2705,7 +2905,7 @@ describe('no-stub regression (Phase 8)', () => {
 });
 
 describe('canonical reviewer diff production seam', () => {
-  it('stages tracked and untracked task changes and captures deterministic git diff HEAD', async () => {
+  it('stages tracked and untracked task changes and captures the deterministic full-task diff', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'canonical-review-diff-'));
     try {
       const git = (gitArgs: string[]) => defaultRunGit(gitArgs, { cwd: worktree });
@@ -2717,6 +2917,7 @@ describe('canonical reviewer diff production seam', () => {
       await writeFile(join(worktree, 'deleted.ts'), 'delete me\n');
       await git(['add', '-A']);
       await git(['commit', '-m', 'baseline']);
+      const taskBaseTree = (await git(['rev-parse', 'HEAD^{tree}'])).stdout.trim();
       await writeFile(join(worktree, 'tracked.ts'), 'tracked change\n');
       await writeFile(join(worktree, 'staged.ts'), 'staged change\n');
       await git(['add', 'staged.ts']);
@@ -2729,9 +2930,13 @@ describe('canonical reviewer diff production seam', () => {
       const expected = (await git(['diff', 'HEAD', '--'])).stdout;
       await git(['reset']);
 
-      const result = await captureCanonicalReviewState(defaultRunCanonicalGit, worktree);
+      const result = await captureCanonicalReviewState(
+        defaultRunGit,
+        worktree,
+        taskBaseTree,
+      );
 
-      expect(result).toMatchObject({ diff: expected });
+      expect(result).toMatchObject({ diff: expected, baseTree: taskBaseTree });
       expect(result.diff).toContain('tracked.ts');
       expect(result.diff).toContain('staged.ts');
       expect(result.diff).toContain('deleted.ts');
@@ -2739,6 +2944,47 @@ describe('canonical reviewer diff production seam', () => {
       expect(result.diff).toContain('new-untracked.ts');
       expect(result.diff).toContain('new file mode');
       expect((await git(['status', '--porcelain'])).stdout).toContain('A  new-untracked.ts');
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps earlier task changes visible after a role-created commit advances HEAD', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'canonical-review-committed-round-'));
+    try {
+      const git = (gitArgs: string[]) => defaultRunGit(gitArgs, { cwd: worktree });
+      await git(['init', '--initial-branch', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(worktree, 'src.ts'), 'export const baseline = true;\n');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'baseline']);
+      const taskBaseTree = (await git(['rev-parse', 'HEAD^{tree}'])).stdout.trim();
+
+      await writeFile(
+        join(worktree, 'helper.ts'),
+        'export const helperFromRoundOne = true;\n',
+      );
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'role-created round-one commit']);
+      await writeFile(
+        join(worktree, 'src.ts'),
+        'import { helperFromRoundOne } from "./helper.js";\n' +
+          'export const baseline = helperFromRoundOne;\n',
+      );
+
+      const result = await captureCanonicalReviewState(
+        defaultRunGit,
+        worktree,
+        taskBaseTree,
+      );
+
+      expect(result.baseTree).toBe(taskBaseTree);
+      expect(result.diff).toContain('helperFromRoundOne');
+      expect(result.diff).toContain('new file mode');
+      expect(result.diff).toContain('src.ts');
+      expect(result.changedPaths).toEqual(['helper.ts', 'src.ts']);
+      expect(result.currentTree).not.toBe(taskBaseTree);
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }

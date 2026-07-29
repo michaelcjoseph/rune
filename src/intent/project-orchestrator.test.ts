@@ -89,6 +89,15 @@ function redCloseout(
   } as const;
 }
 
+function fixtureTaskBase(task: SelectedTask) {
+  return {
+    taskId: task.id,
+    treeOid: task.id === 'build-the-streak-core'
+      ? '1111111111111111111111111111111111111111'
+      : '2222222222222222222222222222222222222222',
+  };
+}
+
 function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS): Harness {
   const state = {
     tasksMd,
@@ -113,6 +122,8 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     readTasksMd: async () => state.tasksMd,
     readContextMd: async () => state.contextMd,
     readSpec: async () => 'spec body',
+    captureTaskBase: async (task) => fixtureTaskBase(task),
+    writeRunCursor: async () => {},
     runTaskWorkflow: async (task, ctx) => {
       state.contextHandoffs.push(ctx.contextMd);
       return readyEvidence(task);
@@ -273,6 +284,11 @@ describe('project-orchestrator — cancellation boundaries', () => {
           objectionOpen: false,
           handoffNotes: [],
           cancellation,
+          judgmentOutcomes: [
+            { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
+            { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
+            { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
+          ],
         }),
       });
 
@@ -282,6 +298,11 @@ describe('project-orchestrator — cancellation boundaries', () => {
         kind: 'cancelled',
         reason,
         cancellation,
+        judgmentOutcomes: [
+          { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
+          { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
+          { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
+        ],
         task: { text: 'Build the streak core' },
       });
       expect(h.state.tasksMd).toBe(TWO_TASKS);
@@ -661,6 +682,159 @@ describe('project-orchestrator — operational terminal', () => {
     });
   });
 
+  it('persists a terminal TaskRunRecord for a failed (non-cancelled) outcome before holding', async () => {
+    const persistedRecords: TaskRunRecord[] = [];
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'failed',
+        rolesInvoked: ['qa', 'coder'],
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        objectionOpen: false,
+        handoffNotes: [],
+        failureReason: 'coder execution crashed',
+        executionFailure: {
+          taskId: task.id,
+          role: 'coder',
+          provider: 'openai',
+          format: 'codex',
+          model: 'gpt-test',
+          workflowStage: 'coder-implementation',
+          checkpointedAt: '2026-07-22T00:00:00.000Z',
+          failureStage: 'provider',
+          diagnostic: 'coder execution crashed',
+          retryable: true,
+          attempts: [{
+            attempt: 1,
+            startedAt: '2026-07-22T00:00:00.000Z',
+            endedAt: '2026-07-22T00:00:01.000Z',
+            failureStage: 'provider',
+            diagnostic: 'coder execution crashed',
+            retryable: true,
+          }],
+          retryDisposition: 'exhausted',
+        },
+      }),
+    });
+    const deps = {
+      ...h.deps,
+      appendTaskRunRecord: async (record: TaskRunRecord) => {
+        persistedRecords.push(record);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('held');
+    expect(persistedRecords).toHaveLength(1);
+    expect(persistedRecords[0]).toEqual(
+      expect.objectContaining({
+        taskId: 'build-the-streak-core',
+        commitSha: null,
+        contextOutcome: 'unchanged',
+        outcome: 'failed',
+      }),
+    );
+  });
+
+  it('holds operationally (never proceeds) when the terminal-evidence write fails for a blocked/failed outcome', async () => {
+    let secondTaskAttempted = false;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        if (task.id === 'render-the-streak-card') secondTaskAttempted = true;
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: 'round cap reached',
+        };
+      },
+    });
+    const deps = {
+      ...h.deps,
+      appendTaskRunRecord: async () => {
+        throw new Error('disk full');
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    // The recording failure leads (it is why the run cannot proceed), but the
+    // terminal classification still composes into the reason — the write
+    // failure must not mask what actually ended the task.
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason:
+        'operational recording failure: disk full; terminal classification: round cap reached',
+      preserveBranch: true,
+      preserveWorktree: true,
+    });
+    expect(secondTaskAttempted).toBe(false);
+  });
+
+  it('still records terminal bugs for a severe finding when the terminal-evidence write fails', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    const terminalFinding: FindingsLedgerEntry = {
+      id: 'finding-streak-rollover-loss',
+      sourceGate: 'reviewer',
+      class: 'data-integrity',
+      severity: 'high',
+      location: 'src/streak.ts:12',
+      rationale: 'streak rollover silently drops the final day',
+      reversible: false,
+      raisedRound: 3,
+      status: 'open',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['qa', 'coder', 'reviewer'],
+        findingsLedger: [terminalFinding],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: [],
+        blockedReason: 'non-reversible high finding must hold the branch',
+      }),
+    });
+    const deps = {
+      ...h.deps,
+      appendTaskRunRecord: async () => {
+        throw new Error('disk full');
+      },
+      appendTerminalBugEntries: async (entries: TerminalBugEntry[]) => {
+        bugEntries.push(...entries);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    // The compound failure must not swallow bug tracking: classification runs
+    // (and records the bug) before the write failure escalates the hold.
+    expect(bugEntries).toHaveLength(1);
+    expect(bugEntries[0]).toMatchObject({
+      findingId: 'finding-streak-rollover-loss',
+      severity: 'high',
+      reversible: false,
+    });
+    expect(res).toMatchObject({
+      kind: 'held',
+      preserveBranch: true,
+      preserveWorktree: true,
+    });
+    expect((res as { reason: string }).reason).toContain(
+      'operational recording failure: disk full',
+    );
+    expect((res as { reason: string }).reason).toContain(
+      'terminal classification: non-reversible high finding must hold the branch',
+    );
+  });
+
   it('does not infer an operational HOLD from malformed diagnostic wording alone', async () => {
     const worktreePath = '/tmp/rune-worktrees/aura/14-malformed-gate-output';
     let workflowCalls = 0;
@@ -711,6 +885,7 @@ describe('project-orchestrator — observability events', () => {
     expect(res.kind).toBe('finalized');
     expect(eventNames(h.state.events)).toEqual([
       'task-selected',
+      'task-base-captured',
       'attempt-start',
       'closeout-start',
       'closeout-complete',
@@ -892,6 +1067,7 @@ describe('project-orchestrator — observability events', () => {
     expect(calls).toBe(1);
     expect(eventNames(h.state.events)).toEqual([
       'task-selected',
+      'task-base-captured',
       'attempt-start',
     ]);
     expect(eventsByName(h.state.events, 'attempt-start')).toEqual([
@@ -1330,6 +1506,11 @@ describe('project-orchestrator — durable run state', () => {
         if (workflowCalls === 1) {
           return {
             ...readyEvidence(task),
+            judgmentOutcomes: [
+              { role: 'qa', status: 'pass' },
+              { role: 'reviewer', status: 'pass' },
+              { role: 'tech-lead', status: 'pass' },
+            ],
             coderSelfReviews: [{
               round: 1,
               outcome: 'revised',
@@ -1337,6 +1518,9 @@ describe('project-orchestrator — durable run state', () => {
               canonicalHash: 'canonical-review-hash',
               changedPaths: ['src/streak.ts'],
             }],
+            taskBaseTree: '1111111111111111111111111111111111111111',
+            currentReviewTree: '3333333333333333333333333333333333333333',
+            fullTaskReviewHash: 'full-task-review-hash',
           };
         }
         return {
@@ -1365,7 +1549,8 @@ describe('project-orchestrator — durable run state', () => {
     const res = await runProjectOrchestration(deps);
 
     expect(res.kind).toBe('blocked');
-    expect(persistedRecords).toEqual([
+    expect(persistedRecords).toHaveLength(2);
+    expect(persistedRecords[0]).toEqual(
       expect.objectContaining({
         taskId: 'build-the-streak-core',
         taskText: 'Build the streak core',
@@ -1382,8 +1567,24 @@ describe('project-orchestrator — durable run state', () => {
           canonicalHash: 'canonical-review-hash',
           changedPaths: ['src/streak.ts'],
         }],
+        taskBaseTree: '1111111111111111111111111111111111111111',
+        currentReviewTree: '3333333333333333333333333333333333333333',
+        fullTaskReviewHash: 'full-task-review-hash',
+        judgmentOutcomes: [
+          { role: 'qa', status: 'pass' },
+          { role: 'reviewer', status: 'pass' },
+          { role: 'tech-lead', status: 'pass' },
+        ],
       }),
-    ]);
+    );
+    expect(persistedRecords[1]).toEqual(
+      expect.objectContaining({
+        taskId: 'render-the-streak-card',
+        commitSha: null,
+        contextOutcome: 'unchanged',
+        outcome: 'blocked',
+      }),
+    );
     expect(persistedCursors).toContainEqual({
       runId: 'run-1',
       product: 'aura',
@@ -1458,6 +1659,11 @@ describe('project-orchestrator — durable run state', () => {
         currentTaskId: 'build-the-streak-core',
         nextTaskId: 'build-the-streak-core',
       },
+      taskBase: fixtureTaskBase({
+        id: 'build-the-streak-core',
+        text: 'Build the streak core',
+        section: 'Phase 1',
+      }),
     });
     // Round-trip the exact recovery input for this window: cursor present,
     // zero records, zero ticked boxes → resume re-selects the same task.
@@ -1495,11 +1701,7 @@ describe('project-orchestrator — durable run state', () => {
     expect(persistedCursors[2]!.cursor.nextTaskId).toBe('render-the-streak-card');
   });
 
-  it('a task-start cursor write failure is best-effort — the run proceeds and closeout stays fail-closed', async () => {
-    // Fail-closing here would hold a run before any work exists; the worst
-    // case of proceeding is the pre-cursor status quo (park/orphan). The
-    // closeout checkpoint write keeps its fail-closed contract (pinned below
-    // in the operational-recording tests).
+  it('fails closed before workflow mutation when the task-base cursor write fails', async () => {
     const worktreePath = '/tmp/rune-worktrees/aura/14-x';
     const persistedCursors: PersistedRunCursor[] = [];
     let workflowCalls = 0;
@@ -1515,20 +1717,88 @@ describe('project-orchestrator — durable run state', () => {
       appendTaskRunRecord: async () => {},
       writeRunCursor: async (cursor: unknown) => {
         const c = cursor as PersistedRunCursor;
-        if (c.cursor.currentTaskId !== null) {
-          throw new Error('start-write disk failure');
-        }
+        if (c.cursor.currentTaskId !== null) throw new Error('start-write disk failure');
         persistedCursors.push(c);
       },
     };
 
     const res = await runProjectOrchestration(deps);
 
-    // Every task-start write threw and was swallowed; both tasks still ran to
-    // closeout and the run finalized. Closeout cursors persisted normally.
-    expect(res.kind).toBe('finalized');
-    expect(workflowCalls).toBe(2);
-    expect(persistedCursors.map((c) => c.cursor.currentTaskId)).toEqual([null, null]);
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('task-base checkpoint failed before task mutation'),
+      preserveWorktree: true,
+    });
+    expect(workflowCalls).toBe(0);
+    expect(persistedCursors).toEqual([]);
+  });
+
+  it('fails closed before workflow mutation when captureTaskBase returns a mismatched task id', async () => {
+    let workflowCalls = 0;
+    const h = makeHarness({
+      captureTaskBase: async (task) => ({
+        taskId: 'wrong-task-id',
+        treeOid: task.id === 'build-the-streak-core'
+          ? '1111111111111111111111111111111111111111'
+          : '2222222222222222222222222222222222222222',
+      }),
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return readyEvidence(task);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining(
+        'task-base capture returned an invalid task/tree identity',
+      ),
+      preserveWorktree: true,
+    });
+    expect(workflowCalls).toBe(0);
+  });
+
+  it('fails closed before workflow mutation when captureTaskBase returns a malformed tree OID', async () => {
+    let workflowCalls = 0;
+    const h = makeHarness({
+      captureTaskBase: async (task) => ({ taskId: task.id, treeOid: 'not-a-tree-oid' }),
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return readyEvidence(task);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining(
+        'task-base capture returned an invalid task/tree identity',
+      ),
+    });
+    expect(workflowCalls).toBe(0);
+  });
+
+  it('fails closed before workflow mutation when no durable run-cursor writer is available', async () => {
+    let workflowCalls = 0;
+    const h = makeHarness({
+      writeRunCursor: undefined,
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return readyEvidence(task);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('durable run cursor writer is unavailable'),
+      preserveWorktree: true,
+    });
+    expect(workflowCalls).toBe(0);
   });
 
   it('records pass-with-warnings findings in the TaskRunRecord and finalizer handoff while proceeding', async () => {
@@ -2316,7 +2586,7 @@ describe('project-orchestrator — closeout repair loop', () => {
       runCloseoutChecks: async () => ({
         ok: false,
         failure: {
-          command: 'git diff HEAD review-surface verification',
+          command: 'full-task review-surface verification',
           exitCode: null,
           timedOut: false,
           outputTail: 'src/secret.ts',
@@ -2342,13 +2612,25 @@ describe('project-orchestrator — closeout repair loop', () => {
   });
 
   it('repairs a failed closeout by re-running the workflow with the failing output as coder feedback', async () => {
-    const workflowCtxs: Array<{ taskId: string; feedback: GateRejectionFeedback | undefined }> = [];
+    const workflowCtxs: Array<{
+      taskId: string;
+      feedback: GateRejectionFeedback | undefined;
+      taskBaseTree: string;
+      workflowAttempt: number;
+    }> = [];
+    const captureTaskBase = vi.fn(async (task: SelectedTask) => fixtureTaskBase(task));
     let closeoutCalls = 0;
     const h = makeHarness({
       runTaskWorkflow: async (task, ctx) => {
-        workflowCtxs.push({ taskId: task.id, feedback: ctx.rejectionFeedback });
+        workflowCtxs.push({
+          taskId: task.id,
+          feedback: ctx.rejectionFeedback,
+          taskBaseTree: ctx.taskBase.treeOid,
+          workflowAttempt: ctx.workflowAttempt,
+        });
         return readyEvidence(task);
       },
+      captureTaskBase,
       runCloseoutChecks: async () => {
         closeoutCalls++;
         return closeoutCalls === 1
@@ -2371,6 +2653,9 @@ describe('project-orchestrator — closeout repair loop', () => {
       'build-the-streak-core',
       'render-the-streak-card',
     ]);
+    expect(workflowCtxs.map((c) => c.workflowAttempt)).toEqual([1, 2, 1]);
+    expect(workflowCtxs[0]?.taskBaseTree).toBe(workflowCtxs[1]?.taskBaseTree);
+    expect(captureTaskBase).toHaveBeenCalledTimes(2);
     expect(workflowCtxs[0]?.feedback).toBeUndefined();
     const feedback = workflowCtxs[1]?.feedback;
     expect(feedback).toMatchObject({

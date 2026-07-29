@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
 import { isExecutionCheckpoint } from '../intent/execution-failure.js';
+import { isGitObjectId } from '../intent/team-task-workflow.js';
 import { writeFileAtomic } from '../intent/backlog-write-lock.js';
 
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
@@ -57,6 +58,17 @@ function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCurs
     position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
     (position.currentTaskId === null || typeof position.currentTaskId === 'string') &&
     (position.nextTaskId === null || typeof position.nextTaskId === 'string') &&
+    (
+      cursor.taskBase === undefined ||
+      (
+        typeof cursor.taskBase === 'object' &&
+        cursor.taskBase !== null &&
+        typeof cursor.taskBase.taskId === 'string' &&
+        typeof cursor.taskBase.treeOid === 'string' &&
+        isGitObjectId(cursor.taskBase.treeOid) &&
+        position.currentTaskId === cursor.taskBase.taskId
+      )
+    ) &&
     (cursor.executionCheckpoint === undefined || isExecutionCheckpoint(cursor.executionCheckpoint))
   );
 }

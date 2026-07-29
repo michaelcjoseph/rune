@@ -22,6 +22,9 @@ vi.mock('../config.js', () => ({
 
 vi.mock('./claude.js', () => ({
   registerActiveProcess: vi.fn(),
+  signalActiveProcess: vi.fn((child: { kill: (signal: string) => void }, signal: string) => {
+    child.kill(signal);
+  }),
   unregisterActiveProcess: vi.fn(),
 }));
 
@@ -356,7 +359,7 @@ describe('ai/codex', () => {
       const { runCodex } = await import('./codex.js');
       await runCodex('my prompt');
 
-      expect(registerMock).toHaveBeenCalledWith(child);
+      expect(registerMock).toHaveBeenCalledWith(child, process.platform !== 'win32');
       expect(unregisterMock).toHaveBeenCalledWith(child);
     });
 

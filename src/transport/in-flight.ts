@@ -22,6 +22,11 @@ export interface InFlightOp {
    *  (e.g. "Read: knowledge/index.md"). Updated by setOpDetail() and emitted
    *  on every subsequent op-event publish. */
   detail?: string;
+  /** Internal-only correlation for bounded sibling operations. Never copied
+   * into `InFlightOpPublic` or bus payloads. */
+  batchId?: string;
+  /** True only when the child was spawned as its own process-group leader. */
+  processGroup?: boolean;
 }
 
 /** Public-shaped view (no `child`) for callers that want to surface ops without
@@ -39,6 +44,17 @@ export interface InFlightOpPublic {
 }
 
 const ops = new Map<string, InFlightOp>();
+export interface CorrelatedOpOwner {
+  userId: number;
+  scope?: string;
+}
+
+interface CorrelatedCancellation {
+  owner: CorrelatedOpOwner;
+  cancellation: OperationCancellation;
+}
+
+const correlatedCancellations = new Map<string, CorrelatedCancellation>();
 
 let _bus: NotificationBus | null = null;
 let _ticker: ReturnType<typeof setInterval> | null = null;
@@ -152,6 +168,8 @@ export function registerOp(input: {
   scope?: string;
   userId: number;
   child: ChildProcess;
+  batchId?: string;
+  processGroup?: boolean;
 }): InFlightOp {
   const now = Date.now();
   const op: InFlightOp = {
@@ -164,10 +182,18 @@ export function registerOp(input: {
     startedAt: now,
     startedAtIso: new Date(now).toISOString(),
     child: input.child,
+    ...(input.batchId ? { batchId: input.batchId } : {}),
+    ...(input.processGroup ? { processGroup: true } : {}),
   };
   ops.set(op.opId, op);
   publishStart(op);
   ensureTicker();
+  const correlatedCancellation = op.batchId === undefined
+    ? undefined
+    : correlatedCancellations.get(correlationKey(op.batchId, ownerOf(op)))?.cancellation;
+  if (correlatedCancellation !== undefined) {
+    cancelWithRecord(op, inducedCancellationFor(op, correlatedCancellation));
+  }
   return op;
 }
 
@@ -205,20 +231,170 @@ export function getCancellation(opId: string): OperationCancellation | undefined
 export function cancelOp(opId: string, source: CancellationSource): boolean {
   const op = ops.get(opId);
   if (!op) return false;
-  if (op.cancellation !== undefined) return true;
-  // Record synchronously before signalling. Repeated cancellation requests do
-  // not overwrite the original source/timestamp, even if SIGTERM is slow.
-  op.cancellation = {
+  const cancellation: OperationCancellation = {
     operationId: op.opId,
     source,
     requestedAt: new Date().toISOString(),
   };
-  try {
-    op.child.kill('SIGTERM');
-  } catch (err) {
-    log.warn('Failed to SIGTERM op child', { opId, error: (err as Error).message });
+  if (op.batchId !== undefined) {
+    cancelCorrelatedOps(op.batchId, cancellation, ownerOf(op));
+    return true;
   }
+  cancelWithRecord(op, cancellation);
   return true;
+}
+
+/** Cancel every live operation in one internal batch with one shared record.
+ * The caller may supply either a source (for internal cleanup) or an existing
+ * record (when a user cancelled one member). External user cancellation is
+ * allowed to replace an earlier internally-induced sibling record. */
+export function cancelCorrelatedOps(
+  batchId: string,
+  sourceOrRecord: CancellationSource | OperationCancellation = 'internal',
+  requestedOwner?: CorrelatedOpOwner,
+): number {
+  const owner = resolveCorrelationOwner(batchId, sourceOrRecord, requestedOwner);
+  if (owner === undefined) return 0;
+  const siblings = [...ops.values()].filter(
+    (op) => op.batchId === batchId && sameOwner(ownerOf(op), owner),
+  );
+  const requestedCancellation = typeof sourceOrRecord === 'string'
+    ? {
+        operationId: siblings[0]?.opId ?? batchId,
+        source: sourceOrRecord,
+        requestedAt: new Date().toISOString(),
+      }
+    : sourceOrRecord;
+  const key = correlationKey(batchId, owner);
+  const existing = correlatedCancellations.get(key)?.cancellation;
+  const cancellation =
+    existing === undefined ||
+    (existing.source === 'internal' && requestedCancellation.source !== 'internal')
+      ? requestedCancellation
+      : existing;
+  correlatedCancellations.set(key, {
+    owner: { ...owner },
+    cancellation: { ...cancellation },
+  });
+  for (const sibling of siblings) {
+    cancelWithRecord(sibling, inducedCancellationFor(sibling, cancellation));
+  }
+  return siblings.length;
+}
+
+/** Drop a batch cancellation tombstone after its owner has awaited every
+ * member. Active operations retain their own cancellation records. */
+export function clearCorrelatedCancellation(
+  batchId: string,
+  owner?: CorrelatedOpOwner,
+): void {
+  if (owner !== undefined) {
+    correlatedCancellations.delete(correlationKey(batchId, owner));
+    return;
+  }
+  for (const key of correlatedCancellations.keys()) {
+    if (key.startsWith(`${batchId}\0`)) correlatedCancellations.delete(key);
+  }
+}
+
+/** Escalate a correlated batch to SIGKILL after its SIGTERM grace expires.
+ * Only owner-matching children are signalled, and process-group signalling is
+ * used only for children explicitly registered as detached group leaders. */
+export function forceCancelCorrelatedOps(
+  batchId: string,
+  requestedOwner?: CorrelatedOpOwner,
+): number {
+  const owner = resolveCorrelationOwner(batchId, 'internal', requestedOwner);
+  if (owner === undefined) return 0;
+  const siblings = [...ops.values()].filter(
+    (op) => op.batchId === batchId && sameOwner(ownerOf(op), owner),
+  );
+  for (const sibling of siblings) signalOp(sibling, 'SIGKILL');
+  return siblings.length;
+}
+
+function cancelWithRecord(op: InFlightOp, cancellation: OperationCancellation): void {
+  if (op.cancellation !== undefined) {
+    if (op.cancellation.source !== 'internal') return;
+    if (cancellation.source === 'internal') {
+      if (op.cancellation.operationId !== cancellation.operationId) {
+        op.cancellation = { ...cancellation };
+      }
+      return;
+    }
+  }
+  // Record synchronously before signalling. Executors read this metadata from
+  // their close handlers, so no async boundary may be introduced here.
+  const alreadySignalled = op.cancellation !== undefined;
+  op.cancellation = { ...cancellation };
+  if (alreadySignalled) return;
+  signalOp(op, 'SIGTERM');
+}
+
+function signalOp(op: InFlightOp, signal: NodeJS.Signals): void {
+  try {
+    if (
+      op.processGroup === true &&
+      op.child.pid !== undefined &&
+      process.platform !== 'win32'
+    ) {
+      process.kill(-op.child.pid, signal);
+    } else {
+      op.child.kill(signal);
+    }
+  } catch (err) {
+    log.warn(`Failed to ${signal} op child`, {
+      opId: op.opId,
+      error: (err as Error).message,
+    });
+  }
+}
+
+function ownerOf(op: Pick<InFlightOp, 'userId' | 'scope'>): CorrelatedOpOwner {
+  return {
+    userId: op.userId,
+    ...(op.scope !== undefined ? { scope: op.scope } : {}),
+  };
+}
+
+function sameOwner(left: CorrelatedOpOwner, right: CorrelatedOpOwner): boolean {
+  return left.userId === right.userId && left.scope === right.scope;
+}
+
+function correlationKey(batchId: string, owner: CorrelatedOpOwner): string {
+  return `${batchId}\0${owner.userId}\0${owner.scope ?? ''}`;
+}
+
+function resolveCorrelationOwner(
+  batchId: string,
+  sourceOrRecord: CancellationSource | OperationCancellation,
+  requestedOwner?: CorrelatedOpOwner,
+): CorrelatedOpOwner | undefined {
+  if (requestedOwner !== undefined) return requestedOwner;
+  if (typeof sourceOrRecord !== 'string') {
+    const origin = ops.get(sourceOrRecord.operationId);
+    if (origin?.batchId === batchId) return ownerOf(origin);
+  }
+  const owners = new Map<string, CorrelatedOpOwner>();
+  for (const op of ops.values()) {
+    if (op.batchId !== batchId) continue;
+    const owner = ownerOf(op);
+    owners.set(correlationKey(batchId, owner), owner);
+  }
+  return owners.size === 1 ? owners.values().next().value : undefined;
+}
+
+function inducedCancellationFor(
+  op: InFlightOp,
+  cancellation: OperationCancellation,
+): OperationCancellation {
+  if (
+    cancellation.source === 'internal' ||
+    op.opId === cancellation.operationId
+  ) {
+    return cancellation;
+  }
+  return { ...cancellation, source: 'internal' };
 }
 
 /** Cancel the most-recently-started op for a given userId. Returns the cancelled

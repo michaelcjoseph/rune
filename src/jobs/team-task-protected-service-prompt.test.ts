@@ -21,6 +21,7 @@ vi.mock('../roles/loader.js', () => ({
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REAL_POLICY_PATH = join(REPO_ROOT, 'policies', 'model-policy.json');
+const FIXTURE_TASK_BASE_TREE = '1111111111111111111111111111111111111111';
 
 const PROTECTED_SERVICES = [
   {
@@ -122,7 +123,7 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
       return result;
     };
 
-    const run = createProductionTaskWorkflowRunner(
+    const rawRun = createProductionTaskWorkflowRunner(
       {
         sandbox: makeSandbox(),
         productsConfigPath: '/nonexistent/products.json',
@@ -147,6 +148,14 @@ describe('orchestration-protected-service-prompt (project 19 / test-plan §5A)',
       section: 'Phase 5A',
       validationPolicy: 'reviewed-no-validation',
     };
+    const run = (
+      selected: SelectedTask,
+      ctx: { handoff: string; contextMd: string },
+    ) => rawRun(selected, {
+      ...ctx,
+      taskBase: { taskId: selected.id, treeOid: FIXTURE_TASK_BASE_TREE },
+      workflowAttempt: 1,
+    });
 
     const evidence = await run(task, {
       handoff: 'Spec requires protected localhost service invariants in runtime prompts.',

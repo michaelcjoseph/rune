@@ -66,7 +66,7 @@ function cursor(worktree: string): OrchestrationRunCursor {
     baseBranch: 'main',
     worktreePath: worktree,
     resumeMarker: 'resumable',
-    cursor: { completedTaskIds: [], currentTaskId: 'resume-safely', nextTaskId: 'resume-safely' },
+    cursor: { completedTaskIds: [], currentTaskId: null, nextTaskId: 'resume-safely' },
   };
 }
 
@@ -88,6 +88,207 @@ describe('preflightOrchestratedRecovery', () => {
     const f = fixture();
     const result = await preflightOrchestratedRecovery(mutation(), deps(f.repo, f.worktree));
     expect(result.kind).toBe('recoverable');
+  });
+
+  it('verifies and retains a durable task base for an interrupted task', async () => {
+    const f = fixture();
+    const treeOid = git(f.worktree, 'rev-parse', 'HEAD^{tree}');
+    const interrupted: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'resume-safely',
+        nextTaskId: 'resume-safely',
+      },
+      taskBase: { taskId: 'resume-safely', treeOid },
+    };
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => interrupted,
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: 'recoverable',
+      cursor: { taskBase: { taskId: 'resume-safely', treeOid } },
+    });
+  });
+
+  it('derives and persists a legacy interrupted-task base from the preceding closeout commit', async () => {
+    const f = fixture();
+    const precedingCommit = git(f.worktree, 'rev-parse', 'HEAD');
+    const precedingTree = git(f.worktree, 'rev-parse', 'HEAD^{tree}');
+    writeFileSync(
+      join(f.worktree, 'docs', 'projects', PROJECT, 'tasks.md'),
+      '# Tasks\n- [x] Previous task\n- [ ] Resume safely\n',
+    );
+    const legacy: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: ['previous-task'],
+        currentTaskId: 'resume-safely',
+        nextTaskId: 'resume-safely',
+      },
+    };
+    const record: TaskRunRecord = {
+      taskId: 'previous-task',
+      taskText: 'Previous task',
+      attemptId: 'attempt-previous',
+      rolesInvoked: ['qa', 'coder', 'reviewer'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: precedingCommit,
+      verdicts: { reviewer: 'pass' },
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    };
+    let persisted: OrchestrationRunCursor | undefined;
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => legacy,
+        readTaskRunRecords: async () => [record],
+        writeRunCursor: async (value) => {
+          persisted = value;
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: 'recoverable',
+      cursor: {
+        taskBase: { taskId: 'resume-safely', treeOid: precedingTree },
+      },
+    });
+    expect(persisted?.taskBase).toEqual({
+      taskId: 'resume-safely',
+      treeOid: precedingTree,
+    });
+  });
+
+  it('fails closed for a legacy interrupted first task with no authoritative base', async () => {
+    const f = fixture();
+    const legacy: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'resume-safely',
+        nextTaskId: 'resume-safely',
+      },
+    };
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => legacy,
+      }),
+    );
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason:
+        'legacy interrupted-task cursor has no authoritative preceding closeout commit',
+    });
+  });
+
+  it('fails closed when a legacy interrupted-task base cannot be persisted (no cursor writer)', async () => {
+    const f = fixture();
+    const precedingCommit = git(f.worktree, 'rev-parse', 'HEAD');
+    writeFileSync(
+      join(f.worktree, 'docs', 'projects', PROJECT, 'tasks.md'),
+      '# Tasks\n- [x] Previous task\n- [ ] Resume safely\n',
+    );
+    const legacy: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: ['previous-task'],
+        currentTaskId: 'resume-safely',
+        nextTaskId: 'resume-safely',
+      },
+    };
+    const record: TaskRunRecord = {
+      taskId: 'previous-task',
+      taskText: 'Previous task',
+      attemptId: 'attempt-previous',
+      rolesInvoked: ['qa', 'coder', 'reviewer'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: precedingCommit,
+      verdicts: { reviewer: 'pass' },
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    };
+    // The base `deps()` fixture leaves `writeRunCursor` undefined.
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => legacy,
+        readTaskRunRecords: async () => [record],
+      }),
+    );
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'derived task base could not be persisted',
+    });
+  });
+
+  it('fails closed when a between-task cursor unexpectedly retains an in-progress task base', async () => {
+    const f = fixture();
+    const treeOid = git(f.worktree, 'rev-parse', 'HEAD^{tree}');
+    const betweenTasks: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: { completedTaskIds: [], currentTaskId: null, nextTaskId: 'resume-safely' },
+      taskBase: { taskId: 'resume-safely', treeOid },
+    };
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, { readRunCursor: async () => betweenTasks }),
+    );
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'between-task cursor unexpectedly retains an in-progress task base',
+    });
+  });
+
+  it('fails closed when the in-progress cursor task disagrees with the reconstructed next task', async () => {
+    const f = fixture();
+    const mismatched: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'a-different-task',
+        nextTaskId: 'a-different-task',
+      },
+    };
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, { readRunCursor: async () => mismatched }),
+    );
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'in-progress cursor task disagrees with reconstructed next task',
+    });
+  });
+
+  it('fails closed when the durable task base belongs to a different task than the in-progress cursor', async () => {
+    const f = fixture();
+    const treeOid = git(f.worktree, 'rev-parse', 'HEAD^{tree}');
+    const crossTask: OrchestrationRunCursor = {
+      ...cursor(f.worktree),
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: 'resume-safely',
+        nextTaskId: 'resume-safely',
+      },
+      taskBase: { taskId: 'some-other-task', treeOid },
+    };
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, { readRunCursor: async () => crossTask }),
+    );
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'durable task base belongs to a different task',
+    });
   });
 
   it('rejects a missing worktree with an operator-safe reason', async () => {

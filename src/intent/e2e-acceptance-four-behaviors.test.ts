@@ -442,7 +442,7 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
       return ['```tl-test-review', '{"approved": true}', '```'].join('\n');
     }
 
-    if (role === 'qa' && message.includes('## Self-reviewed coder diff')) {
+    if (role === 'qa' && message.includes('## Complete task implementation relative to durable task base')) {
       order.push('qa-diff-revalidation');
       expect(message).toContain(reviewedDiff);
       return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
@@ -456,7 +456,10 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
         : ['```reviewer-verdict', '{"pass": false, "objections": [{"class": "data-integrity", "severity": "high", "location": "src/acceptance.ts:2", "rationale": "Self-review did not fix the deliberately flawed return value."}]}', '```'].join('\n');
     }
 
-    if (role === 'tech-lead' && message.includes('## Diff')) {
+    if (
+      role === 'tech-lead'
+      && message.includes('## Complete task implementation relative to durable task base')
+    ) {
       order.push('tech-lead-diff-review');
       techLeadSawDiff = message;
       return techLeadSawDiff.includes(reviewedDiff)
@@ -523,6 +526,7 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
       } as SandboxSpec,
       productsConfigPath: '/tmp/nonexistent-products.json',
       models,
+      taskBaseTree: '1111111111111111111111111111111111111111',
     },
     {
       judgmentCall,

@@ -156,7 +156,7 @@ describe('buildProductionTeamTaskDeps - gate-time runPostMortem validation', () 
     });
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: '1111111111111111111111111111111111111111' },
       { judgmentCall: draftOnlyJudgment() },
     );
 
@@ -189,7 +189,7 @@ describe('buildProductionTeamTaskDeps - gate-time runPostMortem validation', () 
     });
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models, taskBaseTree: '1111111111111111111111111111111111111111' },
       { judgmentCall: draftOnlyJudgment() },
     );
 

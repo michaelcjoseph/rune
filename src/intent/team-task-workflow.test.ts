@@ -81,6 +81,8 @@ function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
       reviewState: {
         diff: artifact.diff,
         hash: 'canonical-hash',
+        baseTree: '1111111111111111111111111111111111111111',
+        currentTree: '2222222222222222222222222222222222222222',
         changedPaths: ['x'],
       },
     }),
@@ -206,6 +208,28 @@ describe('team-task-workflow — structured role cancellation', () => {
       expect(evidence.blockedReason).toBeUndefined();
     },
   );
+
+  it('retains the full-task base/current tree and hash evidence when a downstream role is cancelled after self-review', async () => {
+    // The reviewer runs AFTER coder self-review has already captured the
+    // canonical review state — a cancellation here must not discard that
+    // already-durable task-base/current-tree/hash evidence.
+    const deps = makeDeps({
+      reviewer: async () => {
+        throw new RoleCancellationError('reviewer', CANCELLATION);
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'cancelled',
+      cancellation: { role: 'reviewer', ...CANCELLATION },
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'canonical-hash',
+      reviewSurfaceHash: 'canonical-hash',
+    });
+  });
 });
 
 describe('team-task-workflow — QA-first', () => {
@@ -1765,6 +1789,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
                 ? 'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW'
                 : 'diff --git a/app.ts b/app.ts\nFIXED-IN-ROUND-TWO',
               hash: `hash-${round}`,
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['app.ts'],
             },
           };
@@ -1819,6 +1845,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
         outcome: 'revised',
         notes: 'Fixed the missing guard.',
         canonicalHash: 'hash-1',
+        taskBaseTree: '1111111111111111111111111111111111111111',
+        currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
       },
       {
@@ -1826,6 +1854,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
         outcome: 'confirmed',
         notes: 'Retry is internally consistent.',
         canonicalHash: 'hash-2',
+        taskBaseTree: '1111111111111111111111111111111111111111',
+        currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
       },
     ]);
@@ -1880,6 +1910,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
             reviewState: {
               diff: 'diff after self-review with behavior-preserving guard',
               hash: 'revised-hash',
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['src/guard.ts'],
             },
           };
@@ -1958,6 +1990,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
             reviewState: {
               diff: artifact.diff,
               hash: 'confirmed-hash',
+              baseTree: '1111111111111111111111111111111111111111',
+              currentTree: '2222222222222222222222222222222222222222',
               changedPaths: ['src/coder.ts'],
             },
           };
@@ -1992,6 +2026,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
       outcome: 'confirmed',
       notes: 'No changes were needed.',
       canonicalHash: 'confirmed-hash',
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
       changedPaths: ['src/coder.ts'],
     }]);
     expect(revalidateCalled).toBe(true);
@@ -2007,6 +2043,29 @@ describe('team-task-workflow — worktree coder self-review', () => {
       'tech-lead-diff',
       'designer',
     ]);
+  });
+
+  it('retains canonical tree/hash evidence when QA revalidation rejects fail-closed', async () => {
+    const evidence = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        qaRevalidateDiff: async () => ({
+          approved: false,
+          notes: 'QA verdict was malformed and cannot approve the artifact.',
+        }),
+      }),
+    );
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      blockedReason: expect.stringContaining('malformed'),
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'canonical-hash',
+      reviewSurfaceHash: 'canonical-hash',
+    });
+    expect(JSON.stringify(evidence)).not.toContain('diff --git');
   });
 
   // A `revised` self-review edits the worktree AFTER the coder handed off, so
@@ -2037,6 +2096,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
           reviewState: {
             diff: 'diff after self-review',
             hash: 'revised-hash',
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: '2222222222222222222222222222222222222222',
             changedPaths: ['src/coder.ts'],
           },
         }),
@@ -2086,6 +2147,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
           reviewState: {
             diff: artifact.diff,
             hash: 'confirmed-hash',
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: '2222222222222222222222222222222222222222',
             changedPaths: ['src/coder.ts'],
           },
         }),
@@ -2152,6 +2215,7 @@ describe('team-task-workflow — worktree coder self-review', () => {
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
+    const roleStates: unknown[] = [];
     const deps = makeDeps({
       coder: async () => ({ diff: 'model-returned candidate must be ignored', handoffNotes: [] }),
       coderSelfReview: async () => ({
@@ -2160,23 +2224,29 @@ describe('team-task-workflow — worktree coder self-review', () => {
         reviewState: {
           diff: completeDiff,
           hash: 'complete-hash',
+          baseTree: '1111111111111111111111111111111111111111',
+          currentTree: '2222222222222222222222222222222222222222',
           changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
         },
       }),
-      qaRevalidateDiff: async ({ diff }) => {
+      qaRevalidateDiff: async ({ diff, reviewState, artifactPass }) => {
         qaDiffs.push(diff);
+        roleStates.push({ role: 'qa', reviewState, artifactPass });
         return { approved: true };
       },
-      reviewer: async ({ diff }) => {
+      reviewer: async ({ diff, reviewState }) => {
         reviewerDiffs.push(diff);
+        roleStates.push({ role: 'reviewer', reviewState });
         return cleanVerdict;
       },
-      techLeadReviewDiff: async ({ diff }) => {
+      techLeadReviewDiff: async ({ diff, reviewState }) => {
         techLeadDiffs.push(diff);
+        roleStates.push({ role: 'tech-lead', reviewState });
         return { pass: true };
       },
-      designer: async ({ diff }) => {
+      designer: async ({ diff, reviewState }) => {
         designerDiffs.push(diff);
+        roleStates.push({ role: 'designer', reviewState });
         return { pass: true };
       },
     });
@@ -2185,6 +2255,11 @@ describe('team-task-workflow — worktree coder self-review', () => {
 
     expect(evidence.outcome).toBe('ready-for-closeout');
     expect(evidence.reviewSurfaceHash).toBe('complete-hash');
+    expect(evidence).toMatchObject({
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '2222222222222222222222222222222222222222',
+      fullTaskReviewHash: 'complete-hash',
+    });
     for (const [role, diffs] of [
       ['qa', qaDiffs],
       ['reviewer', reviewerDiffs],
@@ -2195,7 +2270,87 @@ describe('team-task-workflow — worktree coder self-review', () => {
       expect(diffs[0]).toContain('src/tracked.ts');
       expect(diffs[0]).toContain('src/new-untracked.ts');
     }
+    expect(roleStates).toEqual([
+      {
+        role: 'qa',
+        artifactPass: 'first-pass',
+        reviewState: {
+          hash: 'complete-hash',
+          baseTree: '1111111111111111111111111111111111111111',
+          currentTree: '2222222222222222222222222222222222222222',
+          changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
+        },
+      },
+      expect.objectContaining({
+        role: 'reviewer',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+      expect.objectContaining({
+        role: 'tech-lead',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+      expect.objectContaining({
+        role: 'designer',
+        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
+      }),
+    ]);
     expect(JSON.stringify(evidence)).not.toContain('model-returned candidate');
+  });
+
+  it('keeps an earlier-round helper in the complete artifact shown on a later coder retry', async () => {
+    const secondRoundDiff = [
+      'diff --git a/src/helper.ts b/src/helper.ts',
+      'new file mode 100644',
+      '+export const durableHelper = true;',
+      'diff --git a/src/consumer.ts b/src/consumer.ts',
+      '+import { durableHelper } from "./helper.js";',
+    ].join('\n');
+    const qaArtifacts: Array<{ diff: string; pass?: string }> = [];
+    let round = 0;
+    const deps = makeDeps({
+      coderSelfReview: async () => {
+        round += 1;
+        return {
+          outcome: 'confirmed',
+          notes: `Round ${round} is canonical.`,
+          reviewState: {
+            diff: round === 1
+              ? 'diff --git a/src/helper.ts b/src/helper.ts\n+export const durableHelper = true;'
+              : secondRoundDiff,
+            hash: `hash-${round}`,
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: round === 1
+              ? '2222222222222222222222222222222222222222'
+              : '3333333333333333333333333333333333333333',
+            changedPaths: round === 1
+              ? ['src/helper.ts']
+              : ['src/helper.ts', 'src/consumer.ts'],
+          },
+        };
+      },
+      qaRevalidateDiff: async ({ diff, artifactPass }) => {
+        qaArtifacts.push({ diff, pass: artifactPass });
+        return { approved: true };
+      },
+      reviewer: async () =>
+        round === 1
+          ? { outcome: 'fail', findings: [], notes: 'wire the helper into the consumer' }
+          : cleanVerdict,
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(qaArtifacts).toHaveLength(2);
+    expect(qaArtifacts[1]).toMatchObject({ pass: 'coder-retry' });
+    expect(qaArtifacts[1]?.diff).toContain('durableHelper');
+    expect(qaArtifacts[1]?.diff).toContain('src/helper.ts');
+    expect(evidence).toMatchObject({
+      taskBaseTree: '1111111111111111111111111111111111111111',
+      currentReviewTree: '3333333333333333333333333333333333333333',
+      fullTaskReviewHash: 'hash-2',
+    });
   });
 });
 
@@ -3784,6 +3939,400 @@ describe('team-task-workflow — designer routing', () => {
   });
 });
 
+describe('team-task-workflow — parallel judgment batch', () => {
+  it('starts every eligible role before any result settles and shares one canonical context', async () => {
+    const starts: string[] = [];
+    const contexts: unknown[] = [];
+    const batchIds: string[] = [];
+    const releases = new Map<string, (value: unknown) => void>();
+    const waitFor = <T>(role: string, input: {
+      judgmentContext?: unknown;
+      judgmentBatchId?: string;
+    }): Promise<T> => {
+      starts.push(role);
+      contexts.push(input.judgmentContext);
+      batchIds.push(input.judgmentBatchId ?? '');
+      return new Promise<T>((resolve) => {
+        releases.set(role, resolve as (value: unknown) => void);
+      });
+    };
+    const deps = makeDeps({
+      qaRevalidateDiff: async (input) => waitFor('qa', input),
+      reviewer: async (input) => waitFor('reviewer', input),
+      techLeadReviewDiff: async (input) => waitFor('tech-lead', input),
+      designer: async (input) => waitFor('designer', input),
+    });
+
+    const pending = runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(['qa', 'reviewer', 'tech-lead', 'designer']);
+    });
+    expect(new Set(contexts).size).toBe(1);
+    expect(Object.isFrozen(contexts[0])).toBe(true);
+    expect(Object.isFrozen(
+      (contexts[0] as { reviewState: unknown }).reviewState,
+    )).toBe(true);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(contexts[0]).toMatchObject({
+      spec: INPUT.spec,
+      projectContext: INPUT.contextMd,
+      diff: 'diff --git a/x b/x',
+      artifactPass: 'first-pass',
+      reviewState: { hash: 'canonical-hash' },
+      coderHandoffNotes: ['wired the core'],
+    });
+
+    releases.get('designer')?.({ pass: true });
+    releases.get('tech-lead')?.({ pass: true });
+    releases.get('reviewer')?.(cleanVerdict);
+    releases.get('qa')?.({ approved: true });
+    await expect(pending).resolves.toMatchObject({
+      outcome: 'ready-for-closeout',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'pass' },
+        { role: 'reviewer', status: 'pass' },
+        { role: 'tech-lead', status: 'pass' },
+        { role: 'designer', status: 'pass' },
+      ],
+    });
+  });
+
+  it('deep-freezes prior-round finding entries shared with concurrent judgments', async () => {
+    let round = 0;
+    let secondRoundContext: unknown;
+    const finding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:10',
+      rationale: 'prior-round finding',
+    };
+    const deps = makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `round ${round}`, handoffNotes: [] };
+      },
+      qaRevalidateDiff: async (input) => {
+        if (round === 2) secondRoundContext = input.judgmentContext;
+        return { approved: true };
+      },
+      reviewer: async (input) => round === 1
+        ? { outcome: 'fail', findings: [finding] }
+        : {
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: (input.findingsLedger ?? []).map((entry) => ({
+              id: entry.id,
+              status: 'resolved' as const,
+              notes: 'verified in the second round',
+            })),
+          },
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    const ledger = (secondRoundContext as {
+      findingsLedger: ReadonlyArray<FindingsLedgerEntry>;
+    }).findingsLedger;
+    expect(Object.isFrozen(ledger)).toBe(true);
+    expect(ledger).toHaveLength(1);
+    expect(Object.isFrozen(ledger[0])).toBe(true);
+  });
+
+  it('omits designer entirely when sizing does not require it', async () => {
+    const starts: string[] = [];
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        starts.push('qa');
+        return { approved: true };
+      },
+      reviewer: async () => {
+        starts.push('reviewer');
+        return cleanVerdict;
+      },
+      techLeadReviewDiff: async () => {
+        starts.push('tech-lead');
+        return { pass: true };
+      },
+      designer: async () => {
+        starts.push('designer');
+        return { pass: true };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(starts).toEqual(['qa', 'reviewer', 'tech-lead']);
+    expect(evidence.judgmentOutcomes?.map(({ role }) => role)).toEqual([
+      'qa',
+      'reviewer',
+      'tech-lead',
+    ]);
+  });
+
+  it('combines QA, reviewer, tech-lead, and designer rejections in stable coder-feedback order', async () => {
+    let round = 0;
+    const coderFeedback: Array<GateRejectionFeedback[] | undefined> = [];
+    const deps = makeDeps({
+      coder: async ({ rejectionFeedback }) => {
+        round += 1;
+        coderFeedback.push(rejectionFeedback);
+        return { diff: `diff round ${round}`, handoffNotes: [] };
+      },
+      qaRevalidateDiff: async () =>
+        round === 1 ? { approved: false, notes: 'qa correction' } : { approved: true },
+      reviewer: async () =>
+        round === 1
+          ? { outcome: 'fail', findings: [], notes: 'reviewer correction' }
+          : cleanVerdict,
+      techLeadReviewDiff: async () =>
+        round === 1 ? { pass: false, notes: 'tech-lead correction' } : { pass: true },
+      designer: async () =>
+        round === 1 ? { pass: false, notes: 'designer correction' } : { pass: true },
+    });
+
+    const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(coderFeedback[1]?.map(({ rejectingRole }) => rejectingRole)).toEqual([
+      'qa',
+      'reviewer',
+      'tech-lead',
+      'designer',
+    ]);
+  });
+
+  it('does not close at the hard budget while QA still rejects the implementation diff', async () => {
+    const reviewerFinding: ObjectionFinding = {
+      class: 'concurrency',
+      severity: 'medium',
+      location: 'src/example.ts:1',
+      rationale: 'reversible reviewer concern',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => ({
+        approved: false,
+        notes: 'implementation no longer satisfies the authored tests',
+      }),
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [reviewerFinding],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'hard-budget',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'reject' },
+        { role: 'reviewer', status: 'reject' },
+        { role: 'tech-lead', status: 'pass' },
+      ],
+    });
+  });
+
+  it('preserves the user-targeted role when induced sibling cancellations are internal', async () => {
+    const requestedAt = '2026-07-29T12:00:00.000Z';
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        throw new RoleCancellationError('qa', {
+          operationId: 'reviewer-operation',
+          source: 'internal',
+          requestedAt,
+        });
+      },
+      reviewer: async () => {
+        throw new RoleCancellationError('reviewer', {
+          operationId: 'reviewer-operation',
+          source: 'cockpit',
+          requestedAt,
+        });
+      },
+      techLeadReviewDiff: async () => {
+        throw new RoleCancellationError('tech-lead', {
+          operationId: 'reviewer-operation',
+          source: 'internal',
+          requestedAt,
+        });
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'cancelled',
+      cancellation: {
+        role: 'reviewer',
+        operationId: 'reviewer-operation',
+        source: 'cockpit',
+      },
+    });
+  });
+
+  it('forces and bounds sibling cleanup when a cancelled judgment never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const forceCancelJudgmentBatch = vi.fn();
+      const finishJudgmentBatch = vi.fn();
+      const never = new Promise<{ approved: boolean }>(() => {});
+      const deps = makeDeps({
+        qaRevalidateDiff: async () => never,
+        reviewer: async () => {
+          throw new Error('reviewer provider failed');
+        },
+        techLeadReviewDiff: async () => ({ pass: true }),
+        forceCancelJudgmentBatch,
+        finishJudgmentBatch,
+      });
+
+      const pending = runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+      await vi.advanceTimersByTimeAsync(
+        teamTaskWorkflow.JUDGMENT_CANCEL_GRACE_MS +
+        teamTaskWorkflow.JUDGMENT_FORCE_SETTLE_GRACE_MS,
+      );
+
+      await expect(pending).resolves.toMatchObject({
+        outcome: 'failed',
+        failureReason: 'reviewer provider failed',
+        judgmentOutcomes: [
+          { role: 'qa', status: 'cancelled' },
+          { role: 'reviewer', status: 'failed' },
+          { role: 'tech-lead', status: 'pass' },
+        ],
+      });
+      expect(forceCancelJudgmentBatch).toHaveBeenCalledOnce();
+      expect(finishJudgmentBatch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the stable primary failure while awaiting internally-cancelled siblings', async () => {
+    const internalCancellation = {
+      operationId: 'internal-batch-member',
+      source: 'internal' as const,
+      requestedAt: '2026-07-29T12:00:00.000Z',
+    };
+    let cancelBatchCalls = 0;
+    let cancelQa: (() => void) | undefined;
+    const qaPending = new Promise<{ approved: boolean }>((_resolve, reject) => {
+      cancelQa = () => reject(new RoleCancellationError('qa', internalCancellation));
+    });
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => qaPending,
+      reviewer: async () => {
+        throw new Error('reviewer provider failed');
+      },
+      techLeadReviewDiff: async () => ({ pass: true }),
+      cancelJudgmentBatch: () => {
+        cancelBatchCalls += 1;
+        cancelQa?.();
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'failed',
+      failureReason: 'reviewer provider failed',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'cancelled' },
+        { role: 'reviewer', status: 'failed' },
+        { role: 'tech-lead', status: 'pass' },
+      ],
+    });
+    expect(cancelBatchCalls).toBeGreaterThan(0);
+  });
+
+  it('selects the primary operational failure by role order, not completion order', async () => {
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error('qa operational failure');
+      },
+      reviewer: async () => {
+        throw new Error('reviewer operational failure');
+      },
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence.outcome).toBe('failed');
+    expect(evidence.failureReason).toBe('qa operational failure');
+    expect(evidence.judgmentOutcomes).toEqual([
+      { role: 'qa', status: 'failed', summary: 'qa operational failure' },
+      { role: 'reviewer', status: 'failed', summary: 'reviewer operational failure' },
+      { role: 'tech-lead', status: 'pass' },
+    ]);
+  });
+
+  it('produces identical findings, feedback evidence, and public events across completion orders', async () => {
+    const reviewerFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'medium',
+      location: 'src/reviewer.ts:1',
+      rationale: 'reviewer finding',
+    };
+    const techLeadFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/tech-lead.ts:2',
+      rationale: 'tech-lead finding',
+    };
+    const designerFinding: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/designer.ts:3',
+      rationale: 'designer finding',
+    };
+    const runWithDelays = async (delays: Record<string, number>) => {
+      const events: WorkflowActivityEvent[] = [];
+      const pause = (role: string) =>
+        new Promise((resolve) => setTimeout(resolve, delays[role] ?? 0));
+      const evidence = await runTeamTaskWorkflow(
+        frontEndTask,
+        { ...INPUT, cap: 1, emit: (event) => events.push(event) },
+        makeDeps({
+          qaRevalidateDiff: async () => {
+            await pause('qa');
+            return { approved: false, notes: 'qa finding' };
+          },
+          reviewer: async () => {
+            await pause('reviewer');
+            return { outcome: 'fail', findings: [reviewerFinding] };
+          },
+          techLeadReviewDiff: async () => {
+            await pause('tech-lead');
+            return { outcome: 'fail', findings: [techLeadFinding] };
+          },
+          designer: async () => {
+            await pause('designer');
+            return { outcome: 'pass-with-warnings', findings: [designerFinding] };
+          },
+        }),
+      );
+      return { evidence, events };
+    };
+
+    const forward = await runWithDelays({ qa: 1, reviewer: 2, 'tech-lead': 3, designer: 4 });
+    const reverse = await runWithDelays({ qa: 4, reviewer: 3, 'tech-lead': 2, designer: 1 });
+
+    expect(reverse.evidence).toEqual(forward.evidence);
+    expect(reverse.events).toEqual(forward.events);
+    expect(forward.evidence.findingsLedger.map(({ sourceGate }) => sourceGate)).toEqual([
+      'reviewer',
+      'tech-lead',
+      'designer',
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // No closeout — workflow returns evidence, never mutates project state
 // ---------------------------------------------------------------------------
@@ -3848,7 +4397,9 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'tech-lead', stage: 'test-review' },
       { role: 'coder', stage: 'implementation' },
       { role: 'coder', stage: 'self-review' },
+      { role: 'qa', stage: 'diff-revalidation' },
       { role: 'reviewer', stage: 'review' },
+      { role: 'tech-lead', stage: 'diff-review' },
       { role: 'designer', stage: 'design' },
     ]);
     expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
@@ -3883,6 +4434,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead',
       'coder',
       'reviewer',
+      'tech-lead',
       'designer',
     ]);
     expect(transitions.map((event) => event.data?.['transition'])).toEqual([
@@ -3890,6 +4442,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead-test-review',
       'coder-implementation',
       'reviewer-review',
+      'tech-lead-diff-review',
       'designer-review',
     ]);
     expect(transitions.map((event) => event.data?.['fromRole'])).toEqual([
@@ -3898,6 +4451,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead',
       'coder',
       'reviewer',
+      'tech-lead',
     ]);
     expect(transitions.every((event) => event.kind === 'activity')).toBe(true);
     expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
@@ -3931,6 +4485,7 @@ describe('team-task-workflow — execution observability', () => {
       gate: event.data?.['gate'],
     }))).toEqual([
       { role: 'tech-lead', verdict: 'pass', gate: 'test-intent' },
+      { role: 'qa', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
       { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'designer', verdict: 'pass', gate: 'design-review' },

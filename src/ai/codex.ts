@@ -36,7 +36,11 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
-import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
+import {
+  registerActiveProcess,
+  signalActiveProcess,
+  unregisterActiveProcess,
+} from './claude.js';
 import { scrubPathsInText } from './tool-labels.js';
 import {
   getCancellation,
@@ -495,6 +499,8 @@ interface RunCodexBaseOpts {
   agentName?: string;
   /** Optional product scope attached to the operation feed. */
   product?: string;
+  /** Internal correlation for bounded sibling operations; never user-facing. */
+  batchId?: string;
   /** Raw `-c key=value` overrides passed as separate argv values. Sandboxed
    * artifact callers use this to replace the complete `mcp_servers` table. */
   configOverrides?: string[];
@@ -621,13 +627,15 @@ export async function runCodex(
     const child = spawn(command, commandArgs, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Allow correlated judgment cleanup to signal the complete CLI tree.
+      detached: process.platform !== 'win32',
       // Default inherits env so OPENAI_API_KEY, CODEX_HOME, etc. reach the
       // child. Sandbox callers must pass an explicit `opts.env` built via
       // `buildSandboxEnv` — see the JSDoc on `RunCodexOpts.env`.
       env: opts.env ?? { ...process.env },
     });
 
-    registerActiveProcess(child);
+    registerActiveProcess(child, process.platform !== 'win32');
     const op = opts.opLabel ? registerOp({
       kind: opts.opKind ?? 'chat',
       label: opts.opLabel,
@@ -635,6 +643,8 @@ export async function runCodex(
       ...(opts.product ? { scope: opts.product } : {}),
       userId: config.TELEGRAM_USER_ID,
       child,
+      ...(opts.batchId ? { batchId: opts.batchId } : {}),
+      ...(process.platform !== 'win32' ? { processGroup: true } : {}),
     }) : null;
 
     let stdout = '';
@@ -689,7 +699,7 @@ export async function runCodex(
 
     const timer = setTimeout(() => {
       log.warn('codex exec timed out; sending SIGTERM', { timeoutMs: timeout });
-      child.kill('SIGTERM');
+      signalActiveProcess(child, 'SIGTERM');
       // The timeout-killed close handler below resolves the promise with a
       // timeout error; this only signals the child.
     }, timeout);

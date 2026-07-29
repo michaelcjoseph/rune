@@ -22,6 +22,19 @@ export type ExecutionRetryDisposition =
   | 'worktree-changed'
   | 'cancelled';
 
+export interface JudgmentBatchCheckpointMember {
+  role: string;
+  provider: DispatchProvider;
+  format: 'claude' | 'codex';
+  model: string;
+  workflowStage: string;
+}
+
+export interface JudgmentBatchCheckpoint {
+  batchId: string;
+  members: JudgmentBatchCheckpointMember[];
+}
+
 export interface ExecutionCheckpoint {
   taskId: string;
   role: string;
@@ -30,6 +43,10 @@ export interface ExecutionCheckpoint {
   model: string;
   workflowStage: string;
   checkpointedAt: string;
+  /** Bounded active-role set for a concurrent post-coder judgment batch.
+   * Scalar role/model fields remain a stable recovery attribution anchor for
+   * historical consumers; this set is the truthful concurrent cursor. */
+  judgmentBatch?: JudgmentBatchCheckpoint;
 }
 
 export interface ExecutionAttempt {
@@ -128,7 +145,31 @@ export function isExecutionCheckpoint(value: unknown): value is ExecutionCheckpo
     (v['provider'] === 'anthropic' || v['provider'] === 'openai') &&
     (v['format'] === 'claude' || v['format'] === 'codex') &&
     boundedString(v['model'], 256) && boundedString(v['workflowStage'], 256) &&
-    boundedString(v['checkpointedAt'], 128);
+    boundedString(v['checkpointedAt'], 128) &&
+    (v['judgmentBatch'] === undefined || isJudgmentBatchCheckpoint(v['judgmentBatch']));
+}
+
+function isJudgmentBatchCheckpoint(value: unknown): value is JudgmentBatchCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (!boundedString(v['batchId'], 128) || !Array.isArray(v['members'])) return false;
+  if (v['members'].length < 3 || v['members'].length > 4) return false;
+  const roles = new Set<string>();
+  for (const member of v['members']) {
+    if (!member || typeof member !== 'object' || Array.isArray(member)) return false;
+    const m = member as Record<string, unknown>;
+    if (
+      !boundedString(m['role'], 128) ||
+      (m['provider'] !== 'anthropic' && m['provider'] !== 'openai') ||
+      (m['format'] !== 'claude' && m['format'] !== 'codex') ||
+      !boundedString(m['model'], 256) ||
+      !boundedString(m['workflowStage'], 256)
+    ) {
+      return false;
+    }
+    roles.add(m['role']);
+  }
+  return roles.size === v['members'].length;
 }
 
 export function isExecutionFailure(value: unknown): value is ExecutionFailure {

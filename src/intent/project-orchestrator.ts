@@ -53,8 +53,10 @@ import {
 } from './finalizer-handoff.js';
 import {
   buildGateRejectionFeedback,
+  isGitObjectId,
   type FindingSourceGate,
   type GateRejectionFeedback,
+  type JudgmentOutcomeEvidence,
   type ObjectionFinding,
   type ObjectionSeverity,
   type RoleCancellation,
@@ -114,6 +116,11 @@ export type CloseoutCheckResult =
   | { ok: true; relatedTestDiagnostic?: RelatedTestDiagnostic }
   | { ok: false; failure: CloseoutCheckFailure };
 
+export interface TaskBaseRecord {
+  taskId: string;
+  treeOid: string;
+}
+
 export interface OrchestrationRunCursor {
   runId: string;
   product: string;
@@ -127,6 +134,9 @@ export interface OrchestrationRunCursor {
     currentTaskId: string | null;
     nextTaskId: string | null;
   };
+  /** Stable pre-mutation tree for the in-progress task. Optional for legacy
+   * cursors and absent between tasks. */
+  taskBase?: TaskBaseRecord;
   executionCheckpoint?: ExecutionCheckpoint;
 }
 
@@ -175,13 +185,22 @@ export interface OrchestrationDeps {
   readTasksMd: () => Promise<string>;
   readContextMd: () => Promise<string>;
   readSpec: () => Promise<string>;
+  /** Capture a clean task-start tree, or verify/reuse the durable tree during
+   * recovery. This must not derive a baseline from a dirty worktree. */
+  captureTaskBase: (task: SelectedTask) => Promise<TaskBaseRecord>;
 
   // --- per-task workflow (wraps team-task-workflow in production) ---
   /** `rejectionFeedback` is set only on closeout-repair re-runs — the failing
    *  validation output threaded back to the coder as gate feedback. */
   runTaskWorkflow: (
     task: SelectedTask,
-    ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
+    ctx: {
+      handoff: string;
+      contextMd: string;
+      taskBase: TaskBaseRecord;
+      workflowAttempt: number;
+      rejectionFeedback?: GateRejectionFeedback;
+    },
   ) => Promise<TaskEvidence>;
 
   // --- closeout effects ---
@@ -236,6 +255,8 @@ export type OrchestrationResult =
       source?: MutationCancellationSource;
       /** Present when cancellation originated in a nested team role. */
       cancellation?: RoleCancellation;
+      /** Stable secondary outcomes from a cancelled judgment fan-out. */
+      judgmentOutcomes?: JudgmentOutcomeEvidence[];
     };
 
 export interface ParkedTaskRun {
@@ -314,15 +335,28 @@ async function runProjectOrchestrationImpl(
 
     const task = selection.task;
     emitTaskSelected(deps, task);
-    // Task-start cursor: written before any work so a restart mid-task (the
-    // previously-unprotected first-task window) is resumable instead of
-    // orphaned/parked. Best-effort — see persistTaskStartCursorSafely.
-    await persistTaskStartCursorSafely(deps, taskRecords, tasksMd, task);
+    const preparedBase = await prepareAndPersistTaskBase(
+      deps,
+      taskRecords,
+      tasksMd,
+      task,
+    );
+    if (preparedBase.kind === 'blocked') {
+      return buildOperationalHold(deps, preparedBase.reason, taskRecords);
+    }
+    const taskBase = preparedBase.taskBase;
     const contextMd = await deps.readContextMd();
 
     const spec = await deps.readSpec();
     const assembled = assembleTaskContext({ task, contextMd, spec });
-    let evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd, 1);
+    let evidence = await runTaskWorkflow(
+      deps,
+      task,
+      assembled.handoff,
+      contextMd,
+      taskBase,
+      1,
+    );
     // Sentinel only for definite assignment — every loop path assigns or returns.
     let closeout: CloseoutResult = { kind: 'blocked', reason: 'closeout not attempted' };
     for (let attempt = 1; attempt <= 1 + CLOSEOUT_REPAIR_CAP; attempt++) {
@@ -330,7 +364,40 @@ async function runProjectOrchestrationImpl(
       if (cancelledAfterWorkflow) return cancelledAfterWorkflow;
 
       if (evidence.outcome !== 'ready-for-closeout') {
-        return resolveNonCloseoutEvidence(deps, task, evidence, taskRecords);
+        let recordingFailure: string | undefined;
+        if (evidence.outcome === 'blocked' || evidence.outcome === 'failed') {
+          const terminalRecord = taskRecordFromEvidence(
+            deps,
+            task,
+            evidence,
+            null,
+            'unchanged',
+          );
+          try {
+            await deps.appendTaskRunRecord?.(terminalRecord);
+            taskRecords.push(terminalRecord);
+          } catch (err) {
+            recordingFailure =
+              (err as Error).message.trim() || 'unknown terminal evidence write failure';
+          }
+        }
+        // Classify BEFORE reacting to a failed durable write. Classification is
+        // what runs `recordTerminalBugs`, so returning early on the write
+        // failure would drop bug tracking for a non-reversible severe finding
+        // in exactly the compound-failure case where the operator most needs
+        // it. Both outcomes hold and preserve the branch/worktree either way,
+        // so the two failures compose rather than one masking the other.
+        const resolved = await resolveNonCloseoutEvidence(deps, task, evidence, taskRecords);
+        if (recordingFailure === undefined) return resolved;
+        const classified = resolved.kind === 'finalized' ? undefined : resolved.reason;
+        return buildOperationalHold(
+          deps,
+          `operational recording failure: ${recordingFailure}` +
+            (classified !== undefined && classified !== ''
+              ? `; terminal classification: ${classified}`
+              : ''),
+          taskRecords,
+        );
       }
 
       // Mechanical validation is a separate gate. Closeout itself is not
@@ -375,6 +442,7 @@ async function runProjectOrchestrationImpl(
         task,
         assembled.handoff,
         contextMd,
+        taskBase,
         attempt + 1,
         buildCloseoutRepairFeedback(closeout.closeoutFailure),
       );
@@ -450,29 +518,13 @@ async function runProjectOrchestrationImpl(
       return buildOperationalHold(deps, closeout.reason, taskRecords);
     }
 
-    const taskRecord = buildTaskRunRecord({
-      taskId: task.id,
-      taskText: task.text,
-      attemptId: `${deps.runId}-${task.id}`,
-      rolesInvoked: evidence.rolesInvoked,
-      transcriptIds: [],
-      modelChoices: {},
-      commitSha: closeout.commitSha,
-      verdicts: evidence.reviewerVerdict
-        ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
-        : {},
-      ...warningsField(evidence),
-      ...acceptanceField(evidence),
-      ...(evidence.coderSelfReviews !== undefined
-        ? { coderSelfReviews: evidence.coderSelfReviews }
-        : {}),
-      ...(evidence.relatedTestDiagnostic !== undefined
-        ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
-        : {}),
-      contextOutcome: 'updated',
-      gates: { objectionOpen: evidence.objectionOpen },
-      outcome: 'ready-for-closeout',
-    });
+    const taskRecord = taskRecordFromEvidence(
+      deps,
+      task,
+      evidence,
+      closeout.commitSha,
+      'updated',
+    );
     taskRecords.push(taskRecord);
     const checkpoint = await persistRunCheckpoint(
       deps,
@@ -531,15 +583,24 @@ function cancellationAfterWorkflow(
 ): Extract<OrchestrationResult, { kind: 'cancelled' }> | null {
   const cancellation = cancellationResult(deps, task);
   if (!cancellation) return null;
+  const withEvidence = {
+    ...cancellation,
+    ...(evidence.cancellation !== undefined
+      ? { cancellation: evidence.cancellation }
+      : {}),
+    ...(evidence.judgmentOutcomes !== undefined
+      ? { judgmentOutcomes: evidence.judgmentOutcomes }
+      : {}),
+  };
   if (
     cancellation.reason !== 'system' ||
     evidence.outcome !== 'ready-for-closeout'
   ) {
-    return cancellation;
+    return withEvidence;
   }
 
   const source = deps.cancelSource?.() ?? null;
-  if (!isRevocableMutationCancellationSource(source)) return cancellation;
+  if (!isRevocableMutationCancellationSource(source)) return withEvidence;
   const superseded = deps.supersedeSystemCancellation?.() ?? null;
   if (superseded === null) {
     // The request may have become user/shutdown/recovery cancellation between
@@ -561,11 +622,18 @@ async function runTaskWorkflow(
   task: SelectedTask,
   handoff: string,
   contextMd: string,
+  taskBase: TaskBaseRecord,
   attemptNumber: number,
   rejectionFeedback?: GateRejectionFeedback,
 ): Promise<TaskEvidence> {
   emitAttemptStart(deps, task, attemptNumber);
-  return deps.runTaskWorkflow(task, { handoff, contextMd, rejectionFeedback });
+  return deps.runTaskWorkflow(task, {
+    handoff,
+    contextMd,
+    taskBase,
+    workflowAttempt: attemptNumber,
+    rejectionFeedback,
+  });
 }
 
 type CloseoutResult =
@@ -707,6 +775,7 @@ function buildRunCursor(
   taskRecords: TaskRunRecord[],
   tasksMd: string,
   currentTask?: SelectedTask,
+  taskBase?: TaskBaseRecord,
 ): OrchestrationRunCursor {
   const next = selectNextTask(tasksMd);
   return {
@@ -728,28 +797,60 @@ function buildRunCursor(
       currentTaskId: currentTask?.id ?? null,
       nextTaskId: next.kind === 'task' ? next.task.id : null,
     },
+    ...(taskBase !== undefined ? { taskBase: { ...taskBase } } : {}),
   };
 }
 
-/** Best-effort task-start cursor write — its existence is what makes a
- *  mid-task restart findable by boot recovery (a missing cursor orphans the
- *  run; the identity fields never change mid-run, so even a stale cursor
- *  resumes correctly). Follows the commitWipSafely precedent: a failed write
- *  must not sink a run that has done no work yet — proceeding risks only the
- *  pre-cursor status quo (shutdown park / orphan). Contrast
- *  persistRunCheckpoint (closeout), which stays fail-closed because it
- *  persists the completion facts recovery reconstructs from. */
-async function persistTaskStartCursorSafely(
+async function prepareAndPersistTaskBase(
   deps: OrchestrationDeps,
   taskRecords: TaskRunRecord[],
   tasksMd: string,
   task: SelectedTask,
-): Promise<void> {
+): Promise<
+  | { kind: 'ok'; taskBase: TaskBaseRecord }
+  | { kind: 'blocked'; reason: string }
+> {
   try {
-    await deps.writeRunCursor?.(buildRunCursor(deps, taskRecords, tasksMd, task));
-  } catch {
-    /* best-effort: recovery falls back to the shutdown parker / orphan path */
+    const taskBase = await deps.captureTaskBase(task);
+    if (
+      taskBase.taskId !== task.id ||
+      typeof taskBase.treeOid !== 'string' ||
+      !isGitObjectId(taskBase.treeOid)
+    ) {
+      throw new Error('task-base capture returned an invalid task/tree identity');
+    }
+    if (deps.writeRunCursor === undefined) {
+      throw new Error('durable run cursor writer is unavailable');
+    }
+    await deps.writeRunCursor(
+      buildRunCursor(deps, taskRecords, tasksMd, task, taskBase),
+    );
+    emitTaskBaseCaptured(deps, taskBase);
+    return { kind: 'ok', taskBase };
+  } catch (err) {
+    const message = scrubAbsolutePaths(
+      (err as Error).message.trim() || 'unknown task-base capture failure',
+    );
+    return {
+      kind: 'blocked',
+      reason: `task-base checkpoint failed before task mutation: ${message}`,
+    };
   }
+}
+
+function emitTaskBaseCaptured(
+  deps: OrchestrationDeps,
+  taskBase: TaskBaseRecord,
+): void {
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'task-base-captured',
+      taskId: taskBase.taskId,
+      taskBaseTree: taskBase.treeOid,
+      line: `captured durable task base for ${taskBase.taskId}`,
+    },
+  });
 }
 
 function emitTaskSelected(deps: OrchestrationDeps, task: SelectedTask): void {
@@ -910,6 +1011,53 @@ function acceptanceField(
   return { acceptance: evidence.acceptance };
 }
 
+function taskRecordFromEvidence(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  evidence: TaskEvidence,
+  commitSha: string | null,
+  contextOutcome: TaskRunRecord['contextOutcome'],
+): TaskRunRecord {
+  if (evidence.outcome === 'cancelled') {
+    throw new Error('cancelled task evidence cannot be persisted as a task run record');
+  }
+  return buildTaskRunRecord({
+    taskId: task.id,
+    taskText: task.text,
+    attemptId: `${deps.runId}-${task.id}`,
+    rolesInvoked: evidence.rolesInvoked,
+    transcriptIds: [],
+    modelChoices: {},
+    commitSha,
+    verdicts: evidence.reviewerVerdict
+      ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
+      : {},
+    ...warningsField(evidence),
+    ...acceptanceField(evidence),
+    ...(evidence.coderSelfReviews !== undefined
+      ? { coderSelfReviews: evidence.coderSelfReviews }
+      : {}),
+    ...(evidence.relatedTestDiagnostic !== undefined
+      ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
+      : {}),
+    ...(evidence.judgmentOutcomes !== undefined
+      ? { judgmentOutcomes: evidence.judgmentOutcomes }
+      : {}),
+    ...(evidence.taskBaseTree !== undefined
+      ? { taskBaseTree: evidence.taskBaseTree }
+      : {}),
+    ...(evidence.currentReviewTree !== undefined
+      ? { currentReviewTree: evidence.currentReviewTree }
+      : {}),
+    ...(evidence.fullTaskReviewHash !== undefined
+      ? { fullTaskReviewHash: evidence.fullTaskReviewHash }
+      : {}),
+    contextOutcome,
+    gates: { objectionOpen: evidence.objectionOpen },
+    outcome: evidence.outcome,
+  });
+}
+
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
   return evidence.executionFailure !== undefined;
 }
@@ -929,6 +1077,9 @@ async function resolveNonCloseoutEvidence(
       reason: evidence.cancellation.source === 'internal' ? 'system' : 'user',
       task,
       cancellation: evidence.cancellation,
+      ...(evidence.judgmentOutcomes !== undefined
+        ? { judgmentOutcomes: evidence.judgmentOutcomes }
+        : {}),
     };
   }
   if (hasNonReversibleSevereTerminalFinding(evidence)) {
