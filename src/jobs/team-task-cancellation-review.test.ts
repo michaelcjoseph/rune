@@ -86,6 +86,35 @@ beforeEach(() => {
 });
 
 describe('production judgment cancellation conversion', () => {
+  it('threads internal batch correlation through a Claude judgment operation', async () => {
+    mockAskClaudeWithContext.mockResolvedValue({
+      text: [
+        '```qa-diff-revalidation',
+        '{"approved":true,"notes":"matches"}',
+        '```',
+      ].join('\n'),
+      error: null,
+    });
+
+    await deps(models({ qa: claudeModel })).qaRevalidateDiff?.({
+      task,
+      qa: { kind: 'tests-written', testIds: ['src/demo.test.ts'] },
+      diff: 'diff',
+      spec: 'spec',
+      context: 'context',
+      judgmentBatchId: 'judgment-batch-claude',
+    });
+
+    expect(mockAskClaudeWithContext).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        batchId: 'judgment-batch-claude',
+      }),
+    );
+  });
+
   it('converts Claude tech-lead cancellation metadata into a typed role cancellation', async () => {
     mockAskClaudeWithContext.mockResolvedValue({
       text: null,
@@ -132,6 +161,7 @@ describe('production judgment cancellation conversion', () => {
       task,
       context: 'context',
       reviewerProvider: 'openai',
+      judgmentBatchId: 'judgment-batch-codex',
     });
 
     await expect(pending).rejects.toMatchObject({
@@ -147,6 +177,7 @@ describe('production judgment cancellation conversion', () => {
         opKind: 'agent',
         agentName: 'reviewer',
         product: 'rune',
+        batchId: 'judgment-batch-codex',
       }),
     );
     expect(mockAskClaudeWithContext).not.toHaveBeenCalled();

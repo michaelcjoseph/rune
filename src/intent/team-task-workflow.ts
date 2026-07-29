@@ -9,10 +9,10 @@
  *     → tech lead reviews test intent  (BEFORE the coder)
  *     → [round loop, bounded by cap]
  *         coder implements
- *         → independent-provider reviewer reviews diff/spec/tests/task/context
+ *         → coder self-review + canonical Git capture
+ *         → QA/reviewer/tech-lead/(conditional) designer judge concurrently
+ *         → verdicts/findings merge in stable role order
  *         → open objection-class finding ⇒ hard block (PM can't clear it)
- *         → tech lead reviews the diff
- *         → designer reviews IFF the sizing flagged front-end/designer-needed
  *         → all gates green ⇒ ready-for-closeout
  *     → cap reached: return machine terminal evidence; never PM wrap-up /
  *       blocked-on-human from a per-task path
@@ -22,6 +22,7 @@
  * with no live model call.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { SizedTask } from './planning-roles.js';
 import type { TaskValidationFailure } from './task-validation.js';
 import type { DispatchProvider } from './dispatch.js';
@@ -33,6 +34,7 @@ import {
   type ExecutionFailure,
 } from './execution-failure.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -305,6 +307,33 @@ export interface ReviewerInput {
    *  (facts, never hidden reasoning); carries the TEST-REMOVED justifications
    *  the test-deletion guardrail keys on. */
   coderHandoffNotes?: string[];
+  judgmentContext?: JudgmentContext;
+  judgmentBatchId?: string;
+}
+
+export type JudgmentRole = 'qa' | 'reviewer' | 'tech-lead' | 'designer';
+
+/** One immutable canonical snapshot shared by every eligible post-coder
+ * judgment in a round. Role-specific legacy fields remain on each input for
+ * compatibility, but this object is the fan-out source of truth. */
+export interface JudgmentContext {
+  readonly task: SizedTask;
+  readonly spec: string;
+  readonly projectContext: string;
+  readonly tests: string[] | string;
+  readonly qa: QaResult;
+  readonly diff: string;
+  readonly reviewState: Omit<CanonicalReviewState, 'diff'>;
+  readonly findingsLedger: readonly FindingsLedgerEntry[];
+  readonly coderHandoffNotes: readonly string[];
+  readonly artifactPass: 'first-pass' | 'coder-retry' | 'closeout-retry';
+}
+
+export interface JudgmentOutcomeEvidence {
+  role: JudgmentRole;
+  status: 'pass' | 'reject' | 'failed' | 'cancelled';
+  /** Bounded, scrubbed by the role/provider boundary before it reaches here. */
+  summary?: string;
 }
 
 export type WorkflowActivityEvent = {
@@ -367,6 +396,8 @@ export interface TeamTaskDeps {
     context: string;
     reviewState?: Omit<CanonicalReviewState, 'diff'>;
     artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
+    judgmentContext?: JudgmentContext;
+    judgmentBatchId?: string;
   }) => Promise<{ approved: boolean; notes?: string }>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
@@ -379,12 +410,21 @@ export interface TeamTaskDeps {
      *  justifications the test-deletion guardrail keys on. */
     coderHandoffNotes?: string[];
     reviewState?: Omit<CanonicalReviewState, 'diff'>;
+    judgmentContext?: JudgmentContext;
+    judgmentBatchId?: string;
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
     diff: string;
     findingsLedger?: FindingsLedgerEntry[];
     reviewState?: Omit<CanonicalReviewState, 'diff'>;
+    spec?: string;
+    context?: string;
+    tests?: string[] | string;
+    qa?: QaResult;
+    coderHandoffNotes?: string[];
+    judgmentContext?: JudgmentContext;
+    judgmentBatchId?: string;
   }) => Promise<GateReviewVerdict>;
   pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
     resolved: boolean;
@@ -404,6 +444,12 @@ export interface TeamTaskDeps {
    *  available (executor down). Null ⇒ the task blocks — independence is
    *  fail-closed, never a silent same-provider review. */
   resolveReviewerProvider: (coderProvider: DispatchProvider) => DispatchProvider | null;
+  /** Best-effort internal cleanup for a failed judgment batch. */
+  cancelJudgmentBatch?: (batchId: string) => void;
+  /** Escalate a SIGTERM-ignoring judgment batch to process-group SIGKILL. */
+  forceCancelJudgmentBatch?: (batchId: string) => void;
+  /** Release internal cancellation correlation after every member settles. */
+  finishJudgmentBatch?: (batchId: string) => void | Promise<void>;
 }
 
 export interface TeamTaskRunInput {
@@ -490,6 +536,9 @@ export interface TaskEvidence {
     reason?: string;
     testIds?: string[];
   };
+  /** Latest post-coder batch outcomes in stable role order. Optional for
+   * historical evidence written before judgment fan-out. */
+  judgmentOutcomes?: JudgmentOutcomeEvidence[];
 }
 
 /** Run the team-task workflow for one selected task. */
@@ -516,6 +565,8 @@ export async function runTeamTaskWorkflow(
     TaskEvidence,
     'taskBaseTree' | 'currentReviewTree' | 'fullTaskReviewHash' | 'reviewSurfaceHash'
   > = {};
+  const findingsEvidence: FindingsLedgerEntry[] = [];
+  const judgmentOutcomes: JudgmentOutcomeEvidence[] = [];
 
   try {
     const evidence = await runGated(
@@ -527,11 +578,16 @@ export async function runTeamTaskWorkflow(
       repairEvidence,
       coderSelfReviews,
       reviewEvidence,
+      findingsEvidence,
+      judgmentOutcomes,
     );
     return {
       ...evidence,
       ...reviewEvidence,
       coderSelfReviews: [...coderSelfReviews],
+      ...(judgmentOutcomes.length > 0
+        ? { judgmentOutcomes: [...judgmentOutcomes] }
+        : {}),
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
         : {}),
@@ -545,10 +601,13 @@ export async function runTeamTaskWorkflow(
         objectionOpen: false,
         handoffNotes,
         cancellation: err.cancellation,
-        findingsLedger: [],
+        findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
         coderSelfReviews: [...coderSelfReviews],
+        ...(judgmentOutcomes.length > 0
+          ? { judgmentOutcomes: [...judgmentOutcomes] }
+          : {}),
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
           : {}),
@@ -563,10 +622,13 @@ export async function runTeamTaskWorkflow(
         handoffNotes,
         executionFailure: err.failure,
         failureReason: executionFailureSummary(err.failure),
-        findingsLedger: [],
+        findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
         coderSelfReviews: [...coderSelfReviews],
+        ...(judgmentOutcomes.length > 0
+          ? { judgmentOutcomes: [...judgmentOutcomes] }
+          : {}),
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
           : {}),
@@ -581,10 +643,13 @@ export async function runTeamTaskWorkflow(
       objectionOpen: false,
       handoffNotes,
       failureReason: (err as Error).message,
-      findingsLedger: [],
+      findingsLedger: [...findingsEvidence],
       loopExitReason: 'operational',
       ...reviewEvidence,
       coderSelfReviews: [...coderSelfReviews],
+      ...(judgmentOutcomes.length > 0
+        ? { judgmentOutcomes: [...judgmentOutcomes] }
+        : {}),
       ...(repairEvidence.testIntentRepair !== undefined
         ? { testIntentRepair: repairEvidence.testIntentRepair }
         : {}),
@@ -604,6 +669,8 @@ async function runGated(
     TaskEvidence,
     'taskBaseTree' | 'currentReviewTree' | 'fullTaskReviewHash' | 'reviewSurfaceHash'
   >,
+  findingsLedger: FindingsLedgerEntry[],
+  judgmentOutcomes: JudgmentOutcomeEvidence[],
 ): Promise<TaskEvidence> {
   // Gate 0: reviewer independence, resolved up-front and fail-closed — block
   // before any coder work rather than risk a same-provider review later.
@@ -777,6 +844,7 @@ async function runGated(
   let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
+  let lastQaDiffReview: { approved: boolean; notes?: string } | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
   let round = 0;
@@ -784,7 +852,6 @@ async function runGated(
   let flatMaxOpenSeverityRounds = 0;
   let continueConvergingPastConfiguredCap = false;
   let approvedReviewSurfaceHash: string | undefined;
-  const findingsLedger: FindingsLedgerEntry[] = [];
   const explicitNonReversibleFindingIds = new Set<string>();
   while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
     continueConvergingPastConfiguredCap = false;
@@ -862,42 +929,52 @@ async function runGated(
       changedPaths: reviewed.reviewState.changedPaths,
     };
 
-    const qaDiffReview = await revalidateQaDiff(deps, {
-      task,
-      qa,
-      diff: canonicalCoder.diff,
-      spec: input.spec,
-      context: input.contextMd,
-      reviewState,
-      artifactPass:
-        (input.workflowAttempt ?? 1) > 1
-          ? 'closeout-retry'
-          : round > 1
-            ? 'coder-retry'
-            : 'first-pass',
-    });
-    if (!qaDiffReview.approved) {
-      const reason = qaDiffReview.notes?.trim() ||
-        'QA test intent no longer matches the canonical implementation diff';
-      const feedback = buildGateRejectionFeedback({
-        rejectingRole: 'qa',
-        counterpartRole: 'coder',
-        artifact: 'implementation-diff',
-        reason,
-      });
-      await recordGateRejection(deps, feedback);
-      emitGateRejection(input, feedback);
-      return block(task, roles, handoffNotes, {
-        blockedReason: reason,
-        rejectionFeedback: feedback,
-        findingsLedger,
-        loopExitReason: 'operational',
-        noCodeTestRationale,
-      });
-    }
     handoffNotes.push(...canonicalCoder.handoffNotes);
     const roundFeedback: GateRejectionFeedback[] = [];
+    const roundFindingsLedger = openFindingsLedger(findingsLedger);
+    const artifactPass: JudgmentContext['artifactPass'] =
+      (input.workflowAttempt ?? 1) > 1
+        ? 'closeout-retry'
+        : round > 1
+          ? 'coder-retry'
+          : 'first-pass';
+    const judgmentTask = Object.freeze({
+      ...task,
+      roles: Object.freeze([...task.roles]) as unknown as SizedTask['roles'],
+    });
+    const judgmentQa: QaResult = qa.kind === 'tests-written'
+      ? Object.freeze({
+          kind: 'tests-written',
+          testIds: Object.freeze([...qa.testIds]) as unknown as string[],
+        })
+      : Object.freeze({ ...qa });
+    const judgmentTests = Array.isArray(tests)
+      ? Object.freeze([...tests]) as unknown as string[]
+      : tests;
+    const judgmentReviewState = Object.freeze({
+      ...reviewState,
+      changedPaths: Object.freeze([...reviewState.changedPaths]) as unknown as string[],
+    });
+    const judgmentContext: JudgmentContext = Object.freeze({
+      task: judgmentTask,
+      spec: input.spec,
+      projectContext: input.contextMd,
+      tests: judgmentTests,
+      qa: judgmentQa,
+      diff: canonicalCoder.diff,
+      reviewState: judgmentReviewState,
+      findingsLedger: Object.freeze(
+        roundFindingsLedger.map((finding) => Object.freeze({ ...finding })),
+      ),
+      coderHandoffNotes: Object.freeze([...canonicalCoder.handoffNotes]),
+      artifactPass,
+    });
+    const judgmentBatchId = randomUUID();
 
+    // Publish starts in canonical order before invoking any role. Completion
+    // order is deliberately invisible; verdict processing below uses this same
+    // order after every child has settled.
+    emitRoleStage(input, 'qa', 'diff-revalidation');
     roles.add('reviewer');
     previousRole = emitRoleTransition(
       input,
@@ -906,117 +983,13 @@ async function runGated(
       'review',
       'reviewer-review',
     );
-    const roundFindingsLedger = openFindingsLedger(findingsLedger);
-    const rawReviewerVerdict = await deps.reviewer({
-      diff: canonicalCoder.diff,
-      spec: input.spec,
-      tests,
-      task,
-      context: input.contextMd,
-      reviewerProvider,
-      reviewState,
-      ...(roundFindingsLedger.length > 0
-        ? { findingsLedger: roundFindingsLedger }
-        : {}),
-      ...(canonicalCoder.handoffNotes.length > 0
-        ? { coderHandoffNotes: canonicalCoder.handoffNotes }
-        : {}),
-    });
-    lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
-    mergeFindingsIntoLedger(
-      findingsLedger,
-      explicitNonReversibleFindingIds,
-      'reviewer',
-      lastReviewer.findings,
-      round,
-    );
-    applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
-    emitRoleVerdict(input, {
-      role: 'reviewer',
-      gate: 'reviewer-verdict',
-      verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
-      summary: summarizeReviewerVerdict(lastReviewer),
-    });
-    if (lastReviewer.operationalFailureReason !== undefined) {
-      const feedback = buildGateRejectionFeedback({
-        rejectingRole: 'reviewer',
-        counterpartRole: 'coder',
-        artifact: 'reviewer-verdict',
-        reason: lastReviewer.operationalFailureReason,
-      });
-      await recordGateRejection(deps, feedback);
-      emitGateRejection(input, feedback);
-      return fail(task, roles, handoffNotes, {
-        failureReason: lastReviewer.operationalFailureReason,
-        rejectionFeedback: feedback,
-        reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
-        findingsLedger,
-        loopExitReason: 'operational',
-        objectionOpen: false,
-        noCodeTestRationale,
-      });
-    }
-
-    if (!isReviewerPass(lastReviewer)) {
-      const feedback = buildGateRejectionFeedback({
-        rejectingRole: 'reviewer',
-        counterpartRole: 'coder',
-        artifact: 'reviewer-verdict',
-        reason: lastReviewer.findings.length > 0
-          ? summarizeReviewerVerdict(lastReviewer)
-          : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
-        actionableNotes: suggestedChangesFromVerdict(lastReviewer),
-      });
-      await recordGateRejection(deps, feedback);
-      lastRejectionFeedback = feedback;
-      roundFeedback.push(feedback);
-    }
-
-    lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({
-      task,
-      diff: canonicalCoder.diff,
-      spec: input.spec,
-      context: input.contextMd,
-      reviewState,
-      ...(roundFindingsLedger.length > 0
-        ? { findingsLedger: roundFindingsLedger }
-        : {}),
-      ...(canonicalCoder.handoffNotes.length > 0
-        ? { coderHandoffNotes: canonicalCoder.handoffNotes }
-        : {}),
-    }));
-    mergeFindingsIntoLedger(
-      findingsLedger,
-      explicitNonReversibleFindingIds,
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
       'tech-lead',
-      lastTechLeadDiff.findings,
-      round,
+      'diff-review',
+      'tech-lead-diff-review',
     );
-    emitRoleVerdict(input, {
-      role: 'tech-lead',
-      gate: 'implementation-diff',
-      verdict: isGatePass(lastTechLeadDiff) ? 'pass' : 'fail',
-      summary: lastTechLeadDiff.notes?.trim() || (isGatePass(lastTechLeadDiff)
-        ? 'tech-lead approved implementation diff'
-        : 'tech-lead rejected implementation diff'),
-    });
-    if (!isGatePass(lastTechLeadDiff)) {
-      const feedback = buildGateRejectionFeedback({
-        rejectingRole: 'tech-lead',
-        counterpartRole: 'coder',
-        artifact: 'implementation-diff',
-        reason: lastTechLeadDiff.findings.length > 0
-          ? summarizeObjections(lastTechLeadDiff.findings)
-          : lastTechLeadDiff.notes ?? 'tech-lead did not pass the implementation diff',
-        actionableNotes: suggestedChangesFromVerdict(lastTechLeadDiff),
-      });
-      await recordGateRejection(deps, feedback);
-      lastRejectionFeedback = feedback;
-      roundFeedback.push(feedback);
-    }
-
-    lastDesigner = undefined;
     if (task.designerNeeded) {
       roles.add('designer');
       previousRole = emitRoleTransition(
@@ -1026,14 +999,336 @@ async function runGated(
         'design',
         'designer-review',
       );
-      lastDesigner = normalizeGateVerdict(await deps.designer({
-        task,
-        diff: canonicalCoder.diff,
-        reviewState,
-        ...(roundFindingsLedger.length > 0
-          ? { findingsLedger: roundFindingsLedger }
-          : {}),
-      }));
+    }
+
+    let cleanupRequested = false;
+    let cleanupRequestedAt = '';
+    let releaseCleanupRequest: (() => void) | undefined;
+    const cleanupRequest = new Promise<void>((resolve) => {
+      releaseCleanupRequest = resolve;
+    });
+    const requestCleanup = (): void => {
+      if (cleanupRequested) return;
+      cleanupRequested = true;
+      cleanupRequestedAt = new Date().toISOString();
+      deps.cancelJudgmentBatch?.(judgmentBatchId);
+      releaseCleanupRequest?.();
+    };
+    const startJudgment = <T>(
+      call: () => Promise<T>,
+    ): Promise<T> => Promise.resolve().then(call).catch((err) => {
+      requestCleanup();
+      throw err;
+    });
+    const judgmentCalls: Array<{
+      role: JudgmentRole;
+      promise: Promise<unknown>;
+    }> = [
+      {
+        role: 'qa',
+        promise: startJudgment(() => revalidateQaDiff(deps, {
+          task,
+          qa,
+          diff: judgmentContext.diff,
+          spec: judgmentContext.spec,
+          context: judgmentContext.projectContext,
+          reviewState: judgmentContext.reviewState,
+          artifactPass: judgmentContext.artifactPass,
+          judgmentContext,
+          judgmentBatchId,
+        })),
+      },
+      {
+        role: 'reviewer',
+        promise: startJudgment(() => deps.reviewer({
+          diff: judgmentContext.diff,
+          spec: judgmentContext.spec,
+          tests: judgmentContext.tests,
+          task: judgmentContext.task,
+          context: judgmentContext.projectContext,
+          reviewerProvider,
+          reviewState: judgmentContext.reviewState,
+          judgmentContext,
+          judgmentBatchId,
+          ...(roundFindingsLedger.length > 0
+            ? { findingsLedger: [...judgmentContext.findingsLedger] }
+            : {}),
+          ...(canonicalCoder.handoffNotes.length > 0
+            ? { coderHandoffNotes: [...judgmentContext.coderHandoffNotes] }
+            : {}),
+        })),
+      },
+      {
+        role: 'tech-lead',
+        promise: startJudgment(() => deps.techLeadReviewDiff({
+          task: judgmentContext.task,
+          diff: judgmentContext.diff,
+          spec: judgmentContext.spec,
+          context: judgmentContext.projectContext,
+          reviewState: judgmentContext.reviewState,
+          judgmentContext,
+          judgmentBatchId,
+          ...(roundFindingsLedger.length > 0
+            ? { findingsLedger: [...judgmentContext.findingsLedger] }
+            : {}),
+          ...(canonicalCoder.handoffNotes.length > 0
+            ? { coderHandoffNotes: [...judgmentContext.coderHandoffNotes] }
+            : {}),
+        })),
+      },
+      ...(task.designerNeeded
+        ? [{
+            role: 'designer' as const,
+            promise: startJudgment(() => deps.designer({
+              task: judgmentContext.task,
+              diff: judgmentContext.diff,
+              spec: judgmentContext.spec,
+              context: judgmentContext.projectContext,
+              tests: judgmentContext.tests,
+              qa: judgmentContext.qa,
+              reviewState: judgmentContext.reviewState,
+              coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
+              judgmentContext,
+              judgmentBatchId,
+              ...(roundFindingsLedger.length > 0
+                ? { findingsLedger: [...judgmentContext.findingsLedger] }
+                : {}),
+            })),
+          }]
+        : []),
+    ];
+    const partiallySettled = new Map<
+      JudgmentRole,
+      PromiseSettledResult<unknown>
+    >();
+    const allSettled = Promise.all(judgmentCalls.map(async ({ role, promise }) => {
+      let result: PromiseSettledResult<unknown>;
+      try {
+        result = { status: 'fulfilled', value: await promise };
+      } catch (reason) {
+        result = { status: 'rejected', reason };
+      }
+      partiallySettled.set(role, result);
+      return result;
+    }));
+    let cancelGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
+    let finishFailure: unknown;
+    const cleanupDeadline = new Promise<'deadline'>((resolve) => {
+      void cleanupRequest.then(() => {
+        cancelGraceTimer = setTimeout(() => {
+          deps.forceCancelJudgmentBatch?.(judgmentBatchId);
+          forceSettleTimer = setTimeout(
+            () => resolve('deadline'),
+            JUDGMENT_FORCE_SETTLE_GRACE_MS,
+          );
+        }, JUDGMENT_CANCEL_GRACE_MS);
+      });
+    });
+    let settled: PromiseSettledResult<unknown>[];
+    try {
+      const completion = await Promise.race([
+        allSettled.then((results) => ({ kind: 'settled' as const, results })),
+        cleanupDeadline.then(() => ({ kind: 'deadline' as const })),
+      ]);
+      settled = completion.kind === 'settled'
+        ? completion.results
+        : judgmentCalls.map(({ role }) => partiallySettled.get(role) ?? {
+            status: 'rejected',
+            reason: new RoleCancellationError(role, {
+              operationId: judgmentBatchId,
+              source: 'internal',
+              requestedAt: cleanupRequestedAt,
+            }),
+          });
+    } finally {
+      if (cancelGraceTimer !== undefined) clearTimeout(cancelGraceTimer);
+      if (forceSettleTimer !== undefined) clearTimeout(forceSettleTimer);
+      try {
+        await deps.finishJudgmentBatch?.(judgmentBatchId);
+      } catch (err) {
+        finishFailure = err;
+      }
+    }
+    if (
+      finishFailure !== undefined &&
+      !settled.some((result) => result.status === 'rejected')
+    ) {
+      throw finishFailure;
+    }
+    const settledByRole = new Map(
+      judgmentCalls.map((call, index) => [call.role, settled[index]!] as const),
+    );
+    const rejected = judgmentCalls.flatMap(({ role }, index) => {
+      const result = settled[index]!;
+      return result.status === 'rejected' ? [{ role, reason: result.reason }] : [];
+    });
+    const externalCancellation = rejected.find(
+      ({ reason }) =>
+        reason instanceof RoleCancellationError &&
+        reason.cancellation.source !== 'internal',
+    );
+    const primaryFailure = externalCancellation ??
+      rejected.find(({ reason }) => !(reason instanceof RoleCancellationError)) ??
+      rejected[0];
+
+    const qaSettled = settledByRole.get('qa');
+    const reviewerSettled = settledByRole.get('reviewer');
+    const techLeadSettled = settledByRole.get('tech-lead');
+    const designerSettled = settledByRole.get('designer');
+    const qaDiffReview = qaSettled?.status === 'fulfilled'
+      ? qaSettled.value as Awaited<ReturnType<typeof revalidateQaDiff>>
+      : undefined;
+    lastQaDiffReview = qaDiffReview;
+    const rawReviewerVerdict = reviewerSettled?.status === 'fulfilled'
+      ? reviewerSettled.value as ReviewerVerdict
+      : undefined;
+    lastReviewer = rawReviewerVerdict === undefined
+      ? undefined
+      : normalizeReviewerVerdict(rawReviewerVerdict);
+    lastTechLeadDiff = techLeadSettled?.status === 'fulfilled'
+      ? normalizeGateVerdict(techLeadSettled.value as GateReviewVerdict)
+      : undefined;
+    lastDesigner = designerSettled?.status === 'fulfilled'
+      ? normalizeGateVerdict(designerSettled.value as GateReviewVerdict)
+      : undefined;
+
+    judgmentOutcomes.splice(0, judgmentOutcomes.length, ...judgmentCalls.map(({ role }, index) => {
+      const result = settled[index]!;
+      if (result.status === 'rejected') {
+        const cancelled = result.reason instanceof RoleCancellationError;
+        return {
+          role,
+          status: cancelled ? 'cancelled' : 'failed',
+          summary: boundedJudgmentSummary((result.reason as Error).message),
+        } satisfies JudgmentOutcomeEvidence;
+      }
+      if (role === 'qa') {
+        const verdict = result.value as { approved: boolean; notes?: string };
+        return {
+          role,
+          status: verdict.approved ? 'pass' : 'reject',
+          ...(verdict.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
+        } satisfies JudgmentOutcomeEvidence;
+      }
+      const verdict = role === 'reviewer'
+        ? lastReviewer
+        : role === 'tech-lead'
+          ? lastTechLeadDiff
+          : lastDesigner;
+      if (role === 'reviewer' && lastReviewer?.operationalFailureReason !== undefined) {
+        return {
+          role,
+          status: 'failed',
+          summary: boundedJudgmentSummary(lastReviewer.operationalFailureReason),
+        } satisfies JudgmentOutcomeEvidence;
+      }
+      return {
+        role,
+        status: isGatePass(verdict) ? 'pass' : 'reject',
+        ...(verdict?.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
+      } satisfies JudgmentOutcomeEvidence;
+    }));
+
+    // Consume completed results before surfacing the stable primary operational
+    // failure so bounded sibling outcomes and findings remain durable.
+    if (qaDiffReview !== undefined) {
+      emitRoleVerdict(input, {
+        role: 'qa',
+        gate: 'implementation-diff',
+        verdict: qaDiffReview.approved ? 'pass' : 'fail',
+        summary: qaDiffReview.notes?.trim() || (qaDiffReview.approved
+          ? 'QA approved the canonical implementation diff'
+          : 'QA test intent no longer matches the canonical implementation diff'),
+      });
+      if (!qaDiffReview.approved) {
+        const feedback = buildGateRejectionFeedback({
+          rejectingRole: 'qa',
+          counterpartRole: 'coder',
+          artifact: 'implementation-diff',
+          reason: qaDiffReview.notes?.trim() ||
+            'QA test intent no longer matches the canonical implementation diff',
+        });
+        await recordGateRejection(deps, feedback);
+        emitGateRejection(input, feedback);
+        lastRejectionFeedback = feedback;
+        roundFeedback.push(feedback);
+      }
+    }
+    let reviewerOperationalFeedback: GateRejectionFeedback | undefined;
+    if (lastReviewer !== undefined) {
+      mergeFindingsIntoLedger(
+        findingsLedger,
+        explicitNonReversibleFindingIds,
+        'reviewer',
+        lastReviewer.findings,
+        round,
+      );
+      applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
+      emitRoleVerdict(input, {
+        role: 'reviewer',
+        gate: 'reviewer-verdict',
+        verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
+        summary: summarizeReviewerVerdict(lastReviewer),
+      });
+      if (lastReviewer.operationalFailureReason !== undefined) {
+        reviewerOperationalFeedback = buildGateRejectionFeedback({
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          artifact: 'reviewer-verdict',
+          reason: lastReviewer.operationalFailureReason,
+        });
+        await recordGateRejection(deps, reviewerOperationalFeedback);
+        emitGateRejection(input, reviewerOperationalFeedback);
+      } else if (!isReviewerPass(lastReviewer)) {
+        const feedback = buildGateRejectionFeedback({
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          artifact: 'reviewer-verdict',
+          reason: lastReviewer.findings.length > 0
+            ? summarizeReviewerVerdict(lastReviewer)
+            : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
+          actionableNotes: suggestedChangesFromVerdict(lastReviewer),
+        });
+        await recordGateRejection(deps, feedback);
+        emitGateRejection(input, feedback);
+        lastRejectionFeedback = feedback;
+        roundFeedback.push(feedback);
+      }
+    }
+    if (lastTechLeadDiff !== undefined) {
+      mergeFindingsIntoLedger(
+        findingsLedger,
+        explicitNonReversibleFindingIds,
+        'tech-lead',
+        lastTechLeadDiff.findings,
+        round,
+      );
+      emitRoleVerdict(input, {
+        role: 'tech-lead',
+        gate: 'implementation-diff',
+        verdict: isGatePass(lastTechLeadDiff) ? 'pass' : 'fail',
+        summary: lastTechLeadDiff.notes?.trim() || (isGatePass(lastTechLeadDiff)
+          ? 'tech-lead approved implementation diff'
+          : 'tech-lead rejected implementation diff'),
+      });
+      if (!isGatePass(lastTechLeadDiff)) {
+        const feedback = buildGateRejectionFeedback({
+          rejectingRole: 'tech-lead',
+          counterpartRole: 'coder',
+          artifact: 'implementation-diff',
+          reason: lastTechLeadDiff.findings.length > 0
+            ? summarizeObjections(lastTechLeadDiff.findings)
+            : lastTechLeadDiff.notes ?? 'tech-lead did not pass the implementation diff',
+          actionableNotes: suggestedChangesFromVerdict(lastTechLeadDiff),
+        });
+        await recordGateRejection(deps, feedback);
+        emitGateRejection(input, feedback);
+        lastRejectionFeedback = feedback;
+        roundFeedback.push(feedback);
+      }
+    }
+    if (lastDesigner !== undefined) {
       mergeFindingsIntoLedger(
         findingsLedger,
         explicitNonReversibleFindingIds,
@@ -1060,18 +1355,40 @@ async function runGated(
           actionableNotes: suggestedChangesFromVerdict(lastDesigner),
         });
         await recordGateRejection(deps, feedback);
+        emitGateRejection(input, feedback);
         lastRejectionFeedback = feedback;
         roundFeedback.push(feedback);
       }
     }
+    if (primaryFailure !== undefined) {
+      throw primaryFailure.reason;
+    }
+    if (reviewerOperationalFeedback !== undefined && lastReviewer !== undefined) {
+      return fail(task, roles, handoffNotes, {
+        failureReason: lastReviewer.operationalFailureReason!,
+        rejectionFeedback: reviewerOperationalFeedback,
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(
+          lastReviewer,
+          lastTechLeadDiff,
+          lastDesigner,
+        ),
+        findingsLedger,
+        loopExitReason: 'operational',
+        objectionOpen: false,
+        noCodeTestRationale,
+      });
+    }
 
     if (
+      qaDiffReview?.approved === true &&
+      lastReviewer !== undefined &&
       isReviewerPass(lastReviewer) &&
       isGatePass(lastTechLeadDiff) &&
       isGatePass(lastDesigner) &&
       reviewerVerificationAllowsCloseout(
         roundFindingsLedger,
-        lastReviewer.verifiedFindings,
+        lastReviewer?.verifiedFindings,
         findingsLedger,
         round < configuredRoundBudget,
       )
@@ -1110,6 +1427,7 @@ async function runGated(
       }
       if (
         flatMaxOpenSeverityRounds >= 3 &&
+        qaDiffReview?.approved === true &&
         firstNonReversibleHighSeverityFinding(
           findingsLedger,
           explicitNonReversibleFindingIds,
@@ -1150,6 +1468,7 @@ async function runGated(
   // structured verdicts/feedback, but do not route to PM wrap-up or a human
   // blocked state.
   if (
+    lastQaDiffReview?.approved === true &&
     hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner) &&
     maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
@@ -1187,9 +1506,6 @@ async function runGated(
   }
 
   if (task.designerNeeded && !isGatePass(lastDesigner)) {
-    if (lastRejectionFeedback !== undefined) {
-      emitGateRejection(input, lastRejectionFeedback);
-    }
     return block(task, roles, handoffNotes, {
       blockedReason: 'designer review failed at the round cap',
       ...(lastRejectionFeedback !== undefined
@@ -1203,9 +1519,6 @@ async function runGated(
     });
   }
 
-  if (lastRejectionFeedback !== undefined) {
-    emitGateRejection(input, lastRejectionFeedback);
-  }
   return block(task, roles, handoffNotes, {
     blockedReason: lastRejectionFeedback === undefined
       ? 'round cap reached with unresolved task feedback'
@@ -1308,20 +1621,23 @@ function fail(
 
 async function revalidateQaDiff(
   deps: TeamTaskDeps,
-  input: {
-    task: SizedTask;
-    qa: QaResult;
-    diff: string;
-    spec: string;
-    context: string;
-    reviewState?: Omit<CanonicalReviewState, 'diff'>;
-    artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
-  },
+  input: Parameters<NonNullable<TeamTaskDeps['qaRevalidateDiff']>>[0],
 ): Promise<{ approved: boolean; notes?: string }> {
   if (deps.qaRevalidateDiff === undefined) {
     return { approved: true };
   }
   return deps.qaRevalidateDiff(input);
+}
+
+export const JUDGMENT_CANCEL_GRACE_MS = 1_000;
+export const JUDGMENT_FORCE_SETTLE_GRACE_MS = 1_000;
+export const JUDGMENT_SUMMARY_MAX_CHARS = 500;
+
+function boundedJudgmentSummary(value: string): string {
+  return scrubAbsolutePaths(value)
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, JUDGMENT_SUMMARY_MAX_CHARS);
 }
 
 export function buildGateRejectionFeedback(input: {

@@ -56,6 +56,7 @@ import {
   isGitObjectId,
   type FindingSourceGate,
   type GateRejectionFeedback,
+  type JudgmentOutcomeEvidence,
   type ObjectionFinding,
   type ObjectionSeverity,
   type RoleCancellation,
@@ -254,6 +255,8 @@ export type OrchestrationResult =
       source?: MutationCancellationSource;
       /** Present when cancellation originated in a nested team role. */
       cancellation?: RoleCancellation;
+      /** Stable secondary outcomes from a cancelled judgment fan-out. */
+      judgmentOutcomes?: JudgmentOutcomeEvidence[];
     };
 
 export interface ParkedTaskRun {
@@ -580,15 +583,24 @@ function cancellationAfterWorkflow(
 ): Extract<OrchestrationResult, { kind: 'cancelled' }> | null {
   const cancellation = cancellationResult(deps, task);
   if (!cancellation) return null;
+  const withEvidence = {
+    ...cancellation,
+    ...(evidence.cancellation !== undefined
+      ? { cancellation: evidence.cancellation }
+      : {}),
+    ...(evidence.judgmentOutcomes !== undefined
+      ? { judgmentOutcomes: evidence.judgmentOutcomes }
+      : {}),
+  };
   if (
     cancellation.reason !== 'system' ||
     evidence.outcome !== 'ready-for-closeout'
   ) {
-    return cancellation;
+    return withEvidence;
   }
 
   const source = deps.cancelSource?.() ?? null;
-  if (!isRevocableMutationCancellationSource(source)) return cancellation;
+  if (!isRevocableMutationCancellationSource(source)) return withEvidence;
   const superseded = deps.supersedeSystemCancellation?.() ?? null;
   if (superseded === null) {
     // The request may have become user/shutdown/recovery cancellation between
@@ -1028,6 +1040,9 @@ function taskRecordFromEvidence(
     ...(evidence.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
       : {}),
+    ...(evidence.judgmentOutcomes !== undefined
+      ? { judgmentOutcomes: evidence.judgmentOutcomes }
+      : {}),
     ...(evidence.taskBaseTree !== undefined
       ? { taskBaseTree: evidence.taskBaseTree }
       : {}),
@@ -1062,6 +1077,9 @@ async function resolveNonCloseoutEvidence(
       reason: evidence.cancellation.source === 'internal' ? 'system' : 'user',
       task,
       cancellation: evidence.cancellation,
+      ...(evidence.judgmentOutcomes !== undefined
+        ? { judgmentOutcomes: evidence.judgmentOutcomes }
+        : {}),
     };
   }
   if (hasNonReversibleSevereTerminalFinding(evidence)) {

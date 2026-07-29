@@ -3939,6 +3939,400 @@ describe('team-task-workflow — designer routing', () => {
   });
 });
 
+describe('team-task-workflow — parallel judgment batch', () => {
+  it('starts every eligible role before any result settles and shares one canonical context', async () => {
+    const starts: string[] = [];
+    const contexts: unknown[] = [];
+    const batchIds: string[] = [];
+    const releases = new Map<string, (value: unknown) => void>();
+    const waitFor = <T>(role: string, input: {
+      judgmentContext?: unknown;
+      judgmentBatchId?: string;
+    }): Promise<T> => {
+      starts.push(role);
+      contexts.push(input.judgmentContext);
+      batchIds.push(input.judgmentBatchId ?? '');
+      return new Promise<T>((resolve) => {
+        releases.set(role, resolve as (value: unknown) => void);
+      });
+    };
+    const deps = makeDeps({
+      qaRevalidateDiff: async (input) => waitFor('qa', input),
+      reviewer: async (input) => waitFor('reviewer', input),
+      techLeadReviewDiff: async (input) => waitFor('tech-lead', input),
+      designer: async (input) => waitFor('designer', input),
+    });
+
+    const pending = runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(['qa', 'reviewer', 'tech-lead', 'designer']);
+    });
+    expect(new Set(contexts).size).toBe(1);
+    expect(Object.isFrozen(contexts[0])).toBe(true);
+    expect(Object.isFrozen(
+      (contexts[0] as { reviewState: unknown }).reviewState,
+    )).toBe(true);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(contexts[0]).toMatchObject({
+      spec: INPUT.spec,
+      projectContext: INPUT.contextMd,
+      diff: 'diff --git a/x b/x',
+      artifactPass: 'first-pass',
+      reviewState: { hash: 'canonical-hash' },
+      coderHandoffNotes: ['wired the core'],
+    });
+
+    releases.get('designer')?.({ pass: true });
+    releases.get('tech-lead')?.({ pass: true });
+    releases.get('reviewer')?.(cleanVerdict);
+    releases.get('qa')?.({ approved: true });
+    await expect(pending).resolves.toMatchObject({
+      outcome: 'ready-for-closeout',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'pass' },
+        { role: 'reviewer', status: 'pass' },
+        { role: 'tech-lead', status: 'pass' },
+        { role: 'designer', status: 'pass' },
+      ],
+    });
+  });
+
+  it('deep-freezes prior-round finding entries shared with concurrent judgments', async () => {
+    let round = 0;
+    let secondRoundContext: unknown;
+    const finding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:10',
+      rationale: 'prior-round finding',
+    };
+    const deps = makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `round ${round}`, handoffNotes: [] };
+      },
+      qaRevalidateDiff: async (input) => {
+        if (round === 2) secondRoundContext = input.judgmentContext;
+        return { approved: true };
+      },
+      reviewer: async (input) => round === 1
+        ? { outcome: 'fail', findings: [finding] }
+        : {
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: (input.findingsLedger ?? []).map((entry) => ({
+              id: entry.id,
+              status: 'resolved' as const,
+              notes: 'verified in the second round',
+            })),
+          },
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    const ledger = (secondRoundContext as {
+      findingsLedger: ReadonlyArray<FindingsLedgerEntry>;
+    }).findingsLedger;
+    expect(Object.isFrozen(ledger)).toBe(true);
+    expect(ledger).toHaveLength(1);
+    expect(Object.isFrozen(ledger[0])).toBe(true);
+  });
+
+  it('omits designer entirely when sizing does not require it', async () => {
+    const starts: string[] = [];
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        starts.push('qa');
+        return { approved: true };
+      },
+      reviewer: async () => {
+        starts.push('reviewer');
+        return cleanVerdict;
+      },
+      techLeadReviewDiff: async () => {
+        starts.push('tech-lead');
+        return { pass: true };
+      },
+      designer: async () => {
+        starts.push('designer');
+        return { pass: true };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(starts).toEqual(['qa', 'reviewer', 'tech-lead']);
+    expect(evidence.judgmentOutcomes?.map(({ role }) => role)).toEqual([
+      'qa',
+      'reviewer',
+      'tech-lead',
+    ]);
+  });
+
+  it('combines QA, reviewer, tech-lead, and designer rejections in stable coder-feedback order', async () => {
+    let round = 0;
+    const coderFeedback: Array<GateRejectionFeedback[] | undefined> = [];
+    const deps = makeDeps({
+      coder: async ({ rejectionFeedback }) => {
+        round += 1;
+        coderFeedback.push(rejectionFeedback);
+        return { diff: `diff round ${round}`, handoffNotes: [] };
+      },
+      qaRevalidateDiff: async () =>
+        round === 1 ? { approved: false, notes: 'qa correction' } : { approved: true },
+      reviewer: async () =>
+        round === 1
+          ? { outcome: 'fail', findings: [], notes: 'reviewer correction' }
+          : cleanVerdict,
+      techLeadReviewDiff: async () =>
+        round === 1 ? { pass: false, notes: 'tech-lead correction' } : { pass: true },
+      designer: async () =>
+        round === 1 ? { pass: false, notes: 'designer correction' } : { pass: true },
+    });
+
+    const evidence = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(coderFeedback[1]?.map(({ rejectingRole }) => rejectingRole)).toEqual([
+      'qa',
+      'reviewer',
+      'tech-lead',
+      'designer',
+    ]);
+  });
+
+  it('does not close at the hard budget while QA still rejects the implementation diff', async () => {
+    const reviewerFinding: ObjectionFinding = {
+      class: 'concurrency',
+      severity: 'medium',
+      location: 'src/example.ts:1',
+      rationale: 'reversible reviewer concern',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => ({
+        approved: false,
+        notes: 'implementation no longer satisfies the authored tests',
+      }),
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [reviewerFinding],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'hard-budget',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'reject' },
+        { role: 'reviewer', status: 'reject' },
+        { role: 'tech-lead', status: 'pass' },
+      ],
+    });
+  });
+
+  it('preserves the user-targeted role when induced sibling cancellations are internal', async () => {
+    const requestedAt = '2026-07-29T12:00:00.000Z';
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        throw new RoleCancellationError('qa', {
+          operationId: 'reviewer-operation',
+          source: 'internal',
+          requestedAt,
+        });
+      },
+      reviewer: async () => {
+        throw new RoleCancellationError('reviewer', {
+          operationId: 'reviewer-operation',
+          source: 'cockpit',
+          requestedAt,
+        });
+      },
+      techLeadReviewDiff: async () => {
+        throw new RoleCancellationError('tech-lead', {
+          operationId: 'reviewer-operation',
+          source: 'internal',
+          requestedAt,
+        });
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'cancelled',
+      cancellation: {
+        role: 'reviewer',
+        operationId: 'reviewer-operation',
+        source: 'cockpit',
+      },
+    });
+  });
+
+  it('forces and bounds sibling cleanup when a cancelled judgment never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const forceCancelJudgmentBatch = vi.fn();
+      const finishJudgmentBatch = vi.fn();
+      const never = new Promise<{ approved: boolean }>(() => {});
+      const deps = makeDeps({
+        qaRevalidateDiff: async () => never,
+        reviewer: async () => {
+          throw new Error('reviewer provider failed');
+        },
+        techLeadReviewDiff: async () => ({ pass: true }),
+        forceCancelJudgmentBatch,
+        finishJudgmentBatch,
+      });
+
+      const pending = runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+      await vi.advanceTimersByTimeAsync(
+        teamTaskWorkflow.JUDGMENT_CANCEL_GRACE_MS +
+        teamTaskWorkflow.JUDGMENT_FORCE_SETTLE_GRACE_MS,
+      );
+
+      await expect(pending).resolves.toMatchObject({
+        outcome: 'failed',
+        failureReason: 'reviewer provider failed',
+        judgmentOutcomes: [
+          { role: 'qa', status: 'cancelled' },
+          { role: 'reviewer', status: 'failed' },
+          { role: 'tech-lead', status: 'pass' },
+        ],
+      });
+      expect(forceCancelJudgmentBatch).toHaveBeenCalledOnce();
+      expect(finishJudgmentBatch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the stable primary failure while awaiting internally-cancelled siblings', async () => {
+    const internalCancellation = {
+      operationId: 'internal-batch-member',
+      source: 'internal' as const,
+      requestedAt: '2026-07-29T12:00:00.000Z',
+    };
+    let cancelBatchCalls = 0;
+    let cancelQa: (() => void) | undefined;
+    const qaPending = new Promise<{ approved: boolean }>((_resolve, reject) => {
+      cancelQa = () => reject(new RoleCancellationError('qa', internalCancellation));
+    });
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => qaPending,
+      reviewer: async () => {
+        throw new Error('reviewer provider failed');
+      },
+      techLeadReviewDiff: async () => ({ pass: true }),
+      cancelJudgmentBatch: () => {
+        cancelBatchCalls += 1;
+        cancelQa?.();
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'failed',
+      failureReason: 'reviewer provider failed',
+      judgmentOutcomes: [
+        { role: 'qa', status: 'cancelled' },
+        { role: 'reviewer', status: 'failed' },
+        { role: 'tech-lead', status: 'pass' },
+      ],
+    });
+    expect(cancelBatchCalls).toBeGreaterThan(0);
+  });
+
+  it('selects the primary operational failure by role order, not completion order', async () => {
+    const deps = makeDeps({
+      qaRevalidateDiff: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error('qa operational failure');
+      },
+      reviewer: async () => {
+        throw new Error('reviewer operational failure');
+      },
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence.outcome).toBe('failed');
+    expect(evidence.failureReason).toBe('qa operational failure');
+    expect(evidence.judgmentOutcomes).toEqual([
+      { role: 'qa', status: 'failed', summary: 'qa operational failure' },
+      { role: 'reviewer', status: 'failed', summary: 'reviewer operational failure' },
+      { role: 'tech-lead', status: 'pass' },
+    ]);
+  });
+
+  it('produces identical findings, feedback evidence, and public events across completion orders', async () => {
+    const reviewerFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'medium',
+      location: 'src/reviewer.ts:1',
+      rationale: 'reviewer finding',
+    };
+    const techLeadFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/tech-lead.ts:2',
+      rationale: 'tech-lead finding',
+    };
+    const designerFinding: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/designer.ts:3',
+      rationale: 'designer finding',
+    };
+    const runWithDelays = async (delays: Record<string, number>) => {
+      const events: WorkflowActivityEvent[] = [];
+      const pause = (role: string) =>
+        new Promise((resolve) => setTimeout(resolve, delays[role] ?? 0));
+      const evidence = await runTeamTaskWorkflow(
+        frontEndTask,
+        { ...INPUT, cap: 1, emit: (event) => events.push(event) },
+        makeDeps({
+          qaRevalidateDiff: async () => {
+            await pause('qa');
+            return { approved: false, notes: 'qa finding' };
+          },
+          reviewer: async () => {
+            await pause('reviewer');
+            return { outcome: 'fail', findings: [reviewerFinding] };
+          },
+          techLeadReviewDiff: async () => {
+            await pause('tech-lead');
+            return { outcome: 'fail', findings: [techLeadFinding] };
+          },
+          designer: async () => {
+            await pause('designer');
+            return { outcome: 'pass-with-warnings', findings: [designerFinding] };
+          },
+        }),
+      );
+      return { evidence, events };
+    };
+
+    const forward = await runWithDelays({ qa: 1, reviewer: 2, 'tech-lead': 3, designer: 4 });
+    const reverse = await runWithDelays({ qa: 4, reviewer: 3, 'tech-lead': 2, designer: 1 });
+
+    expect(reverse.evidence).toEqual(forward.evidence);
+    expect(reverse.events).toEqual(forward.events);
+    expect(forward.evidence.findingsLedger.map(({ sourceGate }) => sourceGate)).toEqual([
+      'reviewer',
+      'tech-lead',
+      'designer',
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // No closeout — workflow returns evidence, never mutates project state
 // ---------------------------------------------------------------------------
@@ -4003,7 +4397,9 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'tech-lead', stage: 'test-review' },
       { role: 'coder', stage: 'implementation' },
       { role: 'coder', stage: 'self-review' },
+      { role: 'qa', stage: 'diff-revalidation' },
       { role: 'reviewer', stage: 'review' },
+      { role: 'tech-lead', stage: 'diff-review' },
       { role: 'designer', stage: 'design' },
     ]);
     expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
@@ -4038,6 +4434,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead',
       'coder',
       'reviewer',
+      'tech-lead',
       'designer',
     ]);
     expect(transitions.map((event) => event.data?.['transition'])).toEqual([
@@ -4045,6 +4442,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead-test-review',
       'coder-implementation',
       'reviewer-review',
+      'tech-lead-diff-review',
       'designer-review',
     ]);
     expect(transitions.map((event) => event.data?.['fromRole'])).toEqual([
@@ -4053,6 +4451,7 @@ describe('team-task-workflow — execution observability', () => {
       'tech-lead',
       'coder',
       'reviewer',
+      'tech-lead',
     ]);
     expect(transitions.every((event) => event.kind === 'activity')).toBe(true);
     expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
@@ -4086,6 +4485,7 @@ describe('team-task-workflow — execution observability', () => {
       gate: event.data?.['gate'],
     }))).toEqual([
       { role: 'tech-lead', verdict: 'pass', gate: 'test-intent' },
+      { role: 'qa', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
       { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'designer', verdict: 'pass', gate: 'design-review' },

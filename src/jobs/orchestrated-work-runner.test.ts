@@ -4230,6 +4230,11 @@ describe('orchestratedWorkApplier', () => {
         source: 'cockpit' as const,
         requestedAt: '2026-07-13T12:34:56.000Z',
       };
+      const judgmentOutcomes = [
+        { role: 'qa' as const, status: 'cancelled' as const },
+        { role: 'reviewer' as const, status: 'cancelled' as const },
+        { role: 'tech-lead' as const, status: 'cancelled' as const },
+      ];
       const { runGit } = makeWorkProductGitStub({ commitShas: [], diffstat: '', status: '' });
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {
@@ -4247,6 +4252,7 @@ describe('orchestratedWorkApplier', () => {
           reason: 'user',
           task: { id: 'task-one', text: 'Task one', section: 'Phase 1' },
           cancellation,
+          judgmentOutcomes,
         }),
       });
 
@@ -4263,6 +4269,7 @@ describe('orchestratedWorkApplier', () => {
             cancelReason: 'user',
             reason: 'tech-lead cancelled from cockpit (operation abc12345)',
             cancellation,
+            judgmentOutcomes,
           },
         });
         expect(String((terminal!.data as Record<string, unknown>)['reason']))
@@ -4270,6 +4277,7 @@ describe('orchestratedWorkApplier', () => {
         expect(summary).toMatchObject({
           reason: 'tech-lead cancelled from cockpit (operation abc12345)',
           cancellation,
+          judgmentOutcomes,
           exit: { cancelled: true, exitFact: 'user-cancel' },
         });
         expect(destroyed).toBe(true);

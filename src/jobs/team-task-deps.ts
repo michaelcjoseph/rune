@@ -35,6 +35,11 @@ import { join } from 'node:path';
 
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
+import {
+  cancelCorrelatedOps,
+  clearCorrelatedCancellation,
+  forceCancelCorrelatedOps,
+} from '../transport/in-flight.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import config, { PROJECT_ROOT } from '../config.js';
@@ -224,6 +229,7 @@ export interface JudgmentModelCall {
     systemPrompt: string;
     message: string;
     sessionId?: string;
+    judgmentBatchId?: string;
   }): Promise<string>;
 }
 
@@ -259,6 +265,7 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
   message,
   product,
   sessionId: providedSessionId,
+  judgmentBatchId,
 }) => {
   if (format === 'codex') {
     const result = await runCodex(`${systemPrompt}\n\n${message}`, {
@@ -269,6 +276,7 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
       agentName: role,
       ...(product !== undefined ? { product } : {}),
       env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+      ...(judgmentBatchId !== undefined ? { batchId: judgmentBatchId } : {}),
     });
     if (result.cancellation !== undefined) {
       throw new RoleCancellationError(role, result.cancellation);
@@ -288,6 +296,7 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
       opKind: 'agent',
       agentName: role,
       ...(product !== undefined ? { product } : {}),
+      ...(judgmentBatchId !== undefined ? { batchId: judgmentBatchId } : {}),
     });
     if (result.cancellation !== undefined) {
       throw new RoleCancellationError(role, result.cancellation);
@@ -877,6 +886,59 @@ function executionCheckpoint(
   };
 }
 
+function judgmentBatchCheckpoint(
+  task: SizedTask,
+  batchId: string,
+  models: TeamRoleModels,
+): ExecutionCheckpoint {
+  if (models.reviewer === null) {
+    throw new Error('judgment batch requires an independent reviewer binding');
+  }
+  const members = [
+    {
+      role: 'qa',
+      binding: models.qa,
+      workflowStage: 'qa-diff-revalidation',
+    },
+    {
+      role: 'reviewer',
+      binding: models.reviewer,
+      workflowStage: 'reviewer-review',
+    },
+    {
+      role: 'tech-lead',
+      binding: models.techLead,
+      workflowStage: 'tech-lead-diff-review',
+    },
+    ...(task.designerNeeded
+      ? [{
+          role: 'designer',
+          binding: models.designer,
+          workflowStage: 'designer-review',
+        }]
+      : []),
+  ];
+  return {
+    taskId: task.id,
+    role: 'judgment-batch',
+    provider: models.qa.provider,
+    format: models.qa.format,
+    model: models.qa.alias,
+    workflowStage: 'post-coder-judgments',
+    checkpointedAt: new Date().toISOString(),
+    judgmentBatch: {
+      batchId,
+      members: members.map(({ role, binding, workflowStage }) => ({
+        role,
+        provider: binding.provider,
+        format: binding.format,
+        model: binding.alias,
+        workflowStage,
+      })),
+    },
+  };
+}
+
 async function runCheckpointed<T>(
   checkpoint: ExecutionCheckpoint,
   persist: BuildTeamTaskDepsArgs['persistExecutionCheckpoint'],
@@ -897,30 +959,70 @@ function makeJudge(
   projectExemplarsDir: string,
   product: string,
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>,
+  persistJudgmentBatchCheckpoint?: (
+    batchId: string,
+    checkpoint: ExecutionCheckpoint,
+  ) => Promise<void>,
 ) {
-  return async (
+  return async <T = string>(
     role: RoleName,
     binding: RoleModelBinding,
     instruction: string,
     body: string,
     taskId = 'orchestration',
     workflowStage = `${role}-judgment`,
-  ) => {
+    judgmentBatchId?: string,
+    parse?: (reply: string) => T,
+    batchCheckpoint?: ExecutionCheckpoint,
+  ): Promise<T> => {
     const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const message = ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body;
     const checkpoint = executionCheckpoint(taskId, role, binding, workflowStage);
-    return runCheckpointed(checkpoint, persistExecutionCheckpoint, () =>
-      seams.judgmentCall({
-        role,
-        model: binding.alias,
-        provider: binding.provider,
-        format: binding.format,
-        product,
-        systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
-        message,
-      }),
+    return runCheckpointed(
+      checkpoint,
+      batchCheckpoint === undefined ? persistExecutionCheckpoint : undefined,
+      async () => {
+        if (batchCheckpoint !== undefined && judgmentBatchId !== undefined) {
+          await persistJudgmentBatchCheckpoint?.(judgmentBatchId, batchCheckpoint);
+        }
+        const reply = await seams.judgmentCall({
+          role,
+          model: binding.alias,
+          provider: binding.provider,
+          format: binding.format,
+          product,
+          systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
+          message,
+          ...(judgmentBatchId !== undefined ? { judgmentBatchId } : {}),
+        });
+        return parse === undefined ? reply as T : parse(reply);
+      },
     );
   };
+}
+
+function requireFlagVerdict(text: string, tag: string, flag: string): void {
+  const parsed = extractFencedJson(text, tag);
+  if (!parsed || typeof parsed !== 'object' || typeof (parsed as Record<string, unknown>)[flag] !== 'boolean') {
+    throw new Error(`malformed ${tag}: expected one fenced object with boolean ${flag}`);
+  }
+}
+
+function requireGateVerdict(text: string, tag: string): void {
+  const parsed = extractFencedJson(text, tag);
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`malformed ${tag}: expected one fenced verdict object`);
+  }
+  const value = parsed as Record<string, unknown>;
+  const validOutcome =
+    typeof value['outcome'] === 'string' &&
+    (GATE_OUTCOMES.has(value['outcome']) || value['outcome'] === 'block');
+  if (!validOutcome && typeof value['pass'] !== 'boolean') {
+    throw new Error(`malformed ${tag}: expected a supported outcome`);
+  }
+  if (value['findings'] !== undefined && !Array.isArray(value['findings'])) {
+    throw new Error(`malformed ${tag}: findings must be an array`);
+  }
 }
 
 function withProtectedLocalServicesWarning(systemInstructions: string): string {
@@ -1016,12 +1118,14 @@ function formatRejectionFeedback(
   ].join('\n').trim();
 }
 
-function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined): string {
+function formatFindingsLedger(
+  findingsLedger: readonly FindingsLedgerEntry[] | undefined,
+): string {
   if (findingsLedger === undefined || findingsLedger.length === 0) return '';
   const sortedLedger = [...findingsLedger].sort(
     (a, b) => OBJECTION_SEVERITY_RANK[b.severity] - OBJECTION_SEVERITY_RANK[a.severity],
   );
-  return [
+  return scrubPathsInText([
     '## Open findings ledger for this round',
     '',
     ...sortedLedger.flatMap((finding, index) => [
@@ -1034,7 +1138,7 @@ function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined)
         : []),
       '',
     ]),
-  ].join('\n').trim();
+  ].join('\n').trim());
 }
 
 function formatGateLearningRejection(feedback: GateRejectionFeedback): string {
@@ -1103,11 +1207,37 @@ export function buildProductionTeamTaskDeps(
   const validationCommandCwd = args.validationCommandCwd ?? sandbox.worktree;
   const validationCwdLabel = args.validationCwdLabel?.trim() || '.';
   const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
+  const batchCheckpoints = new Map<string, ExecutionCheckpoint>();
+  const batchCheckpointWrites = new Map<string, Promise<void>>();
+  const persistJudgmentBatchCheckpoint = (
+    batchId: string,
+    checkpoint: ExecutionCheckpoint,
+  ): Promise<void> => {
+    const existing = batchCheckpointWrites.get(batchId);
+    if (existing !== undefined) return existing;
+    const pending = Promise.resolve().then(
+      () => args.persistExecutionCheckpoint?.(checkpoint),
+    );
+    batchCheckpointWrites.set(batchId, pending);
+    return pending;
+  };
+  const getJudgmentBatchCheckpoint = (
+    task: SizedTask,
+    batchId: string | undefined,
+  ): ExecutionCheckpoint | undefined => {
+    if (batchId === undefined) return undefined;
+    const existing = batchCheckpoints.get(batchId);
+    if (existing !== undefined) return existing;
+    const checkpoint = judgmentBatchCheckpoint(task, batchId, models);
+    batchCheckpoints.set(batchId, checkpoint);
+    return checkpoint;
+  };
   const judge = makeJudge(
     seams,
     projectExemplarsDir,
     sandbox.product,
     args.persistExecutionCheckpoint,
+    persistJudgmentBatchCheckpoint,
   );
 
   // The QA work product, retained so the tech-lead reviews actual test
@@ -1441,7 +1571,7 @@ export function buildProductionTeamTaskDeps(
     coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
-      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const findingsBlock = formatFindingsLedger(findingsLedger);
       const body = [
         `## Task\n\n${task.text}`,
         '',
@@ -1501,7 +1631,7 @@ export function buildProductionTeamTaskDeps(
           ? `tests-written:\n${qa.testIds.join('\n')}`
           : `no-code-test-rationale:\n${qa.rationale}`;
         const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
-        const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+        const findingsBlock = formatFindingsLedger(findingsLedger);
         const handoffBlock = formatCoderHandoffNotes(artifact.handoffNotes);
         const body = [
           `## Task\n\n${task.text}`,
@@ -1603,6 +1733,8 @@ export function buildProductionTeamTaskDeps(
       context,
       reviewState,
       artifactPass,
+      judgmentContext,
+      judgmentBatchId,
     }) => {
       const qaBlock = qa.kind === 'tests-written'
         ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
@@ -1617,14 +1749,32 @@ export function buildProductionTeamTaskDeps(
         formatFullTaskReviewArtifact(diff, reviewState, artifactPass ?? 'first-pass'),
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
+        ...(judgmentContext?.coderHandoffNotes.length
+          ? ['', formatCoderHandoffNotes([...judgmentContext.coderHandoffNotes])]
+          : []),
+        ...(judgmentContext?.findingsLedger.length
+          ? ['', formatFindingsLedger(judgmentContext.findingsLedger)]
+          : []),
       ].join('\n');
-      const reply = await judge('qa', models.qa, QA_DIFF_REVALIDATION_INSTRUCTION, body, task.id, 'qa-diff-revalidation');
-      const { value, notes } = parseFlagVerdict(
-        reply,
+      return judge(
+        'qa',
+        models.qa,
+        QA_DIFF_REVALIDATION_INSTRUCTION,
+        body,
+        task.id,
         'qa-diff-revalidation',
-        'approved',
+        judgmentBatchId,
+        (reply) => {
+          requireFlagVerdict(reply, 'qa-diff-revalidation', 'approved');
+          const { value, notes } = parseFlagVerdict(
+            reply,
+            'qa-diff-revalidation',
+            'approved',
+          );
+          return { approved: value, ...(notes !== undefined ? { notes } : {}) };
+        },
+        getJudgmentBatchCheckpoint(task, judgmentBatchId),
       );
-      return { approved: value, ...(notes !== undefined ? { notes } : {}) };
     },
 
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
@@ -1639,9 +1789,10 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentBatchId,
     }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
-      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const findingsBlock = formatFindingsLedger(findingsLedger);
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       if (models.reviewer === null) {
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
@@ -1662,8 +1813,20 @@ export function buildProductionTeamTaskDeps(
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('reviewer', models.reviewer, REVIEWER_INSTRUCTION, body, task.id, 'reviewer-review');
-      return parseReviewerVerdict(reply);
+      return judge(
+        'reviewer',
+        models.reviewer,
+        REVIEWER_INSTRUCTION,
+        body,
+        task.id,
+        'reviewer-review',
+        judgmentBatchId,
+        (reply) => {
+          requireGateVerdict(reply, 'reviewer-verdict');
+          return parseReviewerVerdict(reply);
+        },
+        getJudgmentBatchCheckpoint(task, judgmentBatchId),
+      );
     },
 
     techLeadReviewDiff: async ({
@@ -1674,8 +1837,9 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentBatchId,
     }) => {
-      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const findingsBlock = formatFindingsLedger(findingsLedger);
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       const body = [
         `## Task\n\n${task.text}`,
@@ -1686,20 +1850,62 @@ export function buildProductionTeamTaskDeps(
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body, task.id, 'tech-lead-diff-review');
-      return parseGateVerdict(reply, 'tl-diff-review');
+      return judge(
+        'tech-lead',
+        models.techLead,
+        TL_DIFF_REVIEW_INSTRUCTION,
+        body,
+        task.id,
+        'tech-lead-diff-review',
+        judgmentBatchId,
+        (reply) => {
+          requireGateVerdict(reply, 'tl-diff-review');
+          return parseGateVerdict(reply, 'tl-diff-review');
+        },
+        getJudgmentBatchCheckpoint(task, judgmentBatchId),
+      );
     },
 
-    designer: async ({ task, diff, findingsLedger, reviewState }) => {
-      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+    designer: async ({
+      task,
+      diff,
+      spec,
+      context,
+      tests,
+      coderHandoffNotes,
+      findingsLedger,
+      reviewState,
+      judgmentBatchId,
+    }) => {
+      const findingsBlock = formatFindingsLedger(findingsLedger);
+      const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
+      const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       const body = [
         `## Task\n\n${task.text}`,
         '',
         formatFullTaskReviewArtifact(diff, reviewState),
+        ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
+        ...(testsBlock !== undefined ? ['', `## Tests\n\n${testsBlock}`] : []),
+        ...(context !== undefined
+          ? ['', `## Project context\n\n${scrubPathsInText(context)}`]
+          : []),
+        ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
-      const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body, task.id, 'designer-review');
-      return parseGateVerdict(reply, 'designer-review');
+      return judge(
+        'designer',
+        models.designer,
+        DESIGNER_INSTRUCTION,
+        body,
+        task.id,
+        'designer-review',
+        judgmentBatchId,
+        (reply) => {
+          requireGateVerdict(reply, 'designer-review');
+          return parseGateVerdict(reply, 'designer-review');
+        },
+        getJudgmentBatchCheckpoint(task, judgmentBatchId),
+      );
     },
 
     pmWrapup: async ({ task, reason }) => {
@@ -1714,6 +1920,36 @@ export function buildProductionTeamTaskDeps(
       models.reviewer !== null && models.reviewer.provider !== coderProvider
         ? models.reviewer.provider
         : null,
+    cancelJudgmentBatch: (batchId) => {
+      cancelCorrelatedOps(batchId, 'internal', {
+        userId: config.TELEGRAM_USER_ID,
+        scope: sandbox.product,
+      });
+    },
+    forceCancelJudgmentBatch: (batchId) => {
+      forceCancelCorrelatedOps(batchId, {
+        userId: config.TELEGRAM_USER_ID,
+        scope: sandbox.product,
+      });
+    },
+    finishJudgmentBatch: async (batchId) => {
+      const batchCheckpoint = batchCheckpoints.get(batchId);
+      clearCorrelatedCancellation(batchId, {
+        userId: config.TELEGRAM_USER_ID,
+        scope: sandbox.product,
+      });
+      batchCheckpoints.delete(batchId);
+      batchCheckpointWrites.delete(batchId);
+      if (batchCheckpoint !== undefined) {
+        const { judgmentBatch: _completedBatch, ...checkpoint } = batchCheckpoint;
+        await args.persistExecutionCheckpoint?.({
+          ...checkpoint,
+          role: 'orchestrator',
+          workflowStage: 'post-coder-judgments-complete',
+          checkpointedAt: new Date().toISOString(),
+        });
+      }
+    },
   };
 }
 

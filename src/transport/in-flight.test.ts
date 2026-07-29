@@ -17,6 +17,9 @@ const {
   registerOp,
   unregisterOp,
   cancelOp,
+  cancelCorrelatedOps,
+  forceCancelCorrelatedOps,
+  clearCorrelatedCancellation,
   cancelMostRecentForUser,
   cancelByPrefix,
   listOps,
@@ -34,13 +37,22 @@ function makeChildProcess() {
   } as any;
 }
 
-function makeOp(overrides: { userId?: number; kind?: any; label?: string; scope?: string } = {}) {
+function makeOp(overrides: {
+  userId?: number;
+  kind?: any;
+  label?: string;
+  scope?: string;
+  batchId?: string;
+  processGroup?: boolean;
+} = {}) {
   return {
     kind: overrides.kind ?? ('agent' as const),
     label: overrides.label ?? 'test-agent',
     userId: overrides.userId ?? 42,
     child: makeChildProcess(),
     ...(overrides.scope ? { scope: overrides.scope } : {}),
+    ...(overrides.batchId ? { batchId: overrides.batchId } : {}),
+    ...(overrides.processGroup ? { processGroup: true } : {}),
   };
 }
 
@@ -105,6 +117,11 @@ describe('in-flight op registry', () => {
       registerOp(makeOp({ kind: 'one-shot' }));
       const pub = listOps()[0]!;
       expect('agentName' in pub).toBe(false);
+    });
+
+    it('keeps internal batch correlation out of the public shape', () => {
+      registerOp(makeOp({ batchId: 'private-batch' }));
+      expect(listOps()[0]).not.toHaveProperty('batchId');
     });
 
     it('registers multiple ops independently', () => {
@@ -215,6 +232,101 @@ describe('in-flight op registry', () => {
       child.kill.mockImplementation(() => { throw new Error('process already dead'); });
       const op = registerOp({ kind: 'agent', label: 'fragile', userId: 42, child });
       expect(() => cancelOp(op.opId, 'internal')).not.toThrow();
+    });
+
+    it('keeps the user-targeted cancellation external and marks induced siblings internal', () => {
+      const first = registerOp(makeOp({ label: 'first', batchId: 'batch-1' }));
+      const second = registerOp(makeOp({ label: 'second', batchId: 'batch-1' }));
+      const unrelated = registerOp(makeOp({ label: 'other', batchId: 'batch-2' }));
+
+      cancelOp(second.opId, 'cockpit');
+
+      expect(getCancellation(first.opId)).toMatchObject({
+        operationId: second.opId,
+        source: 'internal',
+      });
+      expect(getCancellation(second.opId)).toMatchObject({
+        operationId: second.opId,
+        source: 'cockpit',
+      });
+      expect(getCancellation(unrelated.opId)).toBeUndefined();
+      expect(first.child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(second.child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    it('preserves a later external request over internal sibling cleanup metadata', () => {
+      const first = registerOp(makeOp({ batchId: 'batch-override' }));
+      const second = registerOp(makeOp({ batchId: 'batch-override' }));
+      cancelCorrelatedOps('batch-override', 'internal');
+
+      cancelOp(second.opId, 'telegram');
+
+      expect(getCancellation(first.opId)).toMatchObject({
+        operationId: second.opId,
+        source: 'internal',
+      });
+      expect(getCancellation(second.opId)).toMatchObject({
+        operationId: second.opId,
+        source: 'telegram',
+      });
+      expect(first.child.kill).toHaveBeenCalledOnce();
+      expect(second.child.kill).toHaveBeenCalledOnce();
+    });
+
+    it('cancels a late-registering sibling until batch cleanup is complete', () => {
+      cancelCorrelatedOps('late-batch', 'internal', { userId: 42 });
+      const late = registerOp(makeOp({ batchId: 'late-batch' }));
+      expect(getCancellation(late.opId)).toMatchObject({ source: 'internal' });
+      expect(late.child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      clearCorrelatedCancellation('late-batch', { userId: 42 });
+      const afterCleanup = registerOp(makeOp({ batchId: 'late-batch' }));
+      expect(getCancellation(afterCleanup.opId)).toBeUndefined();
+    });
+
+    it('does not correlate identical batch ids across user or product owners', () => {
+      const aura = registerOp(makeOp({
+        batchId: 'owner-batch',
+        userId: 42,
+        scope: 'aura',
+      }));
+      const rune = registerOp(makeOp({
+        batchId: 'owner-batch',
+        userId: 42,
+        scope: 'rune',
+      }));
+      const otherUser = registerOp(makeOp({
+        batchId: 'owner-batch',
+        userId: 99,
+        scope: 'aura',
+      }));
+
+      cancelOp(aura.opId, 'cockpit');
+
+      expect(getCancellation(aura.opId)).toMatchObject({ source: 'cockpit' });
+      expect(getCancellation(rune.opId)).toBeUndefined();
+      expect(getCancellation(otherUser.opId)).toBeUndefined();
+    });
+
+    it('SIGKILLs every correlated process group during forced cleanup', () => {
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      try {
+        const first = registerOp(makeOp({
+          batchId: 'force-batch',
+          processGroup: true,
+        }));
+        const second = registerOp(makeOp({
+          batchId: 'force-batch',
+          processGroup: true,
+        }));
+        cancelCorrelatedOps('force-batch', 'internal', { userId: 42 });
+
+        expect(forceCancelCorrelatedOps('force-batch', { userId: 42 })).toBe(2);
+        expect(kill).toHaveBeenCalledWith(-first.child.pid!, 'SIGKILL');
+        expect(kill).toHaveBeenCalledWith(-second.child.pid!, 'SIGKILL');
+      } finally {
+        kill.mockRestore();
+      }
     });
   });
 

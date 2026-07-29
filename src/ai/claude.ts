@@ -429,21 +429,48 @@ export function cleanupSession(sessionId: string): void {
 }
 
 const activeProcesses = new Set<ReturnType<typeof spawn>>();
+const activeProcessGroups = new WeakSet<ReturnType<typeof spawn>>();
 
 /** Register an external child process in the active-processes set for graceful-shutdown tracking. */
-export function registerActiveProcess(child: ReturnType<typeof spawn>): void {
+export function registerActiveProcess(
+  child: ReturnType<typeof spawn>,
+  processGroup = false,
+): void {
   activeProcesses.add(child);
+  if (processGroup) activeProcessGroups.add(child);
 }
 
 /** Remove an external child process from the active-processes set when it exits. */
 export function unregisterActiveProcess(child: ReturnType<typeof spawn>): void {
   activeProcesses.delete(child);
+  activeProcessGroups.delete(child);
+}
+
+/** Signal one tracked child, including its process group when it was spawned
+ * as a detached group leader. */
+export function signalActiveProcess(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+): void {
+  if (
+    activeProcessGroups.has(child) &&
+    child.pid !== undefined &&
+    process.platform !== 'win32'
+  ) {
+    process.kill(-child.pid, signal);
+    return;
+  }
+  child.kill(signal);
 }
 
 /** Kill all active Claude CLI child processes (for graceful shutdown) */
 export function killActiveProcesses(): void {
   for (const child of activeProcesses) {
-    child.kill('SIGTERM');
+    try {
+      signalActiveProcess(child, 'SIGTERM');
+    } catch {
+      // The process tree already exited.
+    }
   }
 }
 
@@ -463,6 +490,8 @@ export interface OpMeta {
   agentName?: string;
   scope?: string;
   userId?: number;
+  /** Internal correlation for bounded sibling operations; never user-facing. */
+  batchId?: string;
 }
 
 /** A spawn-scope override for a single Claude CLI run. By default an agent runs
@@ -615,13 +644,17 @@ function execClaude(
       // because getProjectMcpArgs pins the MCP server to PROJECT_ROOT.
       cwd: cwd ?? writeScope?.cwd ?? config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Judgment-batch cancellation reaps the whole CLI process tree. On
+      // POSIX the child must lead a detached group before negative-pid signals
+      // are safe; Windows continues to signal the child directly.
+      detached: process.platform !== 'win32',
       // Expose PROJECT_ROOT so agents that shell out can locate the Rune
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
       // agent, which runs `npm run intent-scan` from the project root.
       env: childEnv,
     });
 
-    activeProcesses.add(child);
+    registerActiveProcess(child, process.platform !== 'win32');
 
     // Register an in-flight op so this spawn surfaces to TG/webview with
     // elapsed time + cancel button. Default userId to the single TG user.
@@ -634,6 +667,8 @@ function execClaude(
         ...(opMeta.scope ? { scope: opMeta.scope } : {}),
         userId: opMeta.userId ?? config.TELEGRAM_USER_ID,
         child,
+        ...(opMeta.batchId ? { batchId: opMeta.batchId } : {}),
+        ...(process.platform !== 'win32' ? { processGroup: true } : {}),
       });
       opId = op.opId;
     }
@@ -648,7 +683,7 @@ function execClaude(
     let lineBuf = '';
     const streamState: StreamState = { finalText: '', resultText: null };
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      signalActiveProcess(child, 'SIGTERM');
     }, timeout);
 
     child.stdout.on('data', (data: Buffer) => {
@@ -677,7 +712,7 @@ function execClaude(
     child.on('close', (code, signal) => {
       if (settled) return;
       clearTimeout(timer);
-      activeProcesses.delete(child);
+      unregisterActiveProcess(child);
       // Flush any trailing partial line as a best-effort parse.
       if (streaming && lineBuf.trim()) {
         handleStreamEvent(lineBuf, opId, opMeta, streamState);
@@ -720,7 +755,7 @@ function execClaude(
 
     child.on('error', (err) => {
       clearTimeout(timer);
-      activeProcesses.delete(child);
+      unregisterActiveProcess(child);
       const cancellation = opId === null ? undefined : getCancellation(opId);
       if (opId) {
         unregisterOp(
@@ -769,6 +804,7 @@ function askClaudeSession(
           label: opts.opLabel,
           ...(opts.agentName ? { agentName: opts.agentName } : {}),
           ...(opts.product ? { scope: opts.product } : {}),
+          ...(opts.batchId ? { batchId: opts.batchId } : {}),
         }
       : undefined;
     const result = await execClaude(
@@ -830,6 +866,8 @@ export interface AskClaudeWithContextOpts {
   envMode?: ClaudeChildEnvMode;
   /** Product scope for product-chat op-events. Omit for global chat. */
   product?: string;
+  /** Internal correlation for bounded sibling operations; never user-facing. */
+  batchId?: string;
   /** Complete strict MCP registration override for a configured product chat. */
   mcpArgs?: string[];
 }

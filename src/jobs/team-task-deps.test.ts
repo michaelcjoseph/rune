@@ -56,7 +56,10 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
-import type { ExecutionFailure } from '../intent/execution-failure.js';
+import type {
+  ExecutionCheckpoint,
+  ExecutionFailure,
+} from '../intent/execution-failure.js';
 import { defaultRunGit } from './sandbox-runtime.js';
 import { captureCanonicalReviewState, defaultRunCanonicalGit } from './canonical-git.js';
 
@@ -2018,17 +2021,21 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       makeSeams({ judgmentCall: async () => 'no fenced block here' }),
     );
 
-    const verdict = await deps.reviewer({
+    await expect(deps.reviewer({
       diff: 'd',
       spec: 's',
       tests: 't',
       task: sizedTask,
       context: 'c',
       reviewerProvider: 'anthropic',
+    })).rejects.toMatchObject({
+      name: 'ExecutionFailureError',
+      failure: expect.objectContaining({
+        role: 'reviewer',
+        workflowStage: 'reviewer-review',
+        failureStage: 'orchestration-adjacent',
+      }),
     });
-    const structured = verdict as unknown as Record<string, unknown>;
-    expect(structured['outcome']).toBe('fail');
-    expect(structured).not.toHaveProperty('pass');
 
     const tl = await deps.techLeadReviewTests({ task: sizedTask, qa: { kind: 'tests-written', testIds: [] } });
     expect(tl.approved).toBe(false);
@@ -2130,6 +2137,57 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       role: 'qa',
       workflowStage: 'qa-tests',
     });
+  });
+
+  it('persists one bounded judgment-batch checkpoint before concurrent judgments spawn', async () => {
+    const persisted: ExecutionCheckpoint[] = [];
+    const spawnedJudgments: string[] = [];
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        persisted.push(checkpoint);
+      },
+    }, makeSeams({
+      judgmentCall: async ({ role }) => {
+        spawnedJudgments.push(role);
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const evidence = await runTeamTaskWorkflow(
+      sizedTask,
+      { spec: 's', contextMd: 'c', coderProvider: 'openai', cap: 1 },
+      deps,
+    );
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const batches = persisted.filter((checkpoint) => checkpoint.judgmentBatch !== undefined);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'judgment-batch',
+      workflowStage: 'post-coder-judgments',
+      judgmentBatch: {
+        members: [
+          { role: 'qa', workflowStage: 'qa-diff-revalidation' },
+          { role: 'reviewer', workflowStage: 'reviewer-review' },
+          { role: 'tech-lead', workflowStage: 'tech-lead-diff-review' },
+        ],
+      },
+    });
+    expect(persisted.at(-1)).toMatchObject({
+      taskId: sizedTask.id,
+      role: 'orchestrator',
+      workflowStage: 'post-coder-judgments-complete',
+    });
+    expect(persisted.at(-1)?.judgmentBatch).toBeUndefined();
+    expect(spawnedJudgments).toEqual(expect.arrayContaining([
+      'qa',
+      'reviewer',
+      'tech-lead',
+    ]));
   });
 });
 

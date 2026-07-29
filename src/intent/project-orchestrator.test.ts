@@ -284,6 +284,11 @@ describe('project-orchestrator — cancellation boundaries', () => {
           objectionOpen: false,
           handoffNotes: [],
           cancellation,
+          judgmentOutcomes: [
+            { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
+            { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
+            { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
+          ],
         }),
       });
 
@@ -293,6 +298,11 @@ describe('project-orchestrator — cancellation boundaries', () => {
         kind: 'cancelled',
         reason,
         cancellation,
+        judgmentOutcomes: [
+          { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
+          { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
+          { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
+        ],
         task: { text: 'Build the streak core' },
       });
       expect(h.state.tasksMd).toBe(TWO_TASKS);
@@ -1496,6 +1506,11 @@ describe('project-orchestrator — durable run state', () => {
         if (workflowCalls === 1) {
           return {
             ...readyEvidence(task),
+            judgmentOutcomes: [
+              { role: 'qa', status: 'pass' },
+              { role: 'reviewer', status: 'pass' },
+              { role: 'tech-lead', status: 'pass' },
+            ],
             coderSelfReviews: [{
               round: 1,
               outcome: 'revised',
@@ -1555,6 +1570,11 @@ describe('project-orchestrator — durable run state', () => {
         taskBaseTree: '1111111111111111111111111111111111111111',
         currentReviewTree: '3333333333333333333333333333333333333333',
         fullTaskReviewHash: 'full-task-review-hash',
+        judgmentOutcomes: [
+          { role: 'qa', status: 'pass' },
+          { role: 'reviewer', status: 'pass' },
+          { role: 'tech-lead', status: 'pass' },
+        ],
       }),
     );
     expect(persistedRecords[1]).toEqual(

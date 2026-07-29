@@ -25,6 +25,7 @@ import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 import { readJsonlTail } from './jsonl-tail.js';
 import type { WorkRunTarget } from '../intent/run-target.js';
 import type { OperationCancellation } from '../cancellation.js';
+import type { JudgmentOutcomeEvidence } from '../intent/team-task-workflow.js';
 import {
   isExecutionTerminalDisposition,
   isExecutionTerminalTrigger,
@@ -76,6 +77,34 @@ export function parseWorkRunCancellation(value: unknown): WorkRunCancellation | 
   };
 }
 
+function parseJudgmentOutcomes(
+  value: unknown,
+): JudgmentOutcomeEvidence[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return undefined;
+  const outcomes: JudgmentOutcomeEvidence[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const record = item as Record<string, unknown>;
+    const role = record['role'];
+    const status = record['status'];
+    if (
+      (role !== 'qa' && role !== 'reviewer' && role !== 'tech-lead' && role !== 'designer') ||
+      (status !== 'pass' && status !== 'reject' && status !== 'failed' && status !== 'cancelled') ||
+      (record['summary'] !== undefined && typeof record['summary'] !== 'string')
+    ) {
+      return undefined;
+    }
+    outcomes.push({
+      role,
+      status,
+      ...(typeof record['summary'] === 'string'
+        ? { summary: record['summary'].slice(0, 500) }
+        : {}),
+    });
+  }
+  return outcomes;
+}
+
 /** Contents of `logs/work-runs/<id>/summary.json` — the run's outcome facts
  *  (spec requirement 9) plus paths to the transcript and forensics. */
 export interface WorkRunSummary {
@@ -111,6 +140,8 @@ export interface WorkRunSummary {
   gateHeldReason?: string;
   /** Durable correlation for a nested team-role cancellation. */
   cancellation?: WorkRunCancellation;
+  /** Bounded secondary outcomes from a post-coder judgment batch. */
+  judgmentOutcomes?: JudgmentOutcomeEvidence[];
   /** Immutable cause plus separate cleanup result. Absent on legacy summaries. */
   trigger?: ExecutionTerminalTrigger;
   disposition?: ExecutionTerminalDisposition;
@@ -210,6 +241,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const s = parsed as Partial<WorkRunSummary>;
   const rawTarget = (parsed as Record<string, unknown>)['target'];
   const rawCancellation = (parsed as Record<string, unknown>)['cancellation'];
+  const rawJudgmentOutcomes =
+    (parsed as Record<string, unknown>)['judgmentOutcomes'];
   const rawTrigger = (parsed as Record<string, unknown>)['trigger'];
   const rawDisposition = (parsed as Record<string, unknown>)['disposition'];
   const rawContextFailure = (parsed as Record<string, unknown>)['contextFailure'];
@@ -230,6 +263,11 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     ((rawTarget as Record<string, unknown>)['slug'] as string).trim() !== ''
   );
   const cancellationValid = rawCancellation === undefined || cancellation !== undefined;
+  const judgmentOutcomes = rawJudgmentOutcomes === undefined
+    ? undefined
+    : parseJudgmentOutcomes(rawJudgmentOutcomes);
+  const judgmentOutcomesValid =
+    rawJudgmentOutcomes === undefined || judgmentOutcomes !== undefined;
   const triggerValid = rawTrigger === undefined || isExecutionTerminalTrigger(rawTrigger);
   const dispositionValid = rawDisposition === undefined || isExecutionTerminalDisposition(rawDisposition);
   const contextFailure = rawContextFailure === undefined
@@ -257,13 +295,15 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
     targetValid &&
-    cancellationValid && triggerValid && dispositionValid && contextFailureValid &&
+    cancellationValid && judgmentOutcomesValid &&
+    triggerValid && dispositionValid && contextFailureValid &&
     relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
     relatedTestProjectionConsistent
   ) {
     const summary = {
       ...s,
       ...(cancellation !== undefined ? { cancellation } : {}),
+      ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
       ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),

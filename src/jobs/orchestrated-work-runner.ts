@@ -3111,6 +3111,7 @@ function buildOrchestratedSummary(args: {
       ? classifyOutcome({ exit, product: workProduct })
       : { outcome: orchestratedOutcome(result, terminal), reason: '' };
   const cancellation = workRunCancellation(data['cancellation']);
+  const judgmentOutcomes = workRunJudgmentOutcomes(data['judgmentOutcomes']);
   return {
     id,
     project,
@@ -3131,6 +3132,7 @@ function buildOrchestratedSummary(args: {
     ...(typeof data['branchDeleted'] === 'boolean' ? { branchDeleted: data['branchDeleted'] } : {}),
     ...(typeof data['gateHeldReason'] === 'string' ? { gateHeldReason: data['gateHeldReason'] } : {}),
     ...(cancellation !== undefined ? { cancellation } : {}),
+    ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
     trigger,
     ...(disposition !== undefined ? { disposition } : {}),
     ...(contextFailure !== undefined ? { contextFailure } : {}),
@@ -3148,6 +3150,34 @@ function workRunCancellation(value: unknown): WorkRunCancellation | undefined {
     source: cancellation.source,
     requestedAt: scrubPathsInText(cancellation.requestedAt),
   };
+}
+
+function workRunJudgmentOutcomes(
+  value: unknown,
+): WorkRunSummary['judgmentOutcomes'] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return undefined;
+  const outcomes: NonNullable<WorkRunSummary['judgmentOutcomes']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const record = item as Record<string, unknown>;
+    const role = record['role'];
+    const status = record['status'];
+    if (
+      (role !== 'qa' && role !== 'reviewer' && role !== 'tech-lead' && role !== 'designer') ||
+      (status !== 'pass' && status !== 'reject' && status !== 'failed' && status !== 'cancelled')
+    ) {
+      return undefined;
+    }
+    const summary = typeof record['summary'] === 'string'
+      ? scrubPathsInText(record['summary']).slice(0, 500)
+      : undefined;
+    outcomes.push({
+      role,
+      status,
+      ...(summary !== undefined ? { summary } : {}),
+    });
+  }
+  return outcomes;
 }
 
 function terminalWorkProduct(event: MutationEvent): WorkProductFacts | null {
@@ -3309,6 +3339,7 @@ function mapResultToTerminal(
   }
   if (result.kind === 'cancelled') {
     const nested = result.cancellation;
+    const judgmentOutcomes = result.judgmentOutcomes;
     const nestedReason = nested === undefined
       ? undefined
       : scrubPathsInText(
@@ -3321,6 +3352,7 @@ function mapResultToTerminal(
         ...(result.source !== undefined ? { cancelSource: result.source } : {}),
         reason: nestedReason ?? 'cancelled',
         ...(nested !== undefined ? { cancellation: nested } : {}),
+        ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
         ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
       });
     }
@@ -3330,6 +3362,7 @@ function mapResultToTerminal(
       ...(result.source !== undefined ? { cancelSource: result.source } : {}),
       reason: nestedReason ?? 'system-cancelled; stopped at orchestration boundary',
       ...(nested !== undefined ? { cancellation: nested } : {}),
+      ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
       baseBranch,
       ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
     });
