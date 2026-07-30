@@ -21,6 +21,11 @@ import {
   type PmAcceptance,
 } from './team-task-workflow.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
+import {
+  durableArtifactAttempts,
+  durableExecutionFailure,
+} from './execution-failure.js';
+import type { ExecutionFailure } from './execution-failure.js';
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -51,6 +56,8 @@ export interface TaskRunRecord {
   acceptance?: PmAcceptance;
   /** Successful worktree coder self-reviews. Optional for historical JSONL. */
   coderSelfReviews?: CoderSelfReviewRecord[];
+  /** Typed executor failure. Optional for successful and historical records. */
+  executionFailure?: ExecutionFailure;
   /** Related-test fallback evidence. Optional for historical JSONL. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
   /** Stable, bounded post-coder fan-in outcomes. Optional for historical JSONL. */
@@ -94,15 +101,22 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       ? {
           coderSelfReviews: input.coderSelfReviews
             .slice(0, SEVERITY_LOOP_HARD_BUDGET)
-            .map((review) => ({
-              ...review,
-              notes: review.notes.slice(0, SELF_REVIEW_NOTE_MAX_CHARS),
-              changedPaths: review.changedPaths.slice(
-                0,
-                CANONICAL_CHANGED_PATHS_MAX,
-              ),
-            })),
+            .map((review) => {
+              const artifactAttempts = durableArtifactAttempts(review.artifactAttempts);
+              return {
+                ...review,
+                notes: review.notes.slice(0, SELF_REVIEW_NOTE_MAX_CHARS),
+                changedPaths: review.changedPaths.slice(
+                  0,
+                  CANONICAL_CHANGED_PATHS_MAX,
+                ),
+                ...(artifactAttempts !== undefined ? { artifactAttempts } : {}),
+              };
+            }),
         }
+      : {}),
+    ...(input.executionFailure !== undefined
+      ? { executionFailure: durableExecutionFailure(input.executionFailure) }
       : {}),
     ...(input.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }

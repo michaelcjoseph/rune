@@ -62,6 +62,7 @@ import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import {
   sanitizeExecutionDiagnostic,
+  type ArtifactAttemptEvidence,
   type ExecutionAttempt,
   type ExecutionCheckpoint,
   type ExecutionFailure,
@@ -101,11 +102,41 @@ export interface RoleModelBinding {
 export interface SpawnAgentResult {
   output: string;
   error: string | null;
+  /** Provider frames in arrival order. Optional for injected legacy seams. */
+  messages?: NormalizedExecutionMessage[];
+  /** Present for a stage that requires one machine-readable terminal artifact. */
+  terminalArtifact?: TerminalArtifactResult;
   cancellation?: OperationCancellation;
   /** Structured adapter outcome. Legacy injected seams may omit these; their
    * errors are conservatively treated as retryable provider failures. */
   failureStage?: Extract<ExecutionFailureStage, 'environment' | 'spawn' | 'timeout' | 'cancellation' | 'provider' | 'executor-exit'>;
   retryable?: boolean;
+}
+
+export type NormalizedExecutionMessageKind =
+  | 'assistant'
+  | 'result'
+  | 'lifecycle'
+  | 'raw';
+
+export interface NormalizedExecutionMessage {
+  sequence: number;
+  provider: DispatchProvider;
+  kind: NormalizedExecutionMessageKind;
+  text?: string;
+  terminal?: boolean;
+  afterTerminal?: boolean;
+}
+
+export interface TerminalArtifactResult {
+  provider: DispatchProvider;
+  artifactKind: 'coder-self-review';
+  status: ArtifactAttemptEvidence['status'];
+  progressCount: number;
+  candidateCount: number;
+  diagnostic: string;
+  /** Transient parser input. Never copy this field into durable evidence. */
+  artifact?: string;
 }
 
 export type ExecutionAgentStreamEvent =
@@ -123,6 +154,7 @@ export interface ExecutionAgentIO {
     cwd: string;
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
+    workflowStage?: string;
     emit?: (event: ExecutionAgentStreamEvent) => void;
     artifactMcp?: ArtifactMcpConfig;
   }) => Promise<SpawnAgentResult>;
@@ -167,7 +199,13 @@ export interface ExecutionAgentOpts {
 }
 
 export type ExecutionAgentResult =
-  | { ok: true; diff: string; output: string }
+  | {
+      ok: true;
+      diff: string;
+      output: string;
+      messages?: NormalizedExecutionMessage[];
+      terminalArtifact?: TerminalArtifactResult;
+    }
   | { ok: false; failure: ExecutionFailure; cancellation?: OperationCancellation };
 
 const defaultIo: ExecutionAgentIO = {
@@ -332,6 +370,7 @@ export async function runExecutionAgent(
           cwd,
           env,
           timeoutMs,
+          workflowStage: opts.workflowStage,
           ...(artifactMcp !== null ? { artifactMcp } : {}),
           ...(emit !== undefined ? { emit } : {}),
         });
@@ -419,6 +458,42 @@ export async function runExecutionAgent(
       );
     }
 
+    if (
+      opts.workflowStage === 'coder-self-review' &&
+      spawnResult.terminalArtifact === undefined
+    ) {
+      const text = sanitize(spawnResult.output, credentialValues);
+      const messages: NormalizedExecutionMessage[] = opts.model.format === 'claude'
+        ? [{
+            sequence: 1,
+            provider: opts.model.provider,
+            kind: 'result',
+            text,
+            terminal: true,
+          }]
+        : [{
+            sequence: 1,
+            provider: opts.model.provider,
+            kind: 'assistant',
+            text,
+          }, {
+            sequence: 2,
+            provider: opts.model.provider,
+            kind: 'lifecycle',
+            terminal: true,
+          }];
+      spawnResult = {
+        ...spawnResult,
+        output: '',
+        messages,
+        terminalArtifact: extractCoderSelfReviewArtifact(
+          messages,
+          opts.model.provider,
+          opts.model.format,
+        ),
+      };
+    }
+
     try {
       await runGit(['add', '-A'], { cwd });
     } catch (err) {
@@ -437,6 +512,12 @@ export async function runExecutionAgent(
       ok: true,
       diff: redactSecrets(scrubPathsInText(stdout), credentialValues),
       output: sanitize(spawnResult.output, credentialValues),
+      ...(spawnResult.messages !== undefined
+        ? { messages: spawnResult.messages.map((message) => ({ ...message })) }
+        : {}),
+      ...(spawnResult.terminalArtifact !== undefined
+        ? { terminalArtifact: { ...spawnResult.terminalArtifact } }
+        : {}),
     };
   }
 
@@ -497,6 +578,232 @@ function composeActivityEmit(
 // Production spawn — dispatch by executor format
 // ---------------------------------------------------------------------------
 
+const CODER_SELF_REVIEW_FENCE =
+  /^\s*```coder-self-review[ \t]*\r?\n[\s\S]*?\r?\n```[ \t]*\s*$/;
+const CODER_SELF_REVIEW_TAG = /```coder-self-review\b/;
+const TERMINAL_ARTIFACT_COUNT_MAX = 10_000;
+
+function coderSelfReviewTagCount(text: string): number {
+  return text.match(/```coder-self-review\b/g)?.length ?? 0;
+}
+
+function terminalArtifactTagCount(
+  messages: readonly NormalizedExecutionMessage[],
+): number {
+  return messages.reduce(
+    (count, message) => count + (
+      typeof message.text === 'string'
+        ? coderSelfReviewTagCount(message.text)
+        : 0
+    ),
+    0,
+  );
+}
+
+function terminalArtifactProgressCount(
+  messages: readonly NormalizedExecutionMessage[],
+): number {
+  return messages.filter((message) =>
+    message.kind === 'assistant' &&
+    typeof message.text === 'string' &&
+    coderSelfReviewTagCount(message.text) === 0).length;
+}
+
+/**
+ * Select the one provider-terminal artifact without using "last fence" or
+ * aggregate-output heuristics. The returned artifact is transient parser
+ * input; callers persist only the bounded counts/status/diagnostic.
+ */
+export function extractCoderSelfReviewArtifact(
+  messages: readonly NormalizedExecutionMessage[],
+  provider: DispatchProvider,
+  format: RoleModelBinding['format'],
+): TerminalArtifactResult {
+  const meaningful = messages.filter((message) =>
+    message.kind === 'assistant' || message.kind === 'result' || message.kind === 'raw');
+  const rejectedAfterTerminal = messages.some((message) => message.afterTerminal === true);
+  const result = (
+    status: TerminalArtifactResult['status'],
+    diagnostic: string,
+    candidateCount: number,
+    progressCount: number,
+    artifact?: string,
+  ): TerminalArtifactResult => ({
+    provider,
+    artifactKind: 'coder-self-review',
+    status,
+    progressCount: Math.min(TERMINAL_ARTIFACT_COUNT_MAX, progressCount),
+    candidateCount: Math.min(TERMINAL_ARTIFACT_COUNT_MAX, candidateCount),
+    diagnostic: sanitizeExecutionDiagnostic(diagnostic),
+    ...(artifact !== undefined ? { artifact } : {}),
+  });
+
+  if (rejectedAfterTerminal) {
+    const candidateCount = terminalArtifactTagCount(meaningful);
+    return result(
+      'rejected',
+      'provider emitted a message after terminal lifecycle completion',
+      candidateCount,
+      terminalArtifactProgressCount(meaningful),
+    );
+  }
+
+  if (format === 'codex') {
+    const terminalIndex = messages.findIndex((message) =>
+      message.kind === 'lifecycle' && message.terminal === true);
+    if (terminalIndex < 0) {
+      const candidateCount = terminalArtifactTagCount(meaningful);
+      return result(
+        candidateCount > 0 ? 'non-final' : 'missing',
+        'Codex stream did not complete with a terminal lifecycle event',
+        candidateCount,
+        terminalArtifactProgressCount(meaningful),
+      );
+    }
+    const beforeTerminal = messages.slice(0, terminalIndex);
+    const assistants = beforeTerminal
+      .filter((message) => message.kind === 'assistant' && typeof message.text === 'string');
+    const terminal = assistants.at(-1);
+    const candidateCount = terminalArtifactTagCount(beforeTerminal);
+    const progressCount = terminalArtifactProgressCount(beforeTerminal);
+    if (terminal === undefined) {
+      return result('missing', 'Codex terminal lifecycle had no completed agent message', 0, progressCount);
+    }
+    const terminalTagged = CODER_SELF_REVIEW_TAG.test(terminal.text!);
+    if (candidateCount > 1) {
+      return result(
+        'ambiguous',
+        'Codex stream contained multiple coder-self-review candidates',
+        candidateCount,
+        progressCount,
+      );
+    }
+    if (!terminalTagged) {
+      return result(
+        candidateCount === 1 ? 'non-final' : 'malformed',
+        candidateCount === 1
+          ? 'coder-self-review candidate was not the final completed agent message'
+          : 'final completed Codex agent message was not one complete coder-self-review fence',
+        candidateCount,
+        progressCount,
+      );
+    }
+    if (!CODER_SELF_REVIEW_FENCE.test(terminal.text!)) {
+      return result(
+        'malformed',
+        'final completed Codex agent message was not one complete coder-self-review fence',
+        candidateCount,
+        progressCount,
+      );
+    }
+    return result(
+      'captured',
+      'captured final completed Codex agent message',
+      1,
+      progressCount,
+      terminal.text,
+    );
+  }
+
+  const terminalResults = messages.filter((message) =>
+    message.kind === 'result' && message.terminal === true && typeof message.text === 'string');
+  if (terminalResults.length !== 1) {
+    const candidateCount = terminalArtifactTagCount(meaningful);
+    return result(
+      terminalResults.length > 1 ? 'ambiguous' : (candidateCount > 0 ? 'non-final' : 'missing'),
+      terminalResults.length > 1
+        ? 'Claude stream contained multiple terminal result frames'
+        : 'Claude stream did not contain an explicit terminal result frame',
+      candidateCount,
+      terminalArtifactProgressCount(meaningful),
+    );
+  }
+  const terminal = terminalResults[0]!;
+  const terminalIndex = messages.indexOf(terminal);
+  const prior = messages.slice(0, terminalIndex);
+  const immediatelyPriorAssistant = prior.at(-1);
+  const duplicateAssistant =
+    immediatelyPriorAssistant?.kind === 'assistant' &&
+    immediatelyPriorAssistant.text === terminal.text
+      ? immediatelyPriorAssistant
+      : undefined;
+  const considered = prior.filter((message) => message !== duplicateAssistant);
+  const earlierCandidateCount = terminalArtifactTagCount(considered);
+  const terminalTagCount = coderSelfReviewTagCount(terminal.text!);
+  const terminalTagged = terminalTagCount > 0;
+  const candidateCount = earlierCandidateCount + terminalTagCount;
+  const progressCount = terminalArtifactProgressCount(considered);
+  if (candidateCount > 1) {
+    return result(
+      'ambiguous',
+      'Claude stream contained multiple coder-self-review candidates',
+      candidateCount,
+      progressCount,
+    );
+  }
+  if (!terminalTagged) {
+    return result(
+      earlierCandidateCount === 1 ? 'non-final' : 'malformed',
+      earlierCandidateCount === 1
+        ? 'coder-self-review candidate preceded the explicit Claude result'
+        : 'explicit Claude result was not one complete coder-self-review fence',
+      candidateCount,
+      progressCount,
+    );
+  }
+  if (!CODER_SELF_REVIEW_FENCE.test(terminal.text!)) {
+    return result(
+      'malformed',
+      'explicit Claude result was not one complete coder-self-review fence',
+      candidateCount,
+      progressCount,
+    );
+  }
+  return result(
+    'captured',
+    duplicateAssistant === undefined
+      ? 'captured explicit Claude result'
+      : 'captured explicit Claude result and suppressed its duplicate assistant frame',
+    1,
+    progressCount,
+    terminal.text,
+  );
+}
+
+function emitBufferedSelfReview(
+  messages: readonly NormalizedExecutionMessage[],
+  artifact: TerminalArtifactResult,
+  emit: ((event: ExecutionAgentStreamEvent) => void) | undefined,
+): string {
+  const progress: string[] = [];
+  for (const message of messages) {
+    if (
+      message.kind === 'assistant' &&
+      typeof message.text === 'string' &&
+      !CODER_SELF_REVIEW_TAG.test(message.text)
+    ) {
+      progress.push(message.text);
+      for (const line of message.text.split('\n')) {
+        if (line) emit?.({ kind: 'output', data: { line } });
+      }
+    }
+  }
+  emit?.({
+    kind: 'activity',
+    data: {
+      event: 'terminal-artifact',
+      artifactKind: artifact.artifactKind,
+      status: artifact.status,
+      provider: artifact.provider,
+      progressCount: artifact.progressCount,
+      candidateCount: artifact.candidateCount,
+      diagnostic: artifact.diagnostic,
+      line: `coder-self-review artifact ${artifact.status}: ${artifact.diagnostic}`,
+    },
+  });
+  return progress.join('\n').trim();
+}
+
 async function defaultSpawnAgent(args: {
   prompt: string;
   systemPrompt?: string;
@@ -506,6 +813,7 @@ async function defaultSpawnAgent(args: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  workflowStage?: string;
   emit?: (event: ExecutionAgentStreamEvent) => void;
   artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
@@ -520,6 +828,41 @@ async function defaultSpawnAgent(args: {
       : args.prompt;
     let streamedOutput = '';
     let sawCodexEvent = false;
+    let terminalSeen = false;
+    const messages: NormalizedExecutionMessage[] = [];
+    const handleCodexEvent = (event: Record<string, unknown>): void => {
+      sawCodexEvent = true;
+      const afterTerminal = terminalSeen;
+      const line = codexEventToDisplay(event, credentialValues);
+      const terminal = event['type'] === 'turn.completed' ||
+        event['type'] === 'turn.failed' ||
+        event['type'] === 'turn.cancelled';
+      const kind: NormalizedExecutionMessageKind =
+        event['type'] === 'item.completed' &&
+        isRecord(event['item']) &&
+        event['item']['type'] === 'agent_message'
+          ? 'assistant'
+          : event['type'] === 'raw'
+            ? 'raw'
+            : 'lifecycle';
+      messages.push({
+        sequence: messages.length + 1,
+        provider: args.model.provider,
+        kind,
+        ...(line !== null ? { text: line } : {}),
+        ...(terminal ? { terminal: true } : {}),
+        ...(afterTerminal ? { afterTerminal: true } : {}),
+      });
+      if (terminal) terminalSeen = true;
+
+      if (args.workflowStage === 'coder-self-review' && line !== null) return;
+      if (line === null) {
+        args.emit?.({ kind: 'activity' });
+        return;
+      }
+      streamedOutput += `${line}\n`;
+      args.emit?.({ kind: 'output', data: { line } });
+    };
     const codexOpts = args.artifactMcp
       ? {
           cwd: args.cwd,
@@ -536,16 +879,7 @@ async function defaultSpawnAgent(args: {
           env,
           configOverrides: args.artifactMcp.codexConfigOverrides,
           ignoreUserConfig: true,
-          onEvent: (event: Record<string, unknown>) => {
-            sawCodexEvent = true;
-            const line = codexEventToDisplay(event, credentialValues);
-            if (line === null) {
-              args.emit?.({ kind: 'activity' });
-              return;
-            }
-            streamedOutput += `${line}\n`;
-            args.emit?.({ kind: 'output', data: { line } });
-          },
+          onEvent: handleCodexEvent,
         }
       : {
           cwd: args.cwd,
@@ -559,25 +893,42 @@ async function defaultSpawnAgent(args: {
           // Scoped credentials only — never the default process.env spread (see
           // RunCodexOpts.env: sandboxed callers MUST pass a built env).
           env,
-          onEvent: (event: Record<string, unknown>) => {
-            sawCodexEvent = true;
-            const line = codexEventToDisplay(event, credentialValues);
-            if (line === null) {
-              args.emit?.({ kind: 'activity' });
-              return;
-            }
-            streamedOutput += `${line}\n`;
-            args.emit?.({ kind: 'output', data: { line } });
-          },
+          onEvent: handleCodexEvent,
         };
     const result = await runCodex(codexPrompt, codexOpts);
-    const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues));
+    if (
+      args.workflowStage !== 'coder-self-review' &&
+      !sawCodexEvent &&
+      typeof result.text === 'string' &&
+      result.text.trim() !== ''
+    ) {
+      const text = sanitize(result.text, credentialValues);
+      messages.push({
+        sequence: 1,
+        provider: args.model.provider,
+        kind: 'assistant',
+        text,
+      }, {
+        sequence: 2,
+        provider: args.model.provider,
+        kind: 'lifecycle',
+        terminal: true,
+      });
+    }
+    const terminalArtifact = args.workflowStage === 'coder-self-review'
+      ? extractCoderSelfReviewArtifact(messages, args.model.provider, args.model.format)
+      : undefined;
+    const output = terminalArtifact === undefined
+      ? streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? '', credentialValues))
+      : emitBufferedSelfReview(messages, terminalArtifact, args.emit);
     const codexFailure = result.error === null || result.cancellation !== undefined
       ? undefined
       : classifyAdapterFailure(result.error, result.failureKind ?? 'provider');
     return {
       output,
       error: result.error === null ? null : sanitize(result.error, credentialValues),
+      messages,
+      ...(terminalArtifact !== undefined ? { terminalArtifact } : {}),
       ...(result.cancellation !== undefined ? { cancellation: result.cancellation } : {}),
       ...(result.error !== null ? {
         failureStage: result.cancellation !== undefined
@@ -647,11 +998,14 @@ function spawnClaudeAgent(args: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  workflowStage?: string;
   emit?: (event: ExecutionAgentStreamEvent) => void;
   artifactMcp?: ArtifactMcpConfig;
 }): Promise<SpawnAgentResult> {
   return new Promise((resolve) => {
     const credentialValues = productCredentialValues(args.env);
+    const messages: NormalizedExecutionMessage[] = [];
+    let terminalSeen = false;
     let resolved = false;
     const finish = (result: SpawnAgentResult): void => {
       if (resolved) return;
@@ -736,16 +1090,43 @@ function spawnClaudeAgent(args: {
       const envelope = parseStreamJsonLine(line);
       if (!envelope) {
         const redacted = redactSecrets(scrubPathsInText(line), credentialValues);
-        if (redacted) stdout += `${redacted}\n`;
+        if (redacted) {
+          messages.push({
+            sequence: messages.length + 1,
+            provider: args.model.provider,
+            kind: 'raw',
+            text: redacted,
+            ...(terminalSeen ? { afterTerminal: true } : {}),
+          });
+          if (args.workflowStage !== 'coder-self-review') stdout += `${redacted}\n`;
+        }
         return;
       }
       const display = streamJsonToDisplay(envelope);
+      const isTerminal = envelope.type === 'result';
+      const kind: NormalizedExecutionMessageKind = envelope.type === 'assistant'
+        ? 'assistant'
+        : isTerminal
+          ? 'result'
+          : 'lifecycle';
+      const redactedDisplay = display === null
+        ? null
+        : redactSecrets(display, credentialValues);
+      messages.push({
+        sequence: messages.length + 1,
+        provider: args.model.provider,
+        kind,
+        ...(redactedDisplay !== null ? { text: redactedDisplay } : {}),
+        ...(isTerminal ? { terminal: true } : {}),
+        ...(terminalSeen ? { afterTerminal: true } : {}),
+      });
+      if (isTerminal) terminalSeen = true;
       if (display === null) {
         emitEvent({ kind: 'activity' });
         return;
       }
-      const redacted = redactSecrets(display, credentialValues);
-      for (const displayLine of redacted.split('\n')) {
+      if (args.workflowStage === 'coder-self-review') return;
+      for (const displayLine of redactedDisplay!.split('\n')) {
         if (!displayLine) continue;
         stdout += `${displayLine}\n`;
         emitEvent({ kind: 'output', data: { line: displayLine } });
@@ -778,25 +1159,36 @@ function spawnClaudeAgent(args: {
       if (killTimer) clearTimeout(killTimer);
       unregisterActiveProcess(child);
       const cancellation = getCancellation(op.opId);
+      const terminalArtifact = args.workflowStage === 'coder-self-review'
+        ? extractCoderSelfReviewArtifact(messages, args.model.provider, args.model.format)
+        : undefined;
+      const finalOutput = terminalArtifact === undefined
+        ? stdout
+        : emitBufferedSelfReview(messages, terminalArtifact, args.emit);
+      const evidence = {
+        output: finalOutput,
+        messages,
+        ...(terminalArtifact !== undefined ? { terminalArtifact } : {}),
+      };
       if (cancellation !== undefined) {
         unregisterOp(op.opId, 'cancelled', 'Cancelled by user');
-        finish({ output: stdout, error: 'Cancelled by user', cancellation, failureStage: 'cancellation', retryable: false });
+        finish({ ...evidence, error: 'Cancelled by user', cancellation, failureStage: 'cancellation', retryable: false });
         return;
       }
       if (spawnError !== null) {
         const error = sanitize(spawnError, credentialValues);
         unregisterOp(op.opId, 'error', error);
-        finish({ output: stdout, error, failureStage: 'spawn', retryable: true });
+        finish({ ...evidence, error, failureStage: 'spawn', retryable: true });
         return;
       }
       if (timedOut) {
         unregisterOp(op.opId, 'error', `execution agent timed out after ${args.timeoutMs}ms`);
-        finish({ output: stdout, error: `execution agent timed out after ${args.timeoutMs}ms`, failureStage: 'timeout', retryable: true });
+        finish({ ...evidence, error: `execution agent timed out after ${args.timeoutMs}ms`, failureStage: 'timeout', retryable: true });
         return;
       }
       if (code === 0) {
         unregisterOp(op.opId, 'success');
-        finish({ output: stdout, error: null });
+        finish({ ...evidence, error: null });
         return;
       }
       const error = sanitize(
@@ -805,7 +1197,7 @@ function spawnClaudeAgent(args: {
       );
       const classified = classifyAdapterFailure(error, 'executor-exit');
       unregisterOp(op.opId, 'error', error);
-      finish({ output: stdout, error, failureStage: classified.stage, retryable: classified.retryable });
+      finish({ ...evidence, error, failureStage: classified.stage, retryable: classified.retryable });
     });
   });
 }

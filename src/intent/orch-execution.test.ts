@@ -180,6 +180,14 @@ describe('orch-run-record — required fields', () => {
       notes: i === 0 ? longNotes : `round ${i + 1} notes`,
       canonicalHash: `hash-${i + 1}`,
       changedPaths: i === 0 ? manyPaths : ['src/x.ts'],
+      artifactAttempts: [{
+        attempt: 1,
+        status: 'parsed' as const,
+        provider: 'openai' as const,
+        progressCount: 2,
+        candidateCount: 1,
+        diagnostic: 'x'.repeat(2_500),
+      }],
     }));
 
     const rec: TaskRunRecord = buildTaskRunRecord({
@@ -205,6 +213,8 @@ describe('orch-run-record — required fields', () => {
     expect(rec.coderSelfReviews?.[0]?.notes).toBe(longNotes.slice(0, 2_000));
     expect(rec.coderSelfReviews?.[0]?.changedPaths).toHaveLength(200);
     expect(rec.coderSelfReviews?.[0]?.changedPaths).toEqual(manyPaths.slice(0, 200));
+    expect(rec.coderSelfReviews?.[0]?.artifactAttempts?.[0]?.diagnostic).toHaveLength(2_000);
+    expect(rec.coderSelfReviews?.[0]?.artifactAttempts?.[0]).not.toHaveProperty('artifact');
   });
 
   it('defensively copies coderSelfReviews so mutating the caller array/objects cannot alter the durable record', () => {
@@ -255,6 +265,110 @@ describe('orch-run-record — required fields', () => {
 
     expect(rec.coderSelfReviews).toBeUndefined();
     expect('coderSelfReviews' in rec).toBe(false);
+  });
+
+  it('persists bounded scrubbed artifact-contract failures on durable task records', () => {
+    const diagnostic = 'invalid artifact at /Users/operator/private';
+    const artifactAttempts = [{
+      attempt: 1,
+      status: 'malformed' as const,
+      provider: 'openai' as const,
+      progressCount: 1,
+      candidateCount: 1,
+      diagnostic,
+    }];
+    const executionFailure = {
+      taskId: 't-failure',
+      role: 'coder',
+      provider: 'openai' as const,
+      format: 'codex' as const,
+      model: 'gpt-test',
+      workflowStage: 'coder-self-review',
+      checkpointedAt: '2026-07-30T00:00:00.000Z',
+      artifactAttempts,
+      failureStage: 'artifact-contract' as const,
+      diagnostic,
+      retryable: false,
+      attempts: [{
+        attempt: 1,
+        startedAt: '2026-07-30T00:00:00.000Z',
+        endedAt: '2026-07-30T00:00:01.000Z',
+        failureStage: 'artifact-contract' as const,
+        diagnostic,
+        retryable: false,
+        artifactAttempts,
+      }],
+      retryDisposition: 'exhausted' as const,
+    };
+
+    const rec = buildTaskRunRecord({
+      taskId: 't-failure',
+      taskText: 'Persist artifact failure',
+      attemptId: 'a-failure',
+      rolesInvoked: ['coder'],
+      transcriptIds: [],
+      modelChoices: { coder: 'gpt-test' },
+      commitSha: null,
+      verdicts: {},
+      executionFailure,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'failed',
+    });
+
+    expect(rec.executionFailure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'exhausted',
+      artifactAttempts: [expect.objectContaining({ status: 'malformed' })],
+    });
+    expect(JSON.stringify(rec.executionFailure)).not.toContain('/Users/operator');
+    expect(rec.executionFailure).not.toBe(executionFailure);
+  });
+
+  it('allowlists durable execution-failure fields instead of cloning runtime extras', () => {
+    const diagnostic = 'invalid artifact at /Users/operator/private';
+    const executionFailure = {
+      taskId: 't-failure',
+      role: 'coder',
+      provider: 'openai' as const,
+      format: 'codex' as const,
+      model: 'gpt-test',
+      workflowStage: 'coder-self-review',
+      checkpointedAt: '2026-07-30T00:00:00.000Z',
+      failureStage: 'artifact-contract' as const,
+      diagnostic,
+      retryable: false,
+      attempts: [{
+        attempt: 1,
+        startedAt: '2026-07-30T00:00:00.000Z',
+        endedAt: '2026-07-30T00:00:01.000Z',
+        failureStage: 'artifact-contract' as const,
+        diagnostic,
+        retryable: false,
+        rawArtifact: '```coder-self-review\nsecret\n```',
+      }],
+      retryDisposition: 'exhausted' as const,
+      rawArtifact: '```coder-self-review\nsecret\n```',
+    };
+
+    const rec = buildTaskRunRecord({
+      taskId: 't-failure',
+      taskText: 'Persist allowlisted artifact failure',
+      attemptId: 'a-failure',
+      rolesInvoked: ['coder'],
+      transcriptIds: [],
+      modelChoices: { coder: 'gpt-test' },
+      commitSha: null,
+      verdicts: {},
+      executionFailure,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'failed',
+    });
+
+    expect(rec.executionFailure).not.toHaveProperty('rawArtifact');
+    expect(rec.executionFailure?.attempts[0]).not.toHaveProperty('rawArtifact');
+    expect(JSON.stringify(rec.executionFailure)).not.toContain('```coder-self-review');
   });
 
   it('carries a successful related-test fallback diagnostic into durable task evidence', () => {

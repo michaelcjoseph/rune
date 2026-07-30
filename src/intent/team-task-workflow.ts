@@ -31,6 +31,7 @@ import type { OperationCancellation } from '../cancellation.js';
 import type { ExecutionPreflightFailure } from './execution-preflight.js';
 import {
   executionFailureSummary,
+  type ArtifactAttemptEvidence,
   type ExecutionFailure,
 } from './execution-failure.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
@@ -248,6 +249,8 @@ export interface CoderSelfReviewRecord {
   /** Optional for historical records written before full-task review capture. */
   currentReviewTree?: string;
   changedPaths: string[];
+  /** Bounded terminal-artifact attempts; optional for historical records. */
+  artifactAttempts?: ArtifactAttemptEvidence[];
 }
 
 /** Git object-id shape (SHA-1, or SHA-256 for a repo using that hash). Declared
@@ -279,6 +282,7 @@ export interface CoderSelfReviewResult {
   outcome: CoderSelfReviewOutcome;
   notes: string;
   reviewState: CanonicalReviewState;
+  artifactAttempts?: ArtifactAttemptEvidence[];
 }
 
 /** Evidence that a later mechanical gate changed the canonical surface that
@@ -894,6 +898,13 @@ async function runGated(
         0,
         CANONICAL_CHANGED_PATHS_MAX,
       ),
+      ...(reviewed.artifactAttempts !== undefined
+        ? {
+            artifactAttempts: reviewed.artifactAttempts.map((attempt) => ({
+              ...attempt,
+            })),
+          }
+        : {}),
     };
     coderSelfReviews.push(selfReviewRecord);
     emitCoderSelfReview(input, selfReviewRecord);
@@ -2324,6 +2335,13 @@ function emitCoderSelfReview(
           ? { currentReviewTree: review.currentReviewTree }
           : {}),
         changedPaths: review.changedPaths,
+        ...(review.artifactAttempts !== undefined
+          ? {
+              artifactAttempts: review.artifactAttempts.map((attempt) => ({
+                ...attempt,
+              })),
+            }
+          : {}),
         line: `coder-self-review: ${review.outcome} - ${review.notes}`,
       },
     });

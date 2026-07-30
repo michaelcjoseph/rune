@@ -86,6 +86,7 @@ describe('execution failure durable contracts', () => {
 
   it.each([
     'artifact-mcp',
+    'artifact-contract',
     'environment',
     'spawn',
     'timeout',
@@ -188,6 +189,37 @@ describe('execution failure durable contracts', () => {
         ...withCleanup.attempts[0]!,
         cleanupDiagnostic: 'x'.repeat(EXECUTION_DIAGNOSTIC_MAX_CHARS + 1),
       }],
+    })).toBe(false);
+  });
+
+  it('accepts bounded artifact-attempt evidence while keeping legacy checkpoints valid', () => {
+    const artifactAttempts = [{
+      attempt: 1,
+      status: 'malformed' as const,
+      provider: 'openai' as const,
+      progressCount: 3,
+      candidateCount: 1,
+      diagnostic: 'terminal message had trailing prose',
+    }];
+    const value = {
+      ...failure('artifact-contract', 'exhausted'),
+      artifactAttempts,
+      attempts: [{
+        ...failure().attempts[0]!,
+        failureStage: 'artifact-contract' as const,
+        artifactAttempts,
+      }],
+    };
+
+    expect(isExecutionFailure(value)).toBe(true);
+    expect(isExecutionCheckpoint({ ...checkpoint, artifactAttempts })).toBe(true);
+    expect(isExecutionCheckpoint({
+      ...checkpoint,
+      artifactAttempts: [{ ...artifactAttempts[0], diagnostic: '' }],
+    })).toBe(false);
+    expect(isExecutionCheckpoint({
+      ...checkpoint,
+      artifactAttempts: [{ ...artifactAttempts[0], candidateCount: -1 }],
     })).toBe(false);
   });
 });

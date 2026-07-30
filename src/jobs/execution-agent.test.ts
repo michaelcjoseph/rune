@@ -31,7 +31,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  extractCoderSelfReviewArtifact,
   runExecutionAgent,
+  type NormalizedExecutionMessage,
   type ExecutionAgentIO,
   type ExecutionAgentOpts,
 } from './execution-agent.js';
@@ -135,6 +137,11 @@ const protectedServiceRuntimePrompt = [
   '- Rune web / cockpit at 127.0.0.1:3847 (launchd label com.jarvis.daemon)',
   '- Rune MCP daemon at 127.0.0.1:3848 (launchd label com.jarvis.rune-mcp)',
   'Before killing any process, verify the PID was spawned by the current task/worktree/test command.',
+].join('\n');
+const confirmedSelfReview = [
+  '```coder-self-review',
+  '{"outcome":"confirmed","notes":"Canonical implementation and tests are consistent."}',
+  '```',
 ].join('\n');
 
 function makeOpts(overrides: Partial<ExecutionAgentOpts> = {}): ExecutionAgentOpts {
@@ -361,6 +368,278 @@ describe('runExecutionAgent — Codex JSON event forwarding', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.output).toBe('legacy stdout from private/file.md');
+  });
+});
+
+describe('runExecutionAgent — coder-self-review terminal artifact', () => {
+  it('reproduces run 123dac55: Codex progress stays observable and only the final artifact is captured', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'turn.started' });
+      opts.onEvent({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'I am checking the implementation and tests.' },
+      });
+      opts.onEvent({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: confirmedSelfReview },
+      });
+      opts.onEvent({ type: 'turn.completed' });
+      return { text: 'ignored aggregate JSONL', error: null, exitCode: 0 };
+    });
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+
+    const result = await runExecutionAgent(makeOpts({
+      role: 'coder',
+      workflowStage: 'coder-self-review',
+      emit: (event) => events.push(event),
+    }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('I am checking the implementation and tests.');
+    expect(result.terminalArtifact).toMatchObject({
+      provider: 'openai',
+      artifactKind: 'coder-self-review',
+      status: 'captured',
+      progressCount: 1,
+      candidateCount: 1,
+      artifact: confirmedSelfReview,
+    });
+    expect(events.filter((event) => event.kind === 'output')).toEqual([
+      { kind: 'output', data: { line: 'I am checking the implementation and tests.' } },
+    ]);
+    expect(events.some((event) =>
+      event.kind === 'output' && String(event.data?.['line']).includes('```coder-self-review'))).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'activity',
+      data: expect.objectContaining({
+        event: 'terminal-artifact',
+        status: 'captured',
+        candidateCount: 1,
+      }),
+    }));
+  });
+
+  it('rejects an earlier raw Codex artifact candidate without emitting raw fence fragments as progress', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'turn.started' });
+      opts.onEvent({ type: 'raw', line: '```coder-self-review' });
+      opts.onEvent({
+        type: 'raw',
+        line: '{"outcome":"confirmed","notes":"Raw transport candidate."}',
+      });
+      opts.onEvent({ type: 'raw', line: '```' });
+      opts.onEvent({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: confirmedSelfReview },
+      });
+      opts.onEvent({ type: 'turn.completed' });
+      return { text: 'ignored aggregate JSONL', error: null, exitCode: 0 };
+    });
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+
+    const result = await runExecutionAgent(makeOpts({
+      role: 'coder',
+      workflowStage: 'coder-self-review',
+      emit: (event) => events.push(event),
+    }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('');
+    expect(result.terminalArtifact).toMatchObject({
+      status: 'ambiguous',
+      candidateCount: 2,
+      progressCount: 0,
+    });
+    expect(result.terminalArtifact?.artifact).toBeUndefined();
+    expect(events.filter((event) => event.kind === 'output')).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain('Raw transport candidate');
+  });
+
+  it('uses Claude explicit result text and suppresses its immediately preceding assistant duplicate', async () => {
+    mockSpawn.mockImplementation(() => makeFakeChild({
+      stdoutLines: [
+        JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Reviewing canonical state.' }] },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: confirmedSelfReview }] },
+        }),
+        JSON.stringify({ type: 'result', result: confirmedSelfReview }),
+      ],
+    }));
+    const events: Array<{ kind: string; data?: Record<string, unknown> }> = [];
+
+    const result = await runExecutionAgent(makeOpts({
+      role: 'coder',
+      model: claudeModel,
+      workflowStage: 'coder-self-review',
+      emit: (event) => events.push(event),
+    }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('Reviewing canonical state.');
+    expect(result.terminalArtifact).toMatchObject({
+      provider: 'anthropic',
+      status: 'captured',
+      progressCount: 1,
+      candidateCount: 1,
+      artifact: confirmedSelfReview,
+    });
+    expect(events.filter((event) => event.kind === 'output')).toEqual([
+      { kind: 'output', data: { line: 'Reviewing canonical state.' } },
+    ]);
+  });
+
+  it('does not treat Codex aggregate text as authoritative when provider events are absent', async () => {
+    mockRunCodex.mockResolvedValue({
+      text: confirmedSelfReview,
+      error: null,
+      exitCode: 0,
+    });
+
+    const result = await runExecutionAgent(makeOpts({
+      role: 'coder',
+      workflowStage: 'coder-self-review',
+    }), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+      buildArtifactMcp: () => null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.terminalArtifact).toMatchObject({
+      status: 'missing',
+      candidateCount: 0,
+    });
+    expect(result.terminalArtifact?.artifact).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: 'missing',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: 'progress only' },
+        { kind: 'lifecycle', terminal: true },
+      ],
+      status: 'malformed',
+    },
+    {
+      name: 'malformed',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: `${confirmedSelfReview}\nextra prose` },
+        { kind: 'lifecycle', terminal: true },
+      ],
+      status: 'malformed',
+    },
+    {
+      name: 'duplicate',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: confirmedSelfReview },
+        { kind: 'assistant', text: confirmedSelfReview },
+        { kind: 'lifecycle', terminal: true },
+      ],
+      status: 'ambiguous',
+    },
+    {
+      name: 'duplicate-in-terminal-message',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: `${confirmedSelfReview}\n${confirmedSelfReview}` },
+        { kind: 'lifecycle', terminal: true },
+      ],
+      status: 'ambiguous',
+    },
+    {
+      name: 'non-final',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: confirmedSelfReview },
+        { kind: 'assistant', text: 'done' },
+        { kind: 'lifecycle', terminal: true },
+      ],
+      status: 'non-final',
+    },
+    {
+      name: 'post-terminal',
+      format: 'codex' as const,
+      messages: [
+        { kind: 'assistant', text: confirmedSelfReview },
+        { kind: 'lifecycle', terminal: true },
+        { kind: 'assistant', text: 'late', afterTerminal: true },
+      ],
+      status: 'rejected',
+    },
+    {
+      name: 'Claude earlier candidate',
+      format: 'claude' as const,
+      messages: [
+        { kind: 'assistant', text: confirmedSelfReview },
+        { kind: 'assistant', text: 'continued review' },
+        { kind: 'result', text: confirmedSelfReview, terminal: true },
+      ],
+      status: 'ambiguous',
+    },
+    {
+      name: 'Claude malformed explicit result',
+      format: 'claude' as const,
+      messages: [
+        { kind: 'assistant', text: 'reviewing' },
+        { kind: 'result', text: `${confirmedSelfReview}\ntrailing prose`, terminal: true },
+      ],
+      status: 'malformed',
+    },
+    {
+      name: 'Claude missing explicit result',
+      format: 'claude' as const,
+      messages: [
+        { kind: 'assistant', text: confirmedSelfReview },
+      ],
+      status: 'non-final',
+    },
+    {
+      name: 'Claude post-terminal',
+      format: 'claude' as const,
+      messages: [
+        { kind: 'result', text: confirmedSelfReview, terminal: true },
+        { kind: 'assistant', text: 'late', afterTerminal: true },
+      ],
+      status: 'rejected',
+    },
+  ])('rejects $name terminal streams without inventing an outcome', ({ format, messages, status }) => {
+    const normalized: NormalizedExecutionMessage[] = messages.map((message, index) => ({
+      sequence: index + 1,
+      provider: 'openai',
+      ...message,
+    } as NormalizedExecutionMessage));
+
+    expect(extractCoderSelfReviewArtifact(normalized, 'openai', format)).toMatchObject({
+      status,
+      artifactKind: 'coder-self-review',
+    });
+    expect(extractCoderSelfReviewArtifact(normalized, 'openai', format).artifact).toBeUndefined();
   });
 });
 

@@ -1784,6 +1784,14 @@ describe('team-task-workflow — worktree coder self-review', () => {
           return {
             outcome: round === 1 ? 'revised' : 'confirmed',
             notes: round === 1 ? 'Fixed the missing guard.' : 'Retry is internally consistent.',
+            artifactAttempts: [{
+              attempt: 1,
+              status: 'parsed' as const,
+              provider: 'openai' as const,
+              progressCount: round,
+              candidateCount: 1,
+              diagnostic: 'terminal artifact parsed',
+            }],
             reviewState: {
               diff: round === 1
                 ? 'diff --git a/app.ts b/app.ts\nFIXED-BY-SELF-REVIEW'
@@ -1848,6 +1856,14 @@ describe('team-task-workflow — worktree coder self-review', () => {
         taskBaseTree: '1111111111111111111111111111111111111111',
         currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
+        artifactAttempts: [{
+          attempt: 1,
+          status: 'parsed',
+          provider: 'openai',
+          progressCount: 1,
+          candidateCount: 1,
+          diagnostic: 'terminal artifact parsed',
+        }],
       },
       {
         round: 2,
@@ -1857,6 +1873,14 @@ describe('team-task-workflow — worktree coder self-review', () => {
         taskBaseTree: '1111111111111111111111111111111111111111',
         currentReviewTree: '2222222222222222222222222222222222222222',
         changedPaths: ['app.ts'],
+        artifactAttempts: [{
+          attempt: 1,
+          status: 'parsed',
+          provider: 'openai',
+          progressCount: 2,
+          candidateCount: 1,
+          diagnostic: 'terminal artifact parsed',
+        }],
       },
     ]);
     expect(activities.filter((event) => event['event'] === 'coder-self-review')).toEqual([
@@ -1865,12 +1889,22 @@ describe('team-task-workflow — worktree coder self-review', () => {
         outcome: 'revised',
         canonicalHash: 'hash-1',
         changedPaths: ['app.ts'],
+        artifactAttempts: [expect.objectContaining({
+          attempt: 1,
+          status: 'parsed',
+          progressCount: 1,
+        })],
       }),
       expect.objectContaining({
         round: 2,
         outcome: 'confirmed',
         canonicalHash: 'hash-2',
         changedPaths: ['app.ts'],
+        artifactAttempts: [expect.objectContaining({
+          attempt: 1,
+          status: 'parsed',
+          progressCount: 2,
+        })],
       }),
     ]);
   });

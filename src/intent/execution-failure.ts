@@ -5,6 +5,7 @@ import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 export type ExecutionFailureStage =
   | 'artifact-mcp'
+  | 'artifact-contract'
   | 'environment'
   | 'spawn'
   | 'timeout'
@@ -21,6 +22,27 @@ export type ExecutionRetryDisposition =
   | 'exhausted'
   | 'worktree-changed'
   | 'cancelled';
+
+export type TerminalArtifactStatus =
+  | 'captured'
+  | 'parsed'
+  | 'missing'
+  | 'malformed'
+  | 'ambiguous'
+  | 'non-final'
+  | 'rejected';
+
+/** Bounded evidence about one terminal-artifact attempt. Raw model output is
+ * intentionally absent: only enough metadata to diagnose the contract crosses
+ * a durable boundary. */
+export interface ArtifactAttemptEvidence {
+  attempt: number;
+  status: TerminalArtifactStatus;
+  provider: DispatchProvider;
+  progressCount: number;
+  candidateCount: number;
+  diagnostic: string;
+}
 
 export interface JudgmentBatchCheckpointMember {
   role: string;
@@ -47,6 +69,8 @@ export interface ExecutionCheckpoint {
    * Scalar role/model fields remain a stable recovery attribution anchor for
    * historical consumers; this set is the truthful concurrent cursor. */
   judgmentBatch?: JudgmentBatchCheckpoint;
+  /** Optional for historical checkpoints and non-artifact stages. */
+  artifactAttempts?: ArtifactAttemptEvidence[];
 }
 
 export interface ExecutionAttempt {
@@ -58,6 +82,7 @@ export interface ExecutionAttempt {
   retryable: boolean;
   /** Bounded secondary cleanup context; the primary failure remains authoritative. */
   cleanupDiagnostic?: string;
+  artifactAttempts?: ArtifactAttemptEvidence[];
 }
 
 export interface ExecutionFailure extends ExecutionCheckpoint {
@@ -85,7 +110,7 @@ export interface ExecutionTerminalDisposition {
 
 export const EXECUTION_DIAGNOSTIC_MAX_CHARS = 2_000;
 const FAILURE_STAGES = new Set<ExecutionFailureStage>([
-  'artifact-mcp', 'environment', 'spawn', 'timeout', 'cancellation', 'provider',
+  'artifact-mcp', 'artifact-contract', 'environment', 'spawn', 'timeout', 'cancellation', 'provider',
   'executor-exit', 'git-stage', 'git-diff', 'orchestration-adjacent',
 ]);
 const RETRY_DISPOSITIONS = new Set<ExecutionRetryDisposition>([
@@ -113,6 +138,77 @@ export function executionFailureSummary(failure: ExecutionFailure): string {
   return sanitizeExecutionDiagnostic(
     `${failure.role} ${failure.workflowStage} failed at ${failure.failureStage}: ${failure.diagnostic}`,
   );
+}
+
+export function durableArtifactAttempts(
+  attempts: readonly ArtifactAttemptEvidence[] | undefined,
+): ArtifactAttemptEvidence[] | undefined {
+  return attempts?.slice(0, 2).map((attempt) => ({
+    attempt: attempt.attempt,
+    status: attempt.status,
+    provider: attempt.provider,
+    progressCount: Math.max(0, Math.min(10_000, attempt.progressCount)),
+    candidateCount: Math.max(0, Math.min(10_000, attempt.candidateCount)),
+    diagnostic: sanitizeExecutionDiagnostic(attempt.diagnostic),
+  }));
+}
+
+/** Rebuild durable/diagnostic evidence from an explicit allowlist. Runtime
+ * excess properties must never cross a persistence or model-facing boundary. */
+export function durableExecutionFailure(failure: ExecutionFailure): ExecutionFailure {
+  const artifactAttempts = durableArtifactAttempts(failure.artifactAttempts);
+  return {
+    taskId: failure.taskId,
+    role: failure.role,
+    provider: failure.provider,
+    format: failure.format,
+    model: failure.model,
+    workflowStage: failure.workflowStage,
+    checkpointedAt: failure.checkpointedAt,
+    ...(failure.judgmentBatch !== undefined
+      ? {
+          judgmentBatch: {
+            batchId: failure.judgmentBatch.batchId,
+            members: failure.judgmentBatch.members.map((member) => ({
+              role: member.role,
+              provider: member.provider,
+              format: member.format,
+              model: member.model,
+              workflowStage: member.workflowStage,
+            })),
+          },
+        }
+      : {}),
+    ...(artifactAttempts !== undefined ? { artifactAttempts } : {}),
+    failureStage: failure.failureStage,
+    diagnostic: sanitizeExecutionDiagnostic(failure.diagnostic),
+    retryable: failure.retryable,
+    attempts: failure.attempts.slice(0, 2).map((attempt) => {
+      const attemptArtifacts = durableArtifactAttempts(attempt.artifactAttempts);
+      return {
+        attempt: attempt.attempt,
+        startedAt: attempt.startedAt,
+        endedAt: attempt.endedAt,
+        failureStage: attempt.failureStage,
+        diagnostic: sanitizeExecutionDiagnostic(attempt.diagnostic),
+        retryable: attempt.retryable,
+        ...(attempt.cleanupDiagnostic !== undefined
+          ? { cleanupDiagnostic: sanitizeExecutionDiagnostic(attempt.cleanupDiagnostic) }
+          : {}),
+        ...(attemptArtifacts !== undefined ? { artifactAttempts: attemptArtifacts } : {}),
+      };
+    }),
+    retryDisposition: failure.retryDisposition,
+    ...(failure.cancellation !== undefined
+      ? {
+          cancellation: {
+            operationId: failure.cancellation.operationId,
+            source: failure.cancellation.source,
+            requestedAt: failure.cancellation.requestedAt,
+          },
+        }
+      : {}),
+  };
 }
 
 export function adjacentExecutionFailure(
@@ -146,7 +242,8 @@ export function isExecutionCheckpoint(value: unknown): value is ExecutionCheckpo
     (v['format'] === 'claude' || v['format'] === 'codex') &&
     boundedString(v['model'], 256) && boundedString(v['workflowStage'], 256) &&
     boundedString(v['checkpointedAt'], 128) &&
-    (v['judgmentBatch'] === undefined || isJudgmentBatchCheckpoint(v['judgmentBatch']));
+    (v['judgmentBatch'] === undefined || isJudgmentBatchCheckpoint(v['judgmentBatch'])) &&
+    (v['artifactAttempts'] === undefined || isArtifactAttempts(v['artifactAttempts']));
 }
 
 function isJudgmentBatchCheckpoint(value: unknown): value is JudgmentBatchCheckpoint {
@@ -212,7 +309,26 @@ function isExecutionAttempt(value: unknown): value is ExecutionAttempt {
     boundedString(v['diagnostic'], EXECUTION_DIAGNOSTIC_MAX_CHARS) &&
     (v['cleanupDiagnostic'] === undefined ||
       boundedString(v['cleanupDiagnostic'], EXECUTION_DIAGNOSTIC_MAX_CHARS)) &&
+    (v['artifactAttempts'] === undefined || isArtifactAttempts(v['artifactAttempts'])) &&
     typeof v['retryable'] === 'boolean';
+}
+
+function isArtifactAttempts(value: unknown): value is ArtifactAttemptEvidence[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2) return false;
+  return value.every((attempt, index) => {
+    if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) return false;
+    const v = attempt as Record<string, unknown>;
+    return v['attempt'] === index + 1 &&
+      [
+        'captured', 'parsed', 'missing', 'malformed', 'ambiguous', 'non-final', 'rejected',
+      ].includes(String(v['status'])) &&
+      (v['provider'] === 'anthropic' || v['provider'] === 'openai') &&
+      Number.isInteger(v['progressCount']) && Number(v['progressCount']) >= 0 &&
+      Number(v['progressCount']) <= 10_000 &&
+      Number.isInteger(v['candidateCount']) && Number(v['candidateCount']) >= 0 &&
+      Number(v['candidateCount']) <= 10_000 &&
+      boundedString(v['diagnostic'], EXECUTION_DIAGNOSTIC_MAX_CHARS);
+  });
 }
 
 function boundedString(value: unknown, max: number): value is string {

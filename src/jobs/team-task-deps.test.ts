@@ -50,6 +50,7 @@ import {
   runTeamTaskWorkflow,
   type FindingsLedgerEntry,
   type TeamTaskDeps,
+  type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
@@ -248,6 +249,7 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
       if (
         opts.workflowStage === 'coder-self-review' &&
         result.ok &&
+        result.terminalArtifact === undefined &&
         !result.output.includes('```coder-self-review')
       ) {
         return {
@@ -967,7 +969,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(tree).toBe('tree-after-edit');
   });
 
-  it('propagates structured cancellation from the self-review executor', async () => {
+  it('returns typed artifact-contract cancellation evidence from the self-review executor', async () => {
     const cancellation = {
       operationId: '12345678-1234-1234-1234-123456789abc',
       source: 'cockpit' as const,
@@ -989,7 +991,14 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       tests: ['test'],
       qa: { kind: 'tests-written', testIds: ['test'] },
     })).rejects.toMatchObject({
-      cancellation: { role: 'coder', ...cancellation },
+      failure: {
+        failureStage: 'artifact-contract',
+        retryDisposition: 'cancelled',
+        cancellation,
+        artifactAttempts: [
+          expect.objectContaining({ attempt: 1, status: 'rejected' }),
+        ],
+      },
     });
   });
 
@@ -1035,7 +1044,404 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       context: 'context',
       tests: ['test'],
       qa: { kind: 'tests-written', testIds: ['test'] },
-    })).rejects.toThrow(/coder self-review failed:.*outcome and notes/i);
+    })).rejects.toThrow(/artifact-contract:.*outcome and notes/i);
+  });
+
+  it('retries only self-review once on an unchanged tree and persists a fresh evidence-bearing checkpoint', async () => {
+    const persisted: ExecutionCheckpoint[] = [];
+    const activities: WorkflowActivityEvent[] = [];
+    let calls = 0;
+    const stableDiff =
+      'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n';
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      emit: (event) => activities.push(event),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        if (checkpoint.workflowStage === 'coder-self-review') persisted.push(checkpoint);
+      },
+    }, makeSeams({
+      runExecution: async (opts) => {
+        if (opts.workflowStage !== 'coder-self-review') return greenExecution();
+        calls += 1;
+        if (calls === 1) {
+          return {
+            ok: true,
+            diff: stableDiff,
+            output: 'progress remains separate',
+            terminalArtifact: {
+              provider: 'openai',
+              artifactKind: 'coder-self-review',
+              status: 'malformed',
+              progressCount: 1,
+              candidateCount: 1,
+              diagnostic:
+                'terminal message at /Users/operator/private had trailing prose sk-supersecret123',
+            },
+          };
+        }
+        return {
+          ok: true,
+          diff: stableDiff,
+          output: 'second pass progress',
+          terminalArtifact: {
+            provider: 'openai',
+            artifactKind: 'coder-self-review',
+            status: 'captured',
+            progressCount: 1,
+            candidateCount: 1,
+            diagnostic: 'captured final completed Codex agent message',
+            artifact: [
+              '```coder-self-review',
+              '{"outcome":"confirmed","notes":"The unchanged worktree is correct."}',
+              '```',
+            ].join('\n'),
+          },
+        };
+      },
+    }));
+
+    const result = await deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    });
+
+    expect(calls).toBe(2);
+    expect(persisted).toHaveLength(2);
+    expect(persisted[0]?.artifactAttempts).toBeUndefined();
+    expect(persisted[1]?.artifactAttempts).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        status: 'malformed',
+        progressCount: 1,
+        candidateCount: 1,
+      }),
+    ]);
+    expect(result.artifactAttempts).toEqual([
+      expect.objectContaining({ attempt: 1, status: 'malformed' }),
+      expect.objectContaining({ attempt: 2, status: 'parsed' }),
+    ]);
+    expect(JSON.stringify(result.artifactAttempts)).not.toContain('/Users/operator');
+    expect(JSON.stringify(result.artifactAttempts)).not.toContain('sk-supersecret123');
+    expect(activities.filter((event) =>
+      event.kind === 'activity' && event.data?.['event'] === 'terminal-artifact')
+      .map((event) => event.data?.['status'])).toEqual(['malformed', 'parsed']);
+    expect(activities).toContainEqual(expect.objectContaining({
+      kind: 'activity',
+      data: expect.objectContaining({ event: 'artifact-retry', nextAttempt: 2 }),
+    }));
+  });
+
+  it('fails with typed exhausted evidence after exactly two invalid unchanged-tree artifacts', async () => {
+    let calls = 0;
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => {
+        calls += 1;
+        const stable = await greenExecution();
+        if (!stable.ok) throw new Error('green execution fixture unexpectedly failed');
+        return {
+          ok: true,
+          diff: stable.diff,
+          output: 'bounded progress',
+          terminalArtifact: {
+            provider: 'openai',
+            artifactKind: 'coder-self-review',
+            status: 'missing',
+            progressCount: 1,
+            candidateCount: 0,
+            diagnostic: `attempt ${calls} had no terminal artifact`,
+          },
+        };
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['test'],
+        qa: { kind: 'tests-written', testIds: ['test'] },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(calls).toBe(2);
+    expect(caught).toBeInstanceOf(ExecutionFailureError);
+    expect((caught as ExecutionFailureError).failure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'exhausted',
+      artifactAttempts: [
+        expect.objectContaining({ attempt: 1, status: 'missing' }),
+        expect.objectContaining({ attempt: 2, status: 'missing' }),
+      ],
+      attempts: [
+        expect.objectContaining({ attempt: 1, retryable: true }),
+        expect.objectContaining({ attempt: 2, retryable: false }),
+      ],
+    });
+  });
+
+  it('keeps the artifact-contract failure when the self-review-only retry hits a provider failure', async () => {
+    let calls = 0;
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => {
+        calls += 1;
+        if (calls === 2) return failedExecution('retry provider failed at /Users/operator/private');
+        const stable = await greenExecution();
+        if (!stable.ok) throw new Error('green execution fixture unexpectedly failed');
+        return {
+          ...stable,
+          terminalArtifact: {
+            provider: 'openai',
+            artifactKind: 'coder-self-review',
+            status: 'missing',
+            progressCount: 1,
+            candidateCount: 0,
+            diagnostic: 'first attempt had no terminal artifact',
+          },
+        };
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['test'],
+        qa: { kind: 'tests-written', testIds: ['test'] },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(calls).toBe(2);
+    expect(caught).toBeInstanceOf(ExecutionFailureError);
+    expect((caught as ExecutionFailureError).failure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'exhausted',
+      artifactAttempts: [
+        expect.objectContaining({ attempt: 1, status: 'missing' }),
+        expect.objectContaining({
+          attempt: 2,
+          status: 'rejected',
+          diagnostic: expect.stringContaining('retry provider failed'),
+        }),
+      ],
+      attempts: [
+        expect.objectContaining({ attempt: 1, retryable: true }),
+        expect.objectContaining({ attempt: 2, retryable: false }),
+      ],
+    });
+    expect(JSON.stringify((caught as ExecutionFailureError).failure))
+      .not.toContain('/Users/operator');
+  });
+
+  it('keeps the artifact-contract failure when the retry checkpoint cannot be persisted', async () => {
+    let executions = 0;
+    let checkpoints = 0;
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async (checkpoint) => {
+        if (checkpoint.workflowStage !== 'coder-self-review') return;
+        checkpoints += 1;
+        if (checkpoints === 2) throw new Error('checkpoint storage unavailable');
+      },
+    }, makeSeams({
+      runExecution: async () => {
+        executions += 1;
+        const stable = await greenExecution();
+        if (!stable.ok) throw new Error('green execution fixture unexpectedly failed');
+        return {
+          ...stable,
+          terminalArtifact: {
+            provider: 'openai',
+            artifactKind: 'coder-self-review',
+            status: 'missing',
+            progressCount: 0,
+            candidateCount: 0,
+            diagnostic: 'first attempt had no terminal artifact',
+          },
+        };
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['test'],
+        qa: { kind: 'tests-written', testIds: ['test'] },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(checkpoints).toBe(2);
+    expect(executions).toBe(1);
+    expect(caught).toBeInstanceOf(ExecutionFailureError);
+    expect((caught as ExecutionFailureError).failure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'exhausted',
+      artifactAttempts: [
+        expect.objectContaining({ attempt: 1, status: 'missing' }),
+        expect.objectContaining({
+          attempt: 2,
+          status: 'rejected',
+          diagnostic: expect.stringContaining('checkpoint write failed'),
+        }),
+      ],
+    });
+  });
+
+  it('records each artifact attempt with its own timing and actual retry decision', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-30T10:00:00.000Z'));
+      let calls = 0;
+      const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+        runExecution: async () => {
+          calls += 1;
+          vi.setSystemTime(new Date(
+            calls === 1
+              ? '2026-07-30T10:00:01.000Z'
+              : '2026-07-30T10:00:03.000Z',
+          ));
+          const stable = await greenExecution();
+          if (!stable.ok) throw new Error('green execution fixture unexpectedly failed');
+          return {
+            ...stable,
+            terminalArtifact: {
+              provider: 'openai',
+              artifactKind: 'coder-self-review',
+              status: 'missing',
+              progressCount: 0,
+              candidateCount: 0,
+              diagnostic: `attempt ${calls} missing`,
+            },
+          };
+        },
+      }));
+
+      let caught: unknown;
+      try {
+        await deps.coderSelfReview({
+          task: sizedTask,
+          artifact: { diff: 'candidate', handoffNotes: [] },
+          spec: 'spec',
+          context: 'context',
+          tests: ['test'],
+          qa: { kind: 'tests-written', testIds: ['test'] },
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ExecutionFailureError);
+      expect((caught as ExecutionFailureError).failure.attempts).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          startedAt: '2026-07-30T10:00:00.000Z',
+          endedAt: '2026-07-30T10:00:01.000Z',
+          retryable: true,
+        }),
+        expect.objectContaining({
+          attempt: 2,
+          startedAt: '2026-07-30T10:00:01.000Z',
+          endedAt: '2026-07-30T10:00:03.000Z',
+          retryable: false,
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats artifact activity emission as non-fatal observability', async () => {
+    const deps = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      emit: (event) => {
+        if (event.kind === 'activity' && event.data?.['event'] === 'terminal-artifact') {
+          throw new Error('transcript sink unavailable');
+        }
+      },
+    }, makeSeams());
+
+    await expect(deps.coderSelfReview({
+      task: sizedTask,
+      artifact: { diff: 'candidate', handoffNotes: [] },
+      spec: 'spec',
+      context: 'context',
+      tests: ['test'],
+      qa: { kind: 'tests-written', testIds: ['test'] },
+    })).resolves.toMatchObject({ outcome: 'confirmed' });
+  });
+
+  it('does not retry a malformed artifact after the self-review changed the canonical tree', async () => {
+    let tree = 'before';
+    let calls = 0;
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async () => {
+        calls += 1;
+        tree = 'after';
+        return {
+          ok: true,
+          diff: '',
+          output: [
+            '```coder-self-review',
+            '{"outcome":"confirmed","notes":"Tree review complete."}',
+            '```',
+            'trailing prose',
+          ].join('\n'),
+        };
+      },
+      runCanonicalGit: async (args) => {
+        if (args.includes('write-tree')) {
+          return { stdout: `${fixtureTreeOid(tree)}\n`, stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      },
+    }));
+
+    let caught: unknown;
+    try {
+      await deps.coderSelfReview({
+        task: sizedTask,
+        artifact: { diff: 'candidate', handoffNotes: [] },
+        spec: 'spec',
+        context: 'context',
+        tests: ['test'],
+        qa: { kind: 'tests-written', testIds: ['test'] },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(calls).toBe(1);
+    expect(caught).toBeInstanceOf(ExecutionFailureError);
+    expect((caught as ExecutionFailureError).failure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'worktree-changed',
+      artifactAttempts: [expect.objectContaining({ attempt: 1 })],
+    });
   });
 
   it('persists a coder-self-review-scoped checkpoint and passes it verbatim to the self-review executor', async () => {

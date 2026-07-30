@@ -8,6 +8,11 @@
 
 import { join } from 'node:path';
 import { scrubPathsInText } from '../ai/tool-labels.js';
+import {
+  durableArtifactAttempts,
+  durableExecutionFailure,
+  isExecutionFailure,
+} from '../intent/execution-failure.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
@@ -198,6 +203,22 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
       }];
     }).slice(0, 10)
     : undefined;
+  const coderSelfReviews = Array.isArray(record.coderSelfReviews)
+    ? record.coderSelfReviews.slice(0, 4).map((review) => {
+        const artifactAttempts = durableArtifactAttempts(review.artifactAttempts);
+        return {
+          round: review.round,
+          outcome: review.outcome,
+          notes: review.notes,
+          canonicalHash: review.canonicalHash,
+          changedPaths: review.changedPaths.slice(0, 200),
+          ...(artifactAttempts !== undefined ? { artifactAttempts } : {}),
+        };
+      })
+    : undefined;
+  const executionFailure = isExecutionFailure(record.executionFailure)
+    ? durableExecutionFailure(record.executionFailure)
+    : undefined;
   return {
     taskId: record.taskId,
     ...(typeof record.taskText === 'string' ? { taskText: record.taskText } : {}),
@@ -209,6 +230,8 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ...(typeof record.contextOutcome === 'string' ? { contextOutcome: record.contextOutcome } : {}),
     ...(typeof record.outcome === 'string' ? { outcome: record.outcome } : {}),
     ...(warnings ? { warnings } : {}),
+    ...(coderSelfReviews ? { coderSelfReviews } : {}),
+    ...(executionFailure !== undefined ? { executionFailure } : {}),
     ...(record.relatedTestDiagnostic
       ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
       : {}),

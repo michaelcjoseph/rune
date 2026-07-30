@@ -265,6 +265,127 @@ describe('product-scoped work-run diagnostics', () => {
     expect(JSON.stringify(result)).not.toContain('/Users/example');
   });
 
+  it('projects bounded coder-self-review artifact evidence without raw artifacts', async () => {
+    const deps = makeDeps();
+    deps.readTaskRunRecords.mockReturnValue([
+      taskRecord({
+        executionFailure: {
+          taskId: 'validate-results',
+          role: 'coder',
+          provider: 'openai',
+          format: 'codex',
+          model: 'gpt-test',
+          workflowStage: 'coder-self-review',
+          checkpointedAt: '2026-07-30T00:00:00.000Z',
+          failureStage: 'artifact-contract',
+          diagnostic: 'missing artifact at /Users/operator/private',
+          retryable: false,
+          attempts: [{
+            attempt: 1,
+            startedAt: '2026-07-30T00:00:00.000Z',
+            endedAt: '2026-07-30T00:00:01.000Z',
+            failureStage: 'artifact-contract',
+            diagnostic: 'missing artifact at /Users/operator/private',
+            retryable: false,
+          }],
+          retryDisposition: 'exhausted',
+        },
+        coderSelfReviews: [{
+          round: 1,
+          outcome: 'confirmed',
+          notes: 'Checked the final implementation.',
+          canonicalHash: 'a'.repeat(64),
+          changedPaths: ['src/result.ts'],
+          artifactAttempts: [{
+            attempt: 1,
+            status: 'parsed',
+            provider: 'openai',
+            progressCount: 2,
+            candidateCount: 1,
+            diagnostic: 'parsed terminal artifact at /Users/operator/private',
+          }],
+        }],
+      }),
+    ]);
+
+    const result = await createWorkRunDiagnostics(deps, 'assay').inspectRun({
+      runId: 'assay-run-1',
+    }) as { taskRecords: Array<Record<string, unknown>> };
+    const serialized = JSON.stringify(result.taskRecords);
+
+    expect(result.taskRecords[0]).toMatchObject({
+      coderSelfReviews: [{
+        round: 1,
+        outcome: 'confirmed',
+        artifactAttempts: [{
+          attempt: 1,
+          status: 'parsed',
+          provider: 'openai',
+          progressCount: 2,
+          candidateCount: 1,
+        }],
+      }],
+      executionFailure: {
+        failureStage: 'artifact-contract',
+        retryDisposition: 'exhausted',
+      },
+    });
+    expect(serialized).not.toContain('/Users/operator');
+    expect(serialized).not.toContain('```coder-self-review');
+  });
+
+  it('allowlists valid execution-failure diagnostics and omits invalid failure records', async () => {
+    const deps = makeDeps();
+    const valid = taskRecord({
+      executionFailure: {
+        taskId: 'valid',
+        role: 'coder',
+        provider: 'openai',
+        format: 'codex',
+        model: 'gpt-test',
+        workflowStage: 'coder-self-review',
+        checkpointedAt: '2026-07-30T00:00:00.000Z',
+        failureStage: 'artifact-contract',
+        diagnostic: 'invalid artifact',
+        retryable: false,
+        attempts: [{
+          attempt: 1,
+          startedAt: '2026-07-30T00:00:00.000Z',
+          endedAt: '2026-07-30T00:00:01.000Z',
+          failureStage: 'artifact-contract',
+          diagnostic: 'invalid artifact',
+          retryable: false,
+          rawArtifact: '```coder-self-review\nsecret\n```',
+        }],
+        retryDisposition: 'exhausted',
+        rawArtifact: '```coder-self-review\nsecret\n```',
+      } as unknown as TaskRunRecord['executionFailure'],
+    });
+    const invalid = taskRecord({
+      taskId: 'invalid',
+      executionFailure: {
+        failureStage: 'artifact-contract',
+        rawArtifact: '```coder-self-review\nsecret\n```',
+      } as unknown as TaskRunRecord['executionFailure'],
+    });
+    deps.readTaskRunRecords.mockReturnValue([valid, invalid]);
+
+    const result = await createWorkRunDiagnostics(deps, 'assay').inspectRun({
+      runId: 'assay-run-1',
+    }) as { taskRecords: Array<Record<string, unknown>> };
+
+    expect(result.taskRecords[0]?.executionFailure).toMatchObject({
+      failureStage: 'artifact-contract',
+      retryDisposition: 'exhausted',
+    });
+    expect(result.taskRecords[0]?.executionFailure).not.toHaveProperty('rawArtifact');
+    expect((result.taskRecords[0]?.executionFailure as {
+      attempts: Array<Record<string, unknown>>;
+    }).attempts[0]).not.toHaveProperty('rawArtifact');
+    expect(result.taskRecords[1]).not.toHaveProperty('executionFailure');
+    expect(JSON.stringify(result)).not.toContain('```coder-self-review');
+  });
+
   it('returns only active or parked runs for the authorized product with a capped safe log tail', async () => {
     const service = createWorkRunDiagnostics(makeDeps(), 'assay');
     const result = await service.activeRuns() as { runs: Array<Record<string, unknown>> };

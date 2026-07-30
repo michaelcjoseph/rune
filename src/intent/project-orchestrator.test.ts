@@ -734,6 +734,11 @@ describe('project-orchestrator — operational terminal', () => {
         commitSha: null,
         contextOutcome: 'unchanged',
         outcome: 'failed',
+        executionFailure: expect.objectContaining({
+          failureStage: 'provider',
+          role: 'coder',
+          retryDisposition: 'exhausted',
+        }),
       }),
     );
   });

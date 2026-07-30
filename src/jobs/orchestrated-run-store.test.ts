@@ -171,6 +171,14 @@ describe('orchestrated run store', () => {
         notes: 'Corrected the staged retry guard.',
         canonicalHash: 'canonical-hash',
         changedPaths: ['src/cache.ts'],
+        artifactAttempts: [{
+          attempt: 1,
+          status: 'parsed',
+          provider: 'openai',
+          progressCount: 2,
+          candidateCount: 1,
+          diagnostic: 'terminal artifact parsed',
+        }],
       }],
     });
 
@@ -187,6 +195,14 @@ describe('orchestrated run store', () => {
           notes: 'Corrected the staged retry guard.',
           canonicalHash: 'canonical-hash',
           changedPaths: ['src/cache.ts'],
+          artifactAttempts: [{
+            attempt: 1,
+            status: 'parsed',
+            provider: 'openai',
+            progressCount: 2,
+            candidateCount: 1,
+            diagnostic: 'terminal artifact parsed',
+          }],
         }],
       }),
     ]);

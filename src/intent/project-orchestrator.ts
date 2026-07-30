@@ -1037,6 +1037,9 @@ function taskRecordFromEvidence(
     ...(evidence.coderSelfReviews !== undefined
       ? { coderSelfReviews: evidence.coderSelfReviews }
       : {}),
+    ...(evidence.executionFailure !== undefined
+      ? { executionFailure: evidence.executionFailure }
+      : {}),
     ...(evidence.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
       : {}),

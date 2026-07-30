@@ -88,10 +88,16 @@ import {
   type ExecutionAgentOpts,
   type ExecutionAgentResult,
   type RoleModelBinding,
+  type TerminalArtifactResult,
 } from './execution-agent.js';
 import {
   adjacentExecutionFailure,
+  executionFailureSummary,
+  sanitizeExecutionDiagnostic,
+  type ArtifactAttemptEvidence,
+  type ExecutionAttempt,
   type ExecutionCheckpoint,
+  type ExecutionFailure,
 } from '../intent/execution-failure.js';
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
@@ -839,6 +845,107 @@ export function parseCoderSelfReviewResult(reply: string): {
   };
 }
 
+function terminalArtifactFromExecution(
+  result: Extract<ExecutionAgentResult, { ok: true }>,
+  binding: RoleModelBinding,
+): TerminalArtifactResult {
+  if (result.terminalArtifact !== undefined) return result.terminalArtifact;
+  const artifact = result.output.trim();
+  const candidateCount = artifact.match(/```coder-self-review\b/g)?.length ?? 0;
+  const tagged = candidateCount > 0;
+  const captured = CODER_SELF_REVIEW_FENCE.test(artifact);
+  return {
+    provider: binding.provider,
+    artifactKind: 'coder-self-review',
+    status: candidateCount > 1
+      ? 'ambiguous'
+      : captured
+        ? 'captured'
+        : (tagged ? 'malformed' : 'missing'),
+    progressCount: 0,
+    candidateCount,
+    diagnostic: candidateCount > 1
+      ? 'legacy injected terminal output contained multiple coder-self-review candidates'
+      : captured
+      ? 'captured legacy injected terminal output'
+      : 'legacy injected terminal output was not one complete coder-self-review fence',
+    ...(captured && candidateCount === 1 ? { artifact } : {}),
+  };
+}
+
+function artifactAttemptEvidence(
+  attempt: number,
+  terminal: TerminalArtifactResult,
+  status: ArtifactAttemptEvidence['status'] = terminal.status,
+  diagnostic: unknown = terminal.diagnostic,
+): ArtifactAttemptEvidence {
+  return {
+    attempt,
+    status,
+    provider: terminal.provider,
+    progressCount: Math.max(0, Math.min(10_000, terminal.progressCount)),
+    candidateCount: Math.max(0, Math.min(10_000, terminal.candidateCount)),
+    diagnostic: sanitizeExecutionDiagnostic(diagnostic),
+  };
+}
+
+function artifactContractFailure(
+  checkpoint: ExecutionCheckpoint,
+  artifactAttempts: readonly ArtifactAttemptEvidence[],
+  executionAttempts: readonly ExecutionAttempt[],
+  disposition: ExecutionFailure['retryDisposition'],
+  cancellation?: import('../cancellation.js').OperationCancellation,
+): ExecutionFailure {
+  const latest = artifactAttempts.at(-1)!;
+  const diagnostic = latest.diagnostic;
+  return {
+    ...checkpoint,
+    artifactAttempts: artifactAttempts.map((attempt) => ({ ...attempt })),
+    failureStage: 'artifact-contract',
+    diagnostic,
+    retryable: false,
+    attempts: executionAttempts.map((attempt) => ({
+      ...attempt,
+      artifactAttempts: attempt.artifactAttempts?.map((item) => ({ ...item })),
+    })),
+    retryDisposition: disposition,
+    ...(cancellation !== undefined ? { cancellation } : {}),
+  };
+}
+
+function artifactExecutionAttempt(
+  checkpoint: ExecutionCheckpoint,
+  evidence: ArtifactAttemptEvidence,
+  retryable: boolean,
+  endedAt: string,
+  artifactAttempts: readonly ArtifactAttemptEvidence[],
+): ExecutionAttempt {
+  return {
+    attempt: evidence.attempt,
+    startedAt: checkpoint.checkpointedAt,
+    endedAt,
+    failureStage: 'artifact-contract',
+    diagnostic: evidence.diagnostic,
+    retryable,
+    artifactAttempts: artifactAttempts.map((attempt) => ({ ...attempt })),
+  };
+}
+
+function executionFailureArtifactEvidence(
+  attempt: number,
+  provider: DispatchProvider,
+  diagnostic: unknown,
+): ArtifactAttemptEvidence {
+  return artifactAttemptEvidence(attempt, {
+    provider,
+    artifactKind: 'coder-self-review',
+    status: 'rejected',
+    progressCount: 0,
+    candidateCount: 0,
+    diagnostic: sanitizeExecutionDiagnostic(diagnostic),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The factory
 // ---------------------------------------------------------------------------
@@ -874,6 +981,7 @@ function executionCheckpoint(
   role: RoleName,
   binding: RoleModelBinding,
   workflowStage: string,
+  artifactAttempts?: readonly ArtifactAttemptEvidence[],
 ): ExecutionCheckpoint {
   return {
     taskId,
@@ -883,6 +991,13 @@ function executionCheckpoint(
     model: binding.alias,
     workflowStage,
     checkpointedAt: new Date().toISOString(),
+    ...(artifactAttempts !== undefined && artifactAttempts.length > 0
+      ? {
+          artifactAttempts: artifactAttempts.map((attempt) => ({
+            ...attempt,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -1309,12 +1424,24 @@ export function buildProductionTeamTaskDeps(
     workflowStage: string,
     instruction: string,
     body: string,
+    executionOpts: {
+      artifactAttempts?: readonly ArtifactAttemptEvidence[];
+      preserveCancellationResult?: boolean;
+      onCheckpoint?: (checkpoint: ExecutionCheckpoint) => void;
+    } = {},
   ): Promise<ExecutionAgentResult> => {
     const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const emit = args.emit
       ? attributeRoleEvents(args.emit, role, binding)
       : undefined;
-    const checkpoint = executionCheckpoint(taskId, role, binding, workflowStage);
+    const checkpoint = executionCheckpoint(
+      taskId,
+      role,
+      binding,
+      workflowStage,
+      executionOpts.artifactAttempts,
+    );
+    executionOpts.onCheckpoint?.(checkpoint);
     try {
       await args.persistExecutionCheckpoint?.(checkpoint);
     } catch (err) {
@@ -1337,7 +1464,11 @@ export function buildProductionTeamTaskDeps(
     }, args.cancellationDuringBackoff === undefined ? undefined : {
       cancellationDuringBackoff: args.cancellationDuringBackoff,
     });
-    if (!result.ok && result.cancellation !== undefined) {
+    if (
+      !result.ok &&
+      result.cancellation !== undefined &&
+      executionOpts.preserveCancellationResult !== true
+    ) {
       throw new RoleCancellationError(role, result.cancellation);
     }
     return result;
@@ -1618,14 +1749,6 @@ export function buildProductionTeamTaskDeps(
     }) => {
       const cwd = sandbox.worktree;
       try {
-        await seams.runCanonicalGit(['add', '-A'], { cwd });
-        const preTree = (
-          await seams.runCanonicalGit(['write-tree'], { cwd })
-        ).stdout.trim();
-        if (preTree === '') {
-          throw new Error('canonical pre-self-review snapshot produced no tree');
-        }
-
         const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
         const qaIntent = qa.kind === 'tests-written'
           ? `tests-written:\n${qa.testIds.join('\n')}`
@@ -1663,61 +1786,283 @@ export function buildProductionTeamTaskDeps(
             : []),
           ...(findingsBlock !== '' ? ['', findingsBlock] : []),
         ].join('\n');
-        let result: ExecutionAgentResult | undefined;
-        let executorError: unknown;
-        try {
-          result = await execute(
-            'coder',
-            models.coder,
-            task.id,
-            'coder-self-review',
-            CODER_SELF_REVIEW_EXEC_INSTRUCTION,
-            body,
-          );
-        } catch (err) {
-          // Hold EVERY throw — cancellation and anything else — so the post
-          // snapshot below always runs. Rethrowing here would skip it.
-          executorError = err;
-        }
+        const artifactAttempts: ArtifactAttemptEvidence[] = [];
+        const executionAttempts: ExecutionAttempt[] = [];
+        const emitArtifactActivity = (data: Record<string, unknown>): void => {
+          try {
+            args.emit?.({ kind: 'activity', data });
+          } catch (err) {
+            log.warn('coder self-review activity emission failed', {
+              error: sanitizeExecutionDiagnostic(err),
+            });
+          }
+        };
+        const emitArtifactEvidence = (evidence: ArtifactAttemptEvidence): void => {
+          emitArtifactActivity({
+            event: 'terminal-artifact',
+            artifactKind: 'coder-self-review',
+            artifactAttempt: evidence.attempt,
+            ...evidence,
+            line: `coder-self-review artifact ${evidence.status}: ${evidence.diagnostic}`,
+          });
+        };
+        const runCoderSelfReviewAttempt = async (attempt: number): Promise<{
+          checkpoint: ExecutionCheckpoint;
+          changed: boolean;
+          endedAt: string;
+        } & (
+          | { kind: 'returned'; result: ExecutionAgentResult }
+          | { kind: 'threw'; executorError: unknown }
+        )> => {
+          await seams.runCanonicalGit(['add', '-A'], { cwd });
+          const preTree = (
+            await seams.runCanonicalGit(['write-tree'], { cwd })
+          ).stdout.trim();
+          if (preTree === '') {
+            throw new Error('canonical pre-self-review snapshot produced no tree');
+          }
 
-        // Snapshot even on executor failure: edits made before a failed return
-        // remain untrusted worktree state and the workflow must fail rather
-        // than quietly review them.
-        await seams.runCanonicalGit(['add', '-A'], { cwd });
-        const postTree = (
-          await seams.runCanonicalGit(['write-tree'], { cwd })
-        ).stdout.trim();
-        if (postTree === '') {
-          throw new Error('canonical post-self-review snapshot produced no tree');
-        }
-        if (executorError !== undefined) {
-          throw executorError;
-        }
-        if (result === undefined) {
-          throw new Error('coder self-review executor returned no result');
-        }
-        if (!result.ok) {
-          throw new ExecutionFailureError(result.failure);
-        }
+          let checkpoint: ExecutionCheckpoint | undefined;
+          let outcome:
+            | { kind: 'returned'; result: ExecutionAgentResult }
+            | { kind: 'threw'; executorError: unknown };
+          try {
+            const result = await execute(
+              'coder',
+              models.coder,
+              task.id,
+              'coder-self-review',
+              CODER_SELF_REVIEW_EXEC_INSTRUCTION,
+              body,
+              {
+                artifactAttempts,
+                preserveCancellationResult: true,
+                onCheckpoint: (value) => { checkpoint = value; },
+              },
+            );
+            outcome = { kind: 'returned', result };
+          } catch (err) {
+            // Hold every throw until after the post snapshot so edits made
+            // before a failed return cannot bypass canonical adjudication.
+            outcome = { kind: 'threw', executorError: err };
+          }
 
-        const parsed = parseCoderSelfReviewResult(result.output);
-        const changed = preTree !== postTree;
-        if (parsed.outcome === 'confirmed' && changed) {
-          throw new Error(
-            'coder self-review reported confirmed but canonical Git changed',
+          await seams.runCanonicalGit(['add', '-A'], { cwd });
+          const postTree = (
+            await seams.runCanonicalGit(['write-tree'], { cwd })
+          ).stdout.trim();
+          if (postTree === '') {
+            throw new Error('canonical post-self-review snapshot produced no tree');
+          }
+          return {
+            checkpoint: checkpoint ?? executionCheckpoint(
+              task.id,
+              'coder',
+              models.coder,
+              'coder-self-review',
+              artifactAttempts,
+            ),
+            changed: preTree !== postTree,
+            endedAt: new Date().toISOString(),
+            ...outcome,
+          };
+        };
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const execution = await runCoderSelfReviewAttempt(attempt);
+          const {
+            checkpoint,
+            changed,
+            endedAt,
+          } = execution;
+          const terminalFailure:
+            | { kind: 'threw'; error: unknown }
+            | { kind: 'failed'; result: Extract<ExecutionAgentResult, { ok: false }> }
+            | undefined = execution.kind === 'threw'
+              ? { kind: 'threw', error: execution.executorError }
+              : !execution.result.ok
+                ? { kind: 'failed', result: execution.result }
+                : undefined;
+          if (terminalFailure !== undefined) {
+            const failure = terminalFailure.kind === 'failed'
+              ? terminalFailure.result.failure
+              : terminalFailure.error instanceof ExecutionFailureError
+                ? terminalFailure.error.failure
+                : undefined;
+            const cancellation = (
+              (terminalFailure.kind === 'failed'
+                ? terminalFailure.result.cancellation
+                : terminalFailure.error instanceof RoleCancellationError
+                  ? terminalFailure.error.cancellation
+                  : undefined)
+            ) ?? failure?.cancellation;
+            if (
+              artifactAttempts.length === 0 &&
+              cancellation === undefined
+            ) {
+              if (terminalFailure.kind === 'threw') throw terminalFailure.error;
+              throw new ExecutionFailureError(terminalFailure.result.failure);
+            }
+            const diagnostic = cancellation !== undefined
+              ? 'coder self-review was cancelled before terminal artifact acceptance'
+              : failure !== undefined
+                ? executionFailureSummary(failure)
+                : terminalFailure.kind === 'threw'
+                  ? terminalFailure.error
+                  : 'coder self-review executor failed without typed evidence';
+            const rejected = executionFailureArtifactEvidence(
+              attempt,
+              models.coder.provider,
+              diagnostic,
+            );
+            artifactAttempts.push(rejected);
+            executionAttempts.push(artifactExecutionAttempt(
+              checkpoint,
+              rejected,
+              false,
+              endedAt,
+              artifactAttempts,
+            ));
+            emitArtifactEvidence(rejected);
+            throw new ExecutionFailureError(artifactContractFailure(
+              checkpoint,
+              artifactAttempts,
+              executionAttempts,
+              changed
+                ? 'worktree-changed'
+                : cancellation !== undefined
+                  ? 'cancelled'
+                  : 'exhausted',
+              cancellation,
+            ));
+          }
+
+          if (execution.kind !== 'returned' || !execution.result.ok) {
+            throw new Error('coder self-review attempt terminal state was not handled');
+          }
+          const result = execution.result;
+          const terminal = terminalArtifactFromExecution(result, models.coder);
+          let parsed: ReturnType<typeof parseCoderSelfReviewResult> | undefined;
+          let contractEvidence: ArtifactAttemptEvidence | undefined;
+          if (terminal.status !== 'captured' || terminal.artifact === undefined) {
+            contractEvidence = artifactAttemptEvidence(attempt, terminal);
+          } else {
+            try {
+              parsed = parseCoderSelfReviewResult(terminal.artifact);
+            } catch (err) {
+              contractEvidence = artifactAttemptEvidence(
+                attempt,
+                terminal,
+                'rejected',
+                err,
+              );
+            }
+          }
+
+          if (contractEvidence !== undefined) {
+            artifactAttempts.push(contractEvidence);
+            const retryable = !changed && attempt === 1;
+            executionAttempts.push(artifactExecutionAttempt(
+              checkpoint,
+              contractEvidence,
+              retryable,
+              endedAt,
+              artifactAttempts,
+            ));
+            emitArtifactEvidence(contractEvidence);
+            if (changed) {
+              throw new ExecutionFailureError(artifactContractFailure(
+                checkpoint,
+                artifactAttempts,
+                executionAttempts,
+                'worktree-changed',
+              ));
+            }
+            if (retryable) {
+              emitArtifactActivity({
+                event: 'artifact-retry',
+                artifactKind: 'coder-self-review',
+                attempt,
+                nextAttempt: 2,
+                line: 'coder-self-review artifact contract failed; retrying self-review with a fresh checkpoint',
+              });
+              continue;
+            }
+            throw new ExecutionFailureError(artifactContractFailure(
+              checkpoint,
+              artifactAttempts,
+              executionAttempts,
+              'exhausted',
+            ));
+          }
+
+          const parsedResult = parsed!;
+          if (parsedResult.outcome === 'confirmed' && changed) {
+            const rejected = artifactAttemptEvidence(
+              attempt,
+              terminal,
+              'rejected',
+              'coder self-review reported confirmed but canonical Git changed',
+            );
+            artifactAttempts.push(rejected);
+            executionAttempts.push(artifactExecutionAttempt(
+              checkpoint,
+              rejected,
+              false,
+              endedAt,
+              artifactAttempts,
+            ));
+            emitArtifactEvidence(rejected);
+            throw new ExecutionFailureError(artifactContractFailure(
+              checkpoint,
+              artifactAttempts,
+              executionAttempts,
+              'worktree-changed',
+            ));
+          }
+          if (parsedResult.outcome === 'revised' && !changed) {
+            const rejected = artifactAttemptEvidence(
+              attempt,
+              terminal,
+              'rejected',
+              'coder self-review reported revised but canonical Git was unchanged',
+            );
+            artifactAttempts.push(rejected);
+            executionAttempts.push(artifactExecutionAttempt(
+              checkpoint,
+              rejected,
+              false,
+              endedAt,
+              artifactAttempts,
+            ));
+            emitArtifactEvidence(rejected);
+            throw new ExecutionFailureError(artifactContractFailure(
+              checkpoint,
+              artifactAttempts,
+              executionAttempts,
+              'exhausted',
+            ));
+          }
+          const parsedEvidence = artifactAttemptEvidence(
+            attempt,
+            terminal,
+            'parsed',
+            'coder-self-review terminal artifact parsed and matched canonical Git',
           );
-        }
-        if (parsed.outcome === 'revised' && !changed) {
-          throw new Error(
-            'coder self-review reported revised but canonical Git was unchanged',
+          artifactAttempts.push(parsedEvidence);
+          emitArtifactEvidence(parsedEvidence);
+          const reviewState = await captureCanonicalReviewState(
+            seams.runCanonicalGit,
+            cwd,
+            args.taskBaseTree,
           );
+          return {
+            ...parsedResult,
+            reviewState,
+            artifactAttempts: artifactAttempts.map((item) => ({ ...item })),
+          };
         }
-        const reviewState = await captureCanonicalReviewState(
-          seams.runCanonicalGit,
-          cwd,
-          args.taskBaseTree,
-        );
-        return { ...parsed, reviewState };
+        throw new Error('coder self-review artifact attempt loop exhausted unexpectedly');
       } catch (err) {
         if (err instanceof RoleCancellationError) throw err;
         if (err instanceof ExecutionFailureError) throw err;
