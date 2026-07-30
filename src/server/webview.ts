@@ -27,7 +27,13 @@ import {
 } from '../intent/backlog-write-lock.js';
 import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
 import { computeFixAction, withActions } from './backlog-actions.js';
-import { getSession, sessionKeyForScope, type SessionScope } from '../vault/sessions.js';
+import {
+  acknowledgeSessionMessage,
+  getSession,
+  getUnacknowledgedCommitMessages,
+  sessionKeyForScope,
+  type SessionScope,
+} from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import type { MessageSender, SendOpts } from '../transport/sender.js';
@@ -2209,13 +2215,20 @@ function productScopeFrom(value: unknown): SessionScope | undefined {
   return { kind: 'product', product };
 }
 
+const CHAT_ID = /^[A-Za-z0-9_-]{8,128}$/;
+
+function chatTurnIdFrom(value: unknown): string | undefined {
+  const turnId = typeof value === 'string' ? value.trim() : '';
+  return CHAT_ID.test(turnId) ? turnId : undefined;
+}
+
 async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
   if (!isReady()) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ready: false, reason: 'bot starting' }));
     return;
   }
-  let body: { message?: string; product?: unknown } = {};
+  let body: { message?: string; product?: unknown; turnId?: unknown } = {};
   try {
     body = JSON.parse(await readBody(req));
   } catch {
@@ -2231,18 +2244,28 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
   }
   const userId = config.TELEGRAM_USER_ID;
   const scope = productScopeFrom(body.product);
+  const turnId = chatTurnIdFrom(body.turnId);
   const chunks: string[] = [];
+  let terminalMessageId: string | undefined;
+  let terminalTurnId: string | undefined;
   // capturingSender collects the direct reply. Secondary bus-published messages
   // (e.g., background notifications that fire concurrently) reach open WS
   // connections via WebviewSender but do not appear in this REST response.
   const capturingSender = {
     name: 'webview' as const,
-    send: async (_userId: number, text: string) => { chunks.push(text); },
+    send: async (_userId: number, text: string, opts?: SendOpts) => {
+      chunks.push(text);
+      if (opts?.messageId) terminalMessageId = opts.messageId;
+      if (opts?.turnId) terminalTurnId = opts.turnId;
+    },
     startTyping: () => {},
     stopTyping: () => {},
   };
   try {
-    if (scope) await handleWebviewMessage(capturingSender, userId, text, scope);
+    // Arity is meaningful to the dispatcher's callers/tests — only pass the
+    // arguments this request actually carries.
+    if (turnId) await handleWebviewMessage(capturingSender, userId, text, scope, { turnId });
+    else if (scope) await handleWebviewMessage(capturingSender, userId, text, scope);
     else await handleWebviewMessage(capturingSender, userId, text);
   } catch (err) {
     log.error('POST /api/chat dispatch error', { error: (err as Error).message });
@@ -2256,6 +2279,8 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
     text: chunks.join('\n\n'),
     sessionId: session?.sessionId ?? '',
     model: session?.model ?? '',
+    ...(terminalTurnId ? { turnId: terminalTurnId } : {}),
+    ...(terminalMessageId ? { messageId: terminalMessageId } : {}),
   }));
 }
 
@@ -3037,20 +3062,43 @@ export function mountWebviewRoutes(
 
       ws.on('message', (data) => {
         try {
-          const frame = JSON.parse(data.toString()) as { kind?: string; text?: string; product?: unknown };
+          const frame = JSON.parse(data.toString()) as {
+            kind?: string;
+            text?: string;
+            product?: unknown;
+            turnId?: unknown;
+            messageId?: unknown;
+          };
+          if (frame.kind === 'replay-ready') {
+            for (const pending of getUnacknowledgedCommitMessages(userId, 'webview')) {
+              deps.webview.sendToSocket(ws, pending.text, pending.scope.product, {
+                turnId: pending.turnId,
+                messageId: pending.messageId,
+              });
+            }
+            return;
+          }
+          if (frame.kind === 'message-ack') {
+            const messageId = chatTurnIdFrom(frame.messageId);
+            if (messageId) acknowledgeSessionMessage(userId, 'webview', messageId);
+            return;
+          }
           if (frame.kind === 'message' && typeof frame.text === 'string') {
             const text = frame.text.trim();
             if (!text) return;
             const scope = productScopeFrom(frame.product);
+            const turnId = chatTurnIdFrom(frame.turnId);
             const queueKey = sessionKeyForScope(userId, 'webview', scope ?? { kind: 'global' });
             // Chain dispatch promises to serialise inbound frames for this session scope.
             const prev = dispatchQueues.get(queueKey) ?? Promise.resolve();
             const sender = senderForScope(deps.webview, scope ?? { kind: 'global' });
             const next = prev
               .then(() => (
-                scope
-                  ? handleWebviewMessage(sender, userId, text, scope)
-                  : handleWebviewMessage(sender, userId, text)
+                turnId
+                  ? handleWebviewMessage(sender, userId, text, scope, { turnId })
+                  : scope
+                    ? handleWebviewMessage(sender, userId, text, scope)
+                    : handleWebviewMessage(sender, userId, text)
               ))
               .catch((err: unknown) => {
                 log.error('WS message dispatch error', { error: (err as Error).message });

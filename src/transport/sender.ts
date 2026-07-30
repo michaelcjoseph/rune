@@ -15,6 +15,9 @@ const log = createLogger('sender');
 
 export interface SendOpts {
   approval?: { prompt: string; options: { value: string; label: string }[] };
+  /** Stable identities used by product-chat retry/reconnect delivery. */
+  turnId?: string;
+  messageId?: string;
 }
 
 export interface MessageSender {

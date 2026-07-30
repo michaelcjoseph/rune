@@ -1,4 +1,5 @@
 import type TelegramBot from 'node-telegram-bot-api';
+import { randomUUID } from 'node:crypto';
 import type { MessageSender } from '../../transport/sender.js';
 import config from '../../config.js';
 import {
@@ -9,6 +10,10 @@ import {
   setSessionExecutor,
   getSessionMessages,
   appendMessageToSession,
+  beginSessionTurn,
+  completeSessionTurn,
+  getSessionTurn,
+  sessionTurnMatchesRequest,
   buildSessionSystemPrompt,
   resolveProductFallbackWorkspace,
   resolveProductChat,
@@ -19,6 +24,14 @@ import {
 } from '../../vault/sessions.js';
 import { runAgent } from '../../ai/claude.js';
 import { askChatWithContext, resolveChatModel } from '../../ai/chat.js';
+import {
+  appendCommitReceipt,
+  captureCommitBaseline,
+  isExplicitCommitRequest,
+  renderCommitReceipt,
+  verifyCommitCompletion,
+  type ProductChatCommitOutcome,
+} from '../../ai/product-chat-commit.js';
 import { withChatTurnLock } from '../../ai/chat-turn-lock.js';
 import { createLogger } from '../../utils/logger.js';
 import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
@@ -164,6 +177,7 @@ export async function dispatchText(
   userId: number,
   text: string,
   scope?: SessionScope,
+  metadata?: ChatDispatchMetadata,
 ): Promise<void> {
   if (!text) return;
   const transport: Transport = sender.name;
@@ -249,7 +263,7 @@ export async function dispatchText(
   // closeConversation when a session exists). Slash escape hatches
   // (/fresh, /journal, /clear) already short-circuited above.
   if (scope ? getSession(userId, transport, scope) : getSession(userId, transport)) {
-    return handleConversation(sender, userId, transport, text, scope);
+    return handleConversation(sender, userId, transport, text, scope, metadata);
   }
 
   // URL detection — messages containing URLs go to content triage. Checked
@@ -271,7 +285,11 @@ export async function dispatchText(
   }
 
   // Default: multi-turn conversation
-  return handleConversation(sender, userId, transport, text, scope);
+  return handleConversation(sender, userId, transport, text, scope, metadata);
+}
+
+export interface ChatDispatchMetadata {
+  turnId?: string;
 }
 
 /** Run the resolver and, if confidence ≥ threshold and the top-2 aren't
@@ -548,13 +566,18 @@ async function handleConversation(
   transport: Transport,
   text: string,
   scope?: SessionScope,
+  metadata?: ChatDispatchMetadata,
 ): Promise<void> {
   const key = scope?.kind === 'product'
     ? `${scope.product}:${transport}:${userId}`
     : `${transport}:${userId}`;
   await withChatTurnLock(key, () => handleConversationTurn(
-    sender, userId, transport, text, scope,
+    sender, userId, transport, text, scope, metadata,
   ));
+}
+
+function unconfirmedCommit(reason: string, baselineHead?: string): ProductChatCommitOutcome {
+  return { status: 'unconfirmed', ...(baselineHead ? { baselineHead } : {}), reason };
 }
 
 async function handleConversationTurn(
@@ -563,6 +586,7 @@ async function handleConversationTurn(
   transport: Transport,
   text: string,
   scope?: SessionScope,
+  metadata?: ChatDispatchMetadata,
 ): Promise<void> {
   let session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (!session) {
@@ -571,18 +595,134 @@ async function handleConversationTurn(
       : createSession(userId, transport, text, config.CONVERSATION_MODEL);
   }
 
+  // Interpret commit language only after a configured product repository has
+  // resolved. Global and fallback chats never gain Git verification authority.
+  const chatAccess = resolveChatAccess(scope);
+  const durableProductTurn = chatAccess.authority === 'product-full-access' &&
+    scope?.kind === 'product' && Boolean(metadata?.turnId);
+  const turnId = durableProductTurn ? metadata!.turnId! : undefined;
+  if (turnId) {
+    const existing = getSessionTurn(userId, transport, turnId, scope);
+    // A turnId is the idempotency key for one request. If it comes back paired
+    // with different text the client has reused an identifier, and neither
+    // replaying the old receipt nor executing under the old record is safe.
+    if (existing && !sessionTurnMatchesRequest(existing, text)) {
+      log.warn('Chat turn identifier reused with different request text', { transport });
+      await sender.send(
+        userId,
+        'This turn identifier was already used for a different request. Send the message again to start a new turn.',
+      );
+      return;
+    }
+    if (existing?.status === 'terminal' && existing.terminalMessage) {
+      await sender.send(userId, existing.terminalMessage.text, {
+        turnId,
+        messageId: existing.terminalMessage.messageId,
+      });
+      return;
+    }
+    if (existing?.status === 'pending') {
+      const outcome: ProductChatCommitOutcome | undefined = existing.commitIntent
+        ? unconfirmedCommit(
+            'the prior execution was interrupted before completion was durably recorded',
+            existing.baselineHead,
+          )
+        : undefined;
+      const assistantText = outcome
+        ? renderCommitReceipt(outcome)
+        : 'The prior execution was interrupted before completion was durably recorded.';
+      const messageId = randomUUID();
+      const deliveryText = `${assistantText}\n\n_— chatting · /fresh to end_`;
+      const terminal = completeSessionTurn(userId, transport, {
+        turnId,
+        messageId,
+        assistantText,
+        deliveryText,
+        executor: session.executor ?? null,
+        ...(outcome ? { commitOutcome: outcome } : {}),
+      }, scope);
+      await sender.send(userId, terminal.terminalMessage!.text, { turnId, messageId });
+      return;
+    }
+  }
+
+  const commitIntent = chatAccess.authority === 'product-full-access' &&
+    isExplicitCommitRequest(text);
+  let baselineHead: string | undefined;
+  let baselineFailure: string | undefined;
+  if (commitIntent) {
+    const baseline = await captureCommitBaseline(chatAccess.cwd);
+    if (baseline.ok) baselineHead = baseline.head;
+    else baselineFailure = baseline.reason;
+  }
+
   const priorMessages = [...(scope
     ? getSessionMessages(userId, transport, scope)
     : getSessionMessages(userId, transport))];
-  if (scope) appendMessageToSession(userId, transport, 'user', text, scope);
+  if (scope) {
+    if (turnId) {
+      appendMessageToSession(userId, transport, 'user', text, scope, { turnId });
+    } else {
+      appendMessageToSession(userId, transport, 'user', text, scope);
+    }
+  }
   else appendMessageToSession(userId, transport, 'user', text);
+
+  if (turnId) {
+    // A commit turn's pending record must reach disk before the provider runs.
+    // If that write fails the turn cannot proceed — but it must still terminate
+    // with a reply, or the WS surface (whose dispatch chain only logs a
+    // rejection) shows the operator exactly the silent stall this contract
+    // exists to eliminate.
+    try {
+      beginSessionTurn(userId, transport, {
+        turnId,
+        requestText: text,
+        commitIntent,
+        ...(baselineHead ? { baselineHead } : {}),
+      }, scope);
+    } catch (err) {
+      log.error('Could not persist pending chat turn', { error: (err as Error).message });
+      await sender.send(
+        userId,
+        commitIntent
+          ? renderCommitReceipt(unconfirmedCommit(
+              'the request could not be durably recorded before execution',
+              baselineHead,
+            ))
+          : 'Error: chat turn could not be durably recorded',
+      );
+      return;
+    }
+  }
+
+  if (commitIntent && baselineFailure) {
+    const outcome = unconfirmedCommit(baselineFailure);
+    const assistantText = renderCommitReceipt(outcome);
+    const messageId = randomUUID();
+    const deliveryText = `${assistantText}\n\n_— chatting · /fresh to end_`;
+    if (turnId) {
+      completeSessionTurn(userId, transport, {
+        turnId,
+        messageId,
+        assistantText,
+        deliveryText,
+        executor: session.executor ?? null,
+        commitOutcome: outcome,
+      }, scope!);
+    } else {
+      appendMessageToSession(userId, transport, 'assistant', assistantText, scope!);
+      updateSession(userId, transport, scope!);
+    }
+    await sender.send(userId, deliveryText, turnId ? { turnId, messageId } : undefined);
+    return;
+  }
 
   sender.startTyping(userId, `Asking ${session.model}`);
   try {
     // A resolved product chat gets full product authority. An unresolved
     // product gets constrained write access in its dedicated fallback workspace.
     // Global/Home remains read-only in the vault.
-    const chatAccess = resolveChatAccess(scope);
     const { allowedTools, productContext, ...requestAccess } = chatAccess;
     const result = await askChatWithContext({
       ...(session.executor === undefined ? { legacyClaudeSessionId: session.sessionId } : {}),
@@ -602,31 +742,103 @@ async function handleConversationTurn(
       allowedTools,
     });
 
-    if (result.error) {
+    if (result.error && !commitIntent) {
       log.error('Conversation error', { error: result.error, sessionId: session.sessionId });
-      await sender.send(userId, `Error: ${result.error}`);
+      const errorText = `Error: ${result.error}`;
+      if (turnId) {
+        const messageId = randomUUID();
+        completeSessionTurn(userId, transport, {
+          turnId,
+          messageId,
+          assistantText: errorText,
+          deliveryText: errorText,
+          executor: result.executor,
+        }, scope!);
+        await sender.send(userId, errorText, { turnId, messageId });
+      } else {
+        await sender.send(userId, errorText);
+      }
       return;
     }
 
-    const rawReply = result.text!;
-    if (scope) setSessionExecutor(userId, transport, result.executor, scope);
-    else setSessionExecutor(userId, transport, result.executor);
-    if (scope) {
-      appendMessageToSession(userId, transport, 'assistant', rawReply, scope);
-      updateSession(userId, transport, scope);
-    } else {
-      appendMessageToSession(userId, transport, 'assistant', rawReply);
-      updateSession(userId, transport);
+    const commitOutcome = commitIntent
+      ? await verifyCommitCompletion({
+          repoRoot: chatAccess.cwd,
+          baselineHead: baselineHead!,
+          providerError: result.error,
+        })
+      : undefined;
+    if (commitOutcome?.status === 'unconfirmed') {
+      // The user-facing receipt is bounded by design; log the same reason so an
+      // unconfirmed commit is diagnosable without reading the chat transcript.
+      log.warn('Product-chat commit not confirmed', {
+        reason: commitOutcome.reason,
+        sessionId: session.sessionId,
+      });
     }
+    const rawReply = commitOutcome
+      ? appendCommitReceipt(result.text, commitOutcome)
+      : (result.text ?? 'The provider completed without a terminal response.');
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
     const reply = `${scrubAbsolutePaths(rawReply)}\n\n_— chatting · /fresh to end_`;
-    await sender.send(userId, reply);
+    if (turnId) {
+      const messageId = randomUUID();
+      completeSessionTurn(userId, transport, {
+        turnId,
+        messageId,
+        assistantText: rawReply,
+        deliveryText: reply,
+        executor: result.executor,
+        ...(commitOutcome ? { commitOutcome } : {}),
+      }, scope!);
+      await sender.send(userId, reply, { turnId, messageId });
+    } else {
+      if (scope) setSessionExecutor(userId, transport, result.executor, scope);
+      else setSessionExecutor(userId, transport, result.executor);
+      if (scope) {
+        appendMessageToSession(userId, transport, 'assistant', rawReply, scope);
+        updateSession(userId, transport, scope);
+      } else {
+        appendMessageToSession(userId, transport, 'assistant', rawReply);
+        updateSession(userId, transport);
+      }
+      await sender.send(userId, reply);
+    }
   } catch (err) {
     const message = (err as Error).message;
     log.error('Conversation exception', { error: message });
-    await sender.send(userId, `Error: ${scrubAbsolutePaths(message)}`);
+    if (turnId) {
+      const outcome: ProductChatCommitOutcome | undefined = commitIntent
+        ? unconfirmedCommit(`provider execution failed: ${scrubAbsolutePaths(message)}`, baselineHead)
+        : undefined;
+      const assistantText = outcome
+        ? renderCommitReceipt(outcome)
+        : `Error: ${scrubAbsolutePaths(message)}`;
+      const messageId = randomUUID();
+      const deliveryText = outcome
+        ? `${assistantText}\n\n_— chatting · /fresh to end_`
+        : assistantText;
+      try {
+        completeSessionTurn(userId, transport, {
+          turnId,
+          messageId,
+          assistantText,
+          deliveryText,
+          executor: session.executor ?? null,
+          ...(outcome ? { commitOutcome: outcome } : {}),
+        }, scope!);
+        await sender.send(userId, deliveryText, { turnId, messageId });
+      } catch (persistError) {
+        log.error('Could not persist failed terminal chat turn', {
+          error: (persistError as Error).message,
+        });
+        await sender.send(userId, 'Error: chat completion could not be durably recorded');
+      }
+    } else {
+      await sender.send(userId, `Error: ${scrubAbsolutePaths(message)}`);
+    }
   } finally {
     sender.stopTyping(userId);
   }

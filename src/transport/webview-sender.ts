@@ -39,8 +39,31 @@ export class WebviewSender implements MessageSender {
       text,
       ...(product ? { product } : {}),
       ...(opts?.approval ? { approval: opts.approval } : {}),
+      ...(opts?.turnId ? { turnId: opts.turnId } : {}),
+      ...(opts?.messageId ? { messageId: opts.messageId } : {}),
     });
     this.broadcast(userId, frame, true);
+  }
+
+  sendToSocket(
+    ws: WebSocket,
+    text: string,
+    product: string,
+    opts: Pick<SendOpts, 'turnId' | 'messageId'>,
+  ): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({
+        kind: 'message',
+        text,
+        product,
+        ...(opts.turnId ? { turnId: opts.turnId } : {}),
+        ...(opts.messageId ? { messageId: opts.messageId } : {}),
+        replay: true,
+      }));
+    } catch (err) {
+      log.error('ws replay send error', { error: (err as Error).message });
+    }
   }
 
   startTyping(userId: number, label = 'Thinking…'): void {

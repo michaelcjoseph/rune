@@ -1090,12 +1090,19 @@ function defaultPostJson(url, body) {
   });
 }
 
-function defaultSendChat({ product, text }) {
+function newChatTurnId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `turn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function defaultSendChat({ product, text, turnId }) {
   if (typeof window !== 'undefined' && typeof window.runeSendWebviewMessage === 'function') {
-    const sent = window.runeSendWebviewMessage({ product, text });
+    const sent = window.runeSendWebviewMessage({ product, text, turnId });
     if (sent) return Promise.resolve({ live: true });
   }
-  return defaultPostJson('/api/chat', { product, message: text });
+  return defaultPostJson('/api/chat', { product, message: text, turnId });
 }
 
 function clone(value) {
@@ -1491,8 +1498,13 @@ export function createProductDeepView({
     render();
   }
 
-  function appendChatMessage(role, text) {
-    chatMessages = [...chatMessages, { role, text }];
+  function appendChatMessage(role, text, messageId) {
+    if (messageId && chatMessages.some(message => message.messageId === messageId)) return;
+    chatMessages = [...chatMessages, {
+      role,
+      text,
+      ...(messageId ? { messageId } : {}),
+    }];
     if (role !== 'user') streamingMessageIndex = -1;
     persistSession();
     render({ followChat: true });
@@ -1615,12 +1627,13 @@ export function createProductDeepView({
     // structured endpoint; slash commands fall through to the normal path so
     // /clear, /fresh, and model switches keep working (and abandon the session).
     if (planning.active && !isCommand) return planningTurn(trimmed);
-    const result = await send({ product: messageProduct, text: trimmed });
+    const turnId = newChatTurnId();
+    const result = await send({ product: messageProduct, text: trimmed, turnId });
     if (clearsSession) {
       resetChatSession();
       return result;
     }
-    if (result?.text) appendChatMessage('assistant', result.text);
+    if (result?.text) appendChatMessage('assistant', result.text, result.messageId);
     return result;
   }
 

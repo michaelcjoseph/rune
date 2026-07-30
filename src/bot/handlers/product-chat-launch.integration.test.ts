@@ -80,6 +80,8 @@ function sender(): MessageSender {
 let demoRepo: string;
 let legacyRepo: string;
 let claudeRepo: string;
+let codexReceiptRepo: string;
+let claudeReceiptRepo: string;
 let handleWebviewMessage: typeof import('../../server/webview-bootstrap.js').handleWebviewMessage;
 let sessions: typeof import('../../vault/sessions.js');
 
@@ -91,6 +93,8 @@ beforeAll(async () => {
   demoRepo = initRepo('demo-repo');
   legacyRepo = initRepo('legacy-repo');
   claudeRepo = initRepo('claude-repo');
+  codexReceiptRepo = initRepo('codex-receipt-repo');
+  claudeReceiptRepo = initRepo('claude-receipt-repo');
 
   const fixturePath = join(binDir, 'codex');
   writeFileSync(fixturePath, `#!/usr/bin/env node
@@ -109,6 +113,7 @@ const sandbox = sandboxIndex >= 0
     ? JSON.parse(configSandbox.slice('sandbox_mode='.length))
     : null;
 const prompt = args[args.length - 1] || '';
+const toolOnly = prompt.includes('TOOL_ONLY');
 const threadId = resume ? args[args.length - 2] : 'thread-' + basename(process.cwd());
 appendFileSync(process.env.CHAT_FIXTURE_LOG, JSON.stringify({
   args, cwd: process.cwd(), prompt, resume, sandbox, threadId,
@@ -135,10 +140,12 @@ if (sandbox === 'danger-full-access') {
   process.exit(2);
 }
 process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\\n');
-process.stdout.write(JSON.stringify({
-  type: 'item.completed',
-  item: { type: 'agent_message', text: resume ? 'resumed product chat' : 'edited and committed' },
-}) + '\\n');
+if (!toolOnly) {
+  process.stdout.write(JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'agent_message', text: resume ? 'resumed product chat' : 'edited and committed' },
+  }) + '\\n');
+}
 `);
   chmodSync(fixturePath, 0o755);
 
@@ -154,6 +161,7 @@ const sessionIndex = args.indexOf(sessionFlag);
 const threadId = args[sessionIndex + 1];
 const promptIndex = args.indexOf('-p');
 const prompt = promptIndex >= 0 ? args[promptIndex + 1] : '';
+const toolOnly = prompt.includes('TOOL_ONLY');
 appendFileSync(process.env.CLAUDE_FIXTURE_LOG, JSON.stringify({
   args, cwd: process.cwd(), prompt, resume, sandbox: null, threadId,
 }) + '\\n');
@@ -172,7 +180,9 @@ execFileSync('git', [
   '-c', 'user.email=rune-product-chat@example.invalid',
   'commit', '-m', resume ? 'resumed claude product chat proof' : 'claude product chat proof',
 ]);
-process.stdout.write(JSON.stringify({ type: 'result', result: 'edited and committed' }) + '\\n');
+if (!toolOnly) {
+  process.stdout.write(JSON.stringify({ type: 'result', result: 'edited and committed' }) + '\\n');
+}
 `);
   chmodSync(claudeFixturePath, 0o755);
 
@@ -196,6 +206,20 @@ process.stdout.write(JSON.stringify({ type: 'result', result: 'edited and commit
       repoPath: claudeRepo,
       baseBranch: 'main',
       credentialsFile: join(root, 'claude.env'),
+      egressAllowlist: [],
+    },
+    'codex-receipt': {
+      class: 'internal',
+      repoPath: codexReceiptRepo,
+      baseBranch: 'main',
+      credentialsFile: join(root, 'codex-receipt.env'),
+      egressAllowlist: [],
+    },
+    'claude-receipt': {
+      class: 'internal',
+      repoPath: claudeReceiptRepo,
+      baseBranch: 'main',
+      credentialsFile: join(root, 'claude-receipt.env'),
       egressAllowlist: [],
     },
   }));
@@ -223,13 +247,51 @@ afterAll(() => {
 });
 
 describe('webview product-chat launch authority', () => {
+  it.each([
+    ['Codex', 'codex-receipt', 'gpt-5.6-terra', 501],
+    ['Claude', 'claude-receipt', 'opus', 502],
+  ])('delivers a verified receipt for a tool-only %s commit turn', async (
+    _provider,
+    product,
+    model,
+    userId,
+  ) => {
+    const scope = { kind: 'product' as const, product };
+    sessions.createSession(userId, 'webview', 'commit start', model, scope);
+    const chatSender = sender();
+
+    await handleWebviewMessage(
+      chatSender,
+      userId,
+      'commit these changes TOOL_ONLY',
+      scope,
+      { turnId: `turn_${product}_001` },
+    );
+
+    expect(chatSender.send).toHaveBeenCalledWith(
+      userId,
+      expect.stringMatching(/Commit confirmed: `[\da-f]+` .*product chat proof[\s\S]*Worktree clean\./),
+      expect.objectContaining({
+        turnId: `turn_${product}_001`,
+        messageId: expect.any(String),
+      }),
+    );
+    expect(sessions.getSessionTurn(userId, 'webview', `turn_${product}_001`, scope))
+      .toMatchObject({
+        status: 'terminal',
+        commitOutcome: { status: 'confirmed' },
+        terminalMessage: { messageId: expect.any(String) },
+      });
+  });
+
   it('keeps Claude product chat on its full-trust repository launch posture', async () => {
     const scope = { kind: 'product' as const, product: 'claude' };
+    const invocationStart = claudeInvocations().length;
     sessions.createSession(303, 'webview', 'claude start', 'opus', scope);
 
     await handleWebviewMessage(sender(), 303, 'make the edit', scope);
 
-    const invocation = claudeInvocations()[0]!;
+    const invocation = claudeInvocations()[invocationStart]!;
     expect(invocation).toMatchObject({
       cwd: realpathSync(claudeRepo),
       resume: false,
@@ -245,7 +307,7 @@ describe('webview product-chat launch authority', () => {
 
     await handleWebviewMessage(sender(), 303, 'make another edit', scope);
 
-    const resumed = claudeInvocations()[1]!;
+    const resumed = claudeInvocations()[invocationStart + 1]!;
     expect(resumed).toMatchObject({
       cwd: realpathSync(claudeRepo),
       resume: true,

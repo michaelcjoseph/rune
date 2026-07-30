@@ -3,6 +3,8 @@ import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.hoisted(() => vi.fn());
 const mockHandleBlog = vi.hoisted(() => vi.fn());
+const mockCaptureCommitBaseline = vi.hoisted(() => vi.fn());
+const mockVerifyCommitCompletion = vi.hoisted(() => vi.fn());
 
 vi.mock('../../config.js', () => ({
   PROJECT_ROOT: '/test/project',
@@ -27,6 +29,10 @@ vi.mock('../../vault/sessions.js', () => ({
   setSessionExecutor: vi.fn(),
   getSessionMessages: vi.fn(() => []),
   appendMessageToSession: vi.fn(),
+  beginSessionTurn: vi.fn(),
+  completeSessionTurn: vi.fn(),
+  getSessionTurn: vi.fn(() => null),
+  sessionTurnMatchesRequest: vi.fn(() => true),
   buildSessionSystemPrompt: vi.fn(({ scope }: { scope?: { kind: string; product?: string } } = {}) => [
     'You are Rune, the user\'s second-brain conversational layer.',
     'KNOWLEDGE BASE: kb_query is your FIRST move for domain questions.',
@@ -61,6 +67,14 @@ vi.mock('../../ai/claude.js', () => ({
   askClaudeWithContext: vi.fn(),
   runAgent: vi.fn(),
 }));
+vi.mock('../../ai/product-chat-commit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../ai/product-chat-commit.js')>();
+  return {
+    ...actual,
+    captureCommitBaseline: mockCaptureCommitBaseline,
+    verifyCommitCompletion: mockVerifyCommitCompletion,
+  };
+});
 vi.mock('../resolver.js', () => ({ classifyIntent: vi.fn() }));
 vi.mock('../skill-registry.js', () => ({
   getSkillRegistry: vi.fn(() => [
@@ -159,6 +173,10 @@ const {
   getSession,
   createSession,
   appendMessageToSession,
+  beginSessionTurn,
+  completeSessionTurn,
+  getSessionTurn,
+  sessionTurnMatchesRequest,
   updateSession,
   setSessionModel,
   buildSessionSystemPrompt,
@@ -1343,6 +1361,36 @@ describe('dispatchText — product-scoped webview sessions', () => {
     vi.mocked(hasActiveReview).mockReturnValue(false);
     vi.mocked(hasActiveSRSession).mockReturnValue(false);
     vi.mocked(getActivePlanningSession).mockReturnValue(null);
+    mockCaptureCommitBaseline.mockResolvedValue({ ok: true, head: 'a'.repeat(40) });
+    mockVerifyCommitCompletion.mockResolvedValue({
+      status: 'confirmed',
+      baselineHead: 'a'.repeat(40),
+      head: 'b'.repeat(40),
+      shortSha: 'bbbbbbb',
+      subject: 'Ship product chat',
+      clean: true,
+    });
+    vi.mocked(getSessionTurn).mockReturnValue(null);
+    vi.mocked(sessionTurnMatchesRequest).mockReturnValue(true);
+    vi.mocked(beginSessionTurn).mockImplementation((_userId, _transport, input) => ({
+      turnId: input.turnId,
+      requestHash: 'hash',
+      status: 'pending',
+      commitIntent: input.commitIntent,
+      ...(input.baselineHead ? { baselineHead: input.baselineHead } : {}),
+      createdAt: new Date().toISOString(),
+    }));
+    vi.mocked(completeSessionTurn).mockImplementation((_userId, _transport, input) => ({
+      turnId: input.turnId,
+      requestHash: 'hash',
+      status: 'terminal',
+      commitIntent: Boolean(input.commitOutcome),
+      terminalMessage: { messageId: input.messageId, text: input.deliveryText },
+      executor: input.executor,
+      ...(input.commitOutcome ? { commitOutcome: input.commitOutcome } : {}),
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    }));
   });
 
   function webviewSender(): MessageSender {
@@ -1378,6 +1426,443 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(createSessionMock.mock.calls[0]?.[4]).toBe(productScope);
     expect(appendMock).toHaveBeenCalledWith(100, 'webview', 'user', 'ship it', productScope);
     expect(updateMock).toHaveBeenCalledWith(100, 'webview', productScope);
+  });
+
+  it('persists a commit turn before execution and sends a verified tool-only receipt', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    askMock.mockResolvedValue({ text: null, error: null });
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_001',
+    });
+
+    expect(mockCaptureCommitBaseline).toHaveBeenCalledWith('/workspace/rune');
+    expect(beginSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_001',
+        commitIntent: true,
+        baselineHead: 'a'.repeat(40),
+      }),
+      productScope,
+    );
+    expect(vi.mocked(beginSessionTurn).mock.invocationCallOrder[0])
+      .toBeLessThan(askMock.mock.invocationCallOrder[0]!);
+    expect(completeSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_001',
+        assistantText: expect.stringContaining('Commit confirmed: `bbbbbbb` Ship product chat'),
+        commitOutcome: expect.objectContaining({ status: 'confirmed' }),
+      }),
+      productScope,
+    );
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining('Worktree clean.'),
+      expect.objectContaining({ turnId: 'turn_commit_001', messageId: expect.any(String) }),
+    );
+  });
+
+  it('replays a completed turnId without invoking the provider or Git', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 3,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    vi.mocked(getSessionTurn).mockReturnValue({
+      turnId: 'turn_commit_002',
+      requestHash: 'hash',
+      status: 'terminal',
+      commitIntent: true,
+      createdAt: new Date().toISOString(),
+      terminalMessage: { messageId: 'message_commit_002', text: 'stored receipt' },
+    });
+    const sender = webviewSender();
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_002',
+    });
+
+    expect(sender.send).toHaveBeenCalledWith(100, 'stored receipt', {
+      turnId: 'turn_commit_002',
+      messageId: 'message_commit_002',
+    });
+    expect(askClaudeWithContext).not.toHaveBeenCalled();
+    expect(mockCaptureCommitBaseline).not.toHaveBeenCalled();
+  });
+
+  it('still replies when the pending turn cannot be durably recorded', async () => {
+    // The WS dispatch chain only logs a rejection, so an unguarded throw here
+    // would leave the browser with zero frames — the exact silent stall this
+    // contract exists to eliminate.
+    vi.mocked(getSession).mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    vi.mocked(beginSessionTurn).mockImplementation(() => {
+      throw new Error('failed to durably persist pending chat turn');
+    });
+    const sender = webviewSender();
+
+    await expect(dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_persist_fail',
+    })).resolves.toBeUndefined();
+
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining('not confirmed'),
+    );
+    expect(askClaudeWithContext).not.toHaveBeenCalled();
+    expect(mockVerifyCommitCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses to replay a terminal turn whose turnId was reused for different text', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 3,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    vi.mocked(getSessionTurn).mockReturnValue({
+      turnId: 'turn_reused_001',
+      requestHash: 'hash-of-the-original-request',
+      status: 'terminal',
+      commitIntent: true,
+      createdAt: new Date().toISOString(),
+      terminalMessage: { messageId: 'message_reused_001', text: 'stored receipt' },
+    });
+    vi.mocked(sessionTurnMatchesRequest).mockReturnValue(false);
+    const sender = webviewSender();
+
+    await dispatchText(sender, 100, 'what changed in the readme?', productScope, {
+      turnId: 'turn_reused_001',
+    });
+
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining('already used for a different request'),
+    );
+    expect(sender.send).not.toHaveBeenCalledWith(100, 'stored receipt', expect.anything());
+    expect(askClaudeWithContext).not.toHaveBeenCalled();
+    expect(mockCaptureCommitBaseline).not.toHaveBeenCalled();
+    expect(beginSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before provider execution when baseline HEAD is unavailable', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    mockCaptureCommitBaseline.mockResolvedValue({ ok: false, reason: 'baseline HEAD unavailable' });
+    const sender = webviewSender();
+
+    await dispatchText(sender, 100, 'git commit', productScope, {
+      turnId: 'turn_commit_003',
+    });
+
+    expect(askClaudeWithContext).not.toHaveBeenCalled();
+    expect(sender.send).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining('Commit completion not confirmed'),
+      expect.objectContaining({ turnId: 'turn_commit_003' }),
+    );
+  });
+
+  it('does not run commit verification for global, fallback, or incidental commit text', async () => {
+    const askMock = vi.mocked(askClaudeWithContext).mockResolvedValue({ text: 'answer', error: null });
+    vi.mocked(getSession).mockReturnValue({
+      sessionId: 'session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'first',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+
+    await dispatchText(webviewSender(), 100, 'show the last commit', productScope, {
+      turnId: 'turn_commit_004',
+    });
+    vi.mocked(resolveProductChat).mockReturnValueOnce(null);
+    await dispatchText(webviewSender(), 100, 'commit these changes', {
+      kind: 'product',
+      product: 'missing',
+    }, { turnId: 'turn_commit_005' });
+    await dispatchText(webviewSender(), 100, 'commit these changes');
+
+    expect(askMock).toHaveBeenCalledTimes(3);
+    expect(mockCaptureCommitBaseline).not.toHaveBeenCalled();
+    expect(mockVerifyCommitCompletion).not.toHaveBeenCalled();
+  });
+
+  it('combines provider prose with the verified receipt for a non-tool-only commit turn', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    askMock.mockResolvedValue({ text: 'Committed and pushed the staged files.', error: null });
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_prose_001',
+    });
+
+    expect(completeSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_prose_001',
+        assistantText: expect.stringContaining('Committed and pushed the staged files.'),
+        commitOutcome: expect.objectContaining({ status: 'confirmed' }),
+      }),
+      productScope,
+    );
+    const [, deliveredText] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).toContain('Committed and pushed the staged files.');
+    expect(deliveredText).toContain('Commit confirmed: `bbbbbbb` Ship product chat');
+  });
+
+  it('reports a dirty post-commit tree as unconfirmed rather than success', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    askMock.mockResolvedValue({ text: null, error: null });
+    mockVerifyCommitCompletion.mockResolvedValueOnce({
+      status: 'unconfirmed',
+      baselineHead: 'a'.repeat(40),
+      observedHead: 'b'.repeat(40),
+      reason: 'worktree is not clean (2 changes)',
+    });
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_dirty_001',
+    });
+
+    expect(completeSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_dirty_001',
+        commitOutcome: expect.objectContaining({ status: 'unconfirmed', reason: expect.stringContaining('not clean') }),
+      }),
+      productScope,
+    );
+    const [, deliveredText] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).toContain('Commit completion not confirmed');
+    expect(deliveredText).not.toContain('Commit confirmed');
+  });
+
+  it('reports provider-reported failure as unconfirmed instead of a raw error when a commit was requested', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    askMock.mockResolvedValue({ text: null, error: 'provider reported a tool failure' });
+    mockVerifyCommitCompletion.mockResolvedValueOnce({
+      status: 'unconfirmed',
+      baselineHead: 'a'.repeat(40),
+      reason: 'provider did not complete successfully: provider reported a tool failure',
+    });
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_provider_error_001',
+    });
+
+    expect(mockVerifyCommitCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      providerError: 'provider reported a tool failure',
+    }));
+    const [, deliveredText] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).not.toMatch(/^Error:/);
+    expect(deliveredText).toContain('Commit completion not confirmed');
+  });
+
+  it('delivers a bounded, scrubbed unconfirmed receipt when the provider execution throws for a commit turn', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    askMock.mockRejectedValueOnce(new Error('spawn failed: /Users/person/secret sk-abc123'));
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_throw_001',
+    });
+
+    expect(completeSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_throw_001',
+        commitOutcome: expect.objectContaining({
+          status: 'unconfirmed',
+          reason: expect.stringContaining('provider execution failed'),
+        }),
+      }),
+      productScope,
+    );
+    const [, deliveredText, opts] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).toContain('Commit completion not confirmed');
+    expect(deliveredText).not.toContain('/Users/person');
+    expect(deliveredText).not.toContain('sk-abc123');
+    expect(opts).toMatchObject({ turnId: 'turn_commit_throw_001', messageId: expect.any(String) });
+  });
+
+  it('resolves an interrupted pending commit turn without re-invoking the provider or Git', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    vi.mocked(getSessionTurn).mockReturnValue({
+      turnId: 'turn_commit_pending_001',
+      requestHash: 'hash',
+      status: 'pending',
+      commitIntent: true,
+      baselineHead: 'a'.repeat(40),
+      createdAt: new Date().toISOString(),
+    });
+
+    await dispatchText(sender, 100, 'commit these changes', productScope, {
+      turnId: 'turn_commit_pending_001',
+    });
+
+    expect(askMock).not.toHaveBeenCalled();
+    expect(mockCaptureCommitBaseline).not.toHaveBeenCalled();
+    expect(mockVerifyCommitCompletion).not.toHaveBeenCalled();
+    expect(completeSessionTurn).toHaveBeenCalledWith(
+      100,
+      'webview',
+      expect.objectContaining({
+        turnId: 'turn_commit_pending_001',
+        commitOutcome: expect.objectContaining({
+          status: 'unconfirmed',
+          reason: expect.stringContaining('interrupted before completion was durably recorded'),
+        }),
+      }),
+      productScope,
+    );
+    const [, deliveredText] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).toContain('Commit completion not confirmed');
+  });
+
+  it('resolves an interrupted pending non-commit turn without inventing a commit outcome', async () => {
+    const getSessionMock = vi.mocked(getSession);
+    const askMock = vi.mocked(askClaudeWithContext);
+    const sender = webviewSender();
+    getSessionMock.mockReturnValue({
+      sessionId: 'commit-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'edit',
+      model: 'haiku',
+      messages: [],
+      executor: null,
+      turns: [],
+    });
+    vi.mocked(getSessionTurn).mockReturnValue({
+      turnId: 'turn_pending_noncommit_001',
+      requestHash: 'hash',
+      status: 'pending',
+      commitIntent: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    await dispatchText(sender, 100, 'what changed recently?', productScope, {
+      turnId: 'turn_pending_noncommit_001',
+    });
+
+    expect(askMock).not.toHaveBeenCalled();
+    expect(completeSessionTurn).toHaveBeenCalledOnce();
+    const completeCallArgs = vi.mocked(completeSessionTurn).mock.calls[0]!;
+    expect(completeCallArgs[0]).toBe(100);
+    expect(completeCallArgs[1]).toBe('webview');
+    expect('commitOutcome' in (completeCallArgs[2] as Record<string, unknown>)).toBe(false);
+    expect(completeCallArgs[3]).toBe(productScope);
+    const [, deliveredText] = vi.mocked(sender.send).mock.calls[0]!;
+    expect(deliveredText).toContain('The prior execution was interrupted before completion was durably recorded.');
+    expect(deliveredText).not.toContain('Commit completion not confirmed');
   });
 
   it('routes existing product-scoped chat continuations without consulting a global webview session', async () => {

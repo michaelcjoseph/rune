@@ -466,6 +466,8 @@ function installFrameBusWindow() {
   const previousWindow = (globalThis as any).window;
   (globalThis as any).window = {
     runeSendWebviewMessage: vi.fn(() => true),
+    runeAckWebviewMessage: vi.fn(() => true),
+    runeProductChatReplayReady: vi.fn(() => true),
     dispatchEvent: vi.fn(),
     CustomEvent: class {
       type: string;
@@ -610,6 +612,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(sendChat).toHaveBeenLastCalledWith({
         product: product.name,
         text: `What is next for ${product.name}?`,
+        turnId: expect.any(String),
       });
       view.close();
     }
@@ -950,6 +953,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(sendChat).toHaveBeenLastCalledWith({
       product: 'writing',
       text: 'What should this essay become?',
+      turnId: expect.any(String),
     });
     view.close();
   });
@@ -4040,6 +4044,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect((globalThis as any).window.runeSendWebviewMessage).toHaveBeenCalledWith({
         product: 'aura',
         text: 'What is next?',
+        turnId: expect.any(String),
       });
       expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,120}What is next\?/i);
 
@@ -4103,6 +4108,87 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(html).not.toContain('aura chunk two');
       expect(html.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
       auraAgain.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('deduplicates replayed terminal frames by messageId', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      const terminal = {
+        kind: 'message',
+        product: 'aura',
+        turnId: 'turn_dedupe_001',
+        messageId: 'message_dedupe_001',
+        text: 'Commit confirmed exactly once.',
+      };
+      bus.emit('rune-webview-frame', terminal);
+      bus.emit('rune-webview-frame', { ...terminal, replay: true });
+      expect((globalThis as any).window.runeAckWebviewMessage)
+        .toHaveBeenCalledTimes(2);
+      expect((globalThis as any).window.runeProductChatReplayReady)
+        .toHaveBeenCalledOnce();
+
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ name: 'aura', activeRun: undefined })),
+      });
+      await view.load();
+
+      expect(root.innerHTML.match(/Commit confirmed exactly once\./g)).toHaveLength(1);
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
+      view.close();
+    } finally {
+      bus.restore();
+    }
+  });
+
+  it('deduplicates a WebSocket replay after a REST fallback rendered the same messageId', async () => {
+    const bus = installFrameBusWindow();
+    try {
+      const {
+        createProductDeepView,
+        initializeProductChatFrameConsumer,
+      } = await import('./product-deep-view.js');
+      initializeProductChatFrameConsumer();
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ name: 'aura', activeRun: undefined })),
+        sendChat: vi.fn(async () => ({
+          text: 'Commit confirmed from REST.',
+          turnId: 'turn_rest_dedupe_001',
+          messageId: 'message_rest_dedupe_001',
+        })),
+      });
+      await view.load();
+      await root.submitClosest('[data-product-chat-form]', {
+        product: 'aura',
+        message: 'commit these changes',
+      });
+      bus.emit('rune-webview-frame', {
+        kind: 'message',
+        product: 'aura',
+        text: 'Commit confirmed from REST.',
+        turnId: 'turn_rest_dedupe_001',
+        messageId: 'message_rest_dedupe_001',
+        replay: true,
+      });
+
+      expect(root.innerHTML.match(/Commit confirmed from REST\./g)).toHaveLength(1);
+      expect(root.innerHTML.match(/data-chat-message-role=["']assistant["']/g)).toHaveLength(1);
+      expect((globalThis as any).window.runeAckWebviewMessage)
+        .toHaveBeenCalledWith('message_rest_dedupe_001');
+      view.close();
     } finally {
       bus.restore();
     }

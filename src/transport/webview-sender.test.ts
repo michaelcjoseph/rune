@@ -316,6 +316,58 @@ describe('WebviewSender', () => {
     });
   });
 
+  describe('sendToSocket()', () => {
+    it('sends a replay message frame with product, turnId, and messageId', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.sendToSocket(ws, 'stored commit receipt', 'aura', {
+        turnId: 'turn_replay_001',
+        messageId: 'message_replay_001',
+      });
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual({
+        kind: 'message',
+        text: 'stored commit receipt',
+        product: 'aura',
+        turnId: 'turn_replay_001',
+        messageId: 'message_replay_001',
+        replay: true,
+      });
+    });
+
+    it('omits turnId/messageId fields when not provided', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.sendToSocket(ws, 'stored commit receipt', 'aura', {});
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect('turnId' in frame).toBe(false);
+      expect('messageId' in frame).toBe(false);
+    });
+
+    it('does not send to a socket that is not OPEN', () => {
+      const ws = makeWs(3); // CLOSING
+      const sender = new WebviewSender();
+      sender.sendToSocket(ws, 'stored commit receipt', 'aura', {
+        turnId: 'turn_closed_001',
+        messageId: 'message_closed_001',
+      });
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when the underlying socket send throws', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      (ws.send as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('socket write failed');
+      });
+      expect(() => sender.sendToSocket(ws, 'stored commit receipt', 'aura', {
+        turnId: 'turn_err_001',
+        messageId: 'message_err_001',
+      })).not.toThrow();
+    });
+  });
+
   describe('onOpEvent()', () => {
     const TS = '2026-05-14T12:00:00.000Z';
 

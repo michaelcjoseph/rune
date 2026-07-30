@@ -28,6 +28,7 @@ describe('server/webview-bootstrap', () => {
       42,
       'hello from product chat',
       scope,
+      undefined,
     );
   });
 });

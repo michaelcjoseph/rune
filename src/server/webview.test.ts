@@ -147,6 +147,8 @@ vi.mock('../jobs/scaffold-approval.js', () => ({
 vi.mock('../vault/sessions.js', () => ({
   getSession: vi.fn(() => null),
   sessionKeyForScope: mockSessionKeyForScope,
+  getUnacknowledgedCommitMessages: vi.fn(() => []),
+  acknowledgeSessionMessage: vi.fn(() => true),
 }));
 
 vi.mock('./state-snapshot.js', () => ({
@@ -209,8 +211,15 @@ const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const sessionsForWebview = await import('../vault/sessions.js') as unknown as {
   getSession: ReturnType<typeof vi.fn>;
   sessionKeyForScope: ReturnType<typeof vi.fn>;
+  getUnacknowledgedCommitMessages: ReturnType<typeof vi.fn>;
+  acknowledgeSessionMessage: ReturnType<typeof vi.fn>;
 };
-const { getSession, sessionKeyForScope } = sessionsForWebview;
+const {
+  acknowledgeSessionMessage,
+  getSession,
+  getUnacknowledgedCommitMessages,
+  sessionKeyForScope,
+} = sessionsForWebview;
 const { getStateSnapshot } = await import('./state-snapshot.js');
 const { readRegistry } = await import('../intent/registry.js');
 const {
@@ -1955,6 +1964,42 @@ describe('server/webview', () => {
       expect(getSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'webview', expectedScope);
     });
 
+    it('carries turnId through REST dispatch and returns terminal message identity', async () => {
+      (handleWebviewMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async (sender, userId, _text, _scope, metadata) => {
+          await sender.send(userId, 'commit receipt', {
+            turnId: metadata.turnId,
+            messageId: 'message_rest_001',
+          });
+        },
+      );
+      const res = await makeRequest(port, '/api/chat', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'commit these changes',
+          product: 'aura',
+          turnId: 'turn_rest_001',
+        }),
+      });
+
+      expect(handleWebviewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'webview' }),
+        mockConfig.TELEGRAM_USER_ID,
+        'commit these changes',
+        { kind: 'product', product: 'aura' },
+        { turnId: 'turn_rest_001' },
+      );
+      expect(res.body).toMatchObject({
+        text: 'commit receipt',
+        turnId: 'turn_rest_001',
+        messageId: 'message_rest_001',
+      });
+    });
+
     it('keeps POST /api/chat global when product is invalid', async () => {
       await makeRequest(port, '/api/chat', {
         method: 'POST',
@@ -1994,6 +2039,75 @@ describe('server/webview', () => {
   });
 
   describe('WebSocket /api/ws chat frames', () => {
+    it('carries a stable turnId through product chat dispatch', async () => {
+      const ws = await openWebSocket(port);
+      try {
+        ws.send(JSON.stringify({
+          kind: 'message',
+          text: 'commit these changes',
+          product: 'aura',
+          turnId: 'turn_ws_001',
+        }));
+        await waitForMockCall(handleWebviewMessage as ReturnType<typeof vi.fn>);
+        expect(handleWebviewMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'commit these changes',
+          { kind: 'product', product: 'aura' },
+          { turnId: 'turn_ws_001' },
+        );
+      } finally {
+        ws.terminate();
+      }
+    });
+
+    it('acknowledges terminal message IDs without dispatching another turn', async () => {
+      const ws = await openWebSocket(port);
+      try {
+        ws.send(JSON.stringify({
+          kind: 'message-ack',
+          messageId: 'message_ack_001',
+        }));
+        await waitForMockCall(acknowledgeSessionMessage as ReturnType<typeof vi.fn>);
+        expect(acknowledgeSessionMessage).toHaveBeenCalledWith(
+          mockConfig.TELEGRAM_USER_ID,
+          'webview',
+          'message_ack_001',
+        );
+        expect(handleWebviewMessage).not.toHaveBeenCalled();
+      } finally {
+        ws.terminate();
+      }
+    });
+
+    it('replays an unacknowledged commit receipt on reconnect with stable IDs', async () => {
+      vi.mocked(getUnacknowledgedCommitMessages).mockReturnValueOnce([{
+        scope: { kind: 'product', product: 'aura' },
+        turnId: 'turn_replay_001',
+        messageId: 'message_replay_001',
+        text: 'stored commit receipt',
+      }]);
+      const liveSender = new WebviewSender();
+      const routeServer = await startWebviewRouteServer(liveSender);
+      const ws = await openWebSocket(routeServer.port);
+      try {
+        const framesPromise = collectJsonFrames(ws, 1);
+        ws.send(JSON.stringify({ kind: 'replay-ready' }));
+        const frames = await framesPromise;
+        expect(frames).toEqual([{
+          kind: 'message',
+          product: 'aura',
+          turnId: 'turn_replay_001',
+          messageId: 'message_replay_001',
+          text: 'stored commit receipt',
+          replay: true,
+        }]);
+      } finally {
+        ws.terminate();
+        await routeServer.close();
+      }
+    });
+
     it('carries product scope from message frames through webview dispatch', async () => {
       const ws = await openWebSocket(port);
       try {

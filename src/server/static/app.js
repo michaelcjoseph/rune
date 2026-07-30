@@ -96,6 +96,7 @@
   let reconnectDelay = 2000;
   let streamingDiv = null;
   let streamingText = '';
+  let productChatConsumerReady = false;
   window.runeConnectionStatus = 'disconnected';
 
   function connect() {
@@ -105,12 +106,24 @@
     ws.onopen = () => {
       reconnectDelay = 2000;
       updateStatus('connected');
+      if (productChatConsumerReady) {
+        ws.send(JSON.stringify({ kind: 'replay-ready' }));
+      }
     };
 
     ws.onmessage = (event) => {
       let frame;
       try { frame = JSON.parse(event.data); } catch { return; }
       window.dispatchEvent(new CustomEvent('rune-webview-frame', { detail: frame }));
+      // Fallback ack for a durable delivery no product consumer owns. Only
+      // product-scoped turns carry a messageId today, so this is unreachable in
+      // practice — it stays because the cost of losing it is an unacknowledged
+      // message replayed on every reconnect, forever. Product-scoped frames are
+      // acked by product-chat-session-store.js after it applies them.
+      if (frame.kind === 'message' && frame.messageId && !frame.product &&
+          ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ kind: 'message-ack', messageId: frame.messageId }));
+      }
 
       // In the product deep view the product chat panel owns its own transcript
       // (it consumes the same frame via the rune-webview-frame event above).
@@ -216,12 +229,26 @@
     ws.send(JSON.stringify({ kind: 'message', text }));
   }
 
-  window.runeSendWebviewMessage = function ({ product, text } = {}) {
+  window.runeSendWebviewMessage = function ({ product, text, turnId } = {}) {
     const trimmed = String(text || '').trim();
     if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
     const frame = { kind: 'message', text: trimmed };
     if (product) frame.product = String(product);
+    if (turnId) frame.turnId = String(turnId);
     ws.send(JSON.stringify(frame));
+    return true;
+  };
+
+  window.runeAckWebviewMessage = function (messageId) {
+    if (!messageId || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ kind: 'message-ack', messageId: String(messageId) }));
+    return true;
+  };
+
+  window.runeProductChatReplayReady = function () {
+    productChatConsumerReady = true;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ kind: 'replay-ready' }));
     return true;
   };
 

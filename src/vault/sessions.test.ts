@@ -49,6 +49,12 @@ const {
   restoreSessions,
   persistSessions,
   appendMessageToSession,
+  acknowledgeSessionMessage,
+  beginSessionTurn,
+  completeSessionTurn,
+  getSessionTurn,
+  sessionTurnMatchesRequest,
+  getUnacknowledgedCommitMessages,
   getSessionMessages,
   buildSessionSystemPrompt,
   resolveProductChat,
@@ -831,6 +837,215 @@ describe('vault/sessions', () => {
   });
 
   describe('persistence', () => {
+    it('atomically persists pending and terminal commit-turn evidence', () => {
+      const scope = { kind: 'product' as const, product: 'rune' };
+      createSession(321, 'webview', 'commit', undefined, scope);
+      appendMessageToSession(321, 'webview', 'user', 'commit these changes', scope, {
+        turnId: 'turn_durable_001',
+      });
+      const pending = beginSessionTurn(321, 'webview', {
+        turnId: 'turn_durable_001',
+        requestText: 'commit these changes',
+        commitIntent: true,
+        baselineHead: 'a'.repeat(40),
+      }, scope);
+      expect(pending.status).toBe('pending');
+      expect(JSON.parse(readFileSync(sessionsFile, 'utf8'))).toEqual(expect.any(Array));
+
+      const terminal = completeSessionTurn(321, 'webview', {
+        turnId: 'turn_durable_001',
+        messageId: 'message_durable_001',
+        assistantText: 'Commit confirmed.',
+        deliveryText: 'Commit confirmed.\n\nfooter',
+        executor: {
+          format: 'codex',
+          sessionId: 'thread-durable',
+          authority: 'product-full-access',
+          cwd: '/repo',
+          writableRoot: '/repo',
+        },
+        commitOutcome: {
+          status: 'confirmed',
+          baselineHead: 'a'.repeat(40),
+          head: 'b'.repeat(40),
+          shortSha: 'bbbbbbb',
+          subject: 'Ship',
+          clean: true,
+        },
+      }, scope);
+
+      expect(terminal).toMatchObject({
+        status: 'terminal',
+        verifiedHead: 'b'.repeat(40),
+        terminalMessage: { messageId: 'message_durable_001' },
+        executor: { sessionId: 'thread-durable' },
+      });
+      expect(getSessionMessages(321, 'webview', scope).at(-1)).toMatchObject({
+        role: 'assistant',
+        turnId: 'turn_durable_001',
+        messageId: 'message_durable_001',
+      });
+      expect(getSessionTurn(321, 'webview', 'turn_durable_001', scope)).toBe(terminal);
+    });
+
+    it('flushes a pending commit turn to disk but defers an ordinary one', () => {
+      const scope = { kind: 'product' as const, product: 'rune' };
+      const turnsOnDisk = (userId: number): unknown[] => {
+        const entries = JSON.parse(readFileSync(sessionsFile, 'utf8')) as [string, { turns?: unknown[] }][];
+        const entry = entries.find(([key]) => key.endsWith(`:${userId}`));
+        return entry?.[1]?.turns ?? [];
+      };
+
+      createSession(325, 'webview', 'chat', undefined, scope);
+      beginSessionTurn(325, 'webview', {
+        turnId: 'turn_plain_001',
+        requestText: 'what changed in the readme?',
+        commitIntent: false,
+      }, scope);
+      // An ordinary turn needs in-process identity only — keeping it out of the
+      // pre-execution write halves the synchronous disk writes on the hot path.
+      expect(turnsOnDisk(325)).toHaveLength(0);
+      expect(getSessionTurn(325, 'webview', 'turn_plain_001', scope)?.status).toBe('pending');
+
+      createSession(326, 'webview', 'commit', undefined, scope);
+      beginSessionTurn(326, 'webview', {
+        turnId: 'turn_commit_001',
+        requestText: 'commit these changes',
+        commitIntent: true,
+        baselineHead: 'a'.repeat(40),
+      }, scope);
+      expect(turnsOnDisk(326)).toHaveLength(1);
+    });
+
+    it('validates a replayed turn against the request it was opened for', () => {
+      const scope = { kind: 'product' as const, product: 'rune' };
+      createSession(327, 'webview', 'commit', undefined, scope);
+      const turn = beginSessionTurn(327, 'webview', {
+        turnId: 'turn_hash_001',
+        requestText: 'commit these changes',
+        commitIntent: true,
+        baselineHead: 'a'.repeat(40),
+      }, scope);
+
+      expect(sessionTurnMatchesRequest(turn, 'commit these changes')).toBe(true);
+      expect(sessionTurnMatchesRequest(turn, 'commit these changes ')).toBe(false);
+      expect(sessionTurnMatchesRequest(turn, 'what changed in the readme?')).toBe(false);
+    });
+
+    it('replays unacknowledged commit receipts once and persists acknowledgment', () => {
+      const scope = { kind: 'product' as const, product: 'rune' };
+      createSession(322, 'webview', 'commit', undefined, scope);
+      beginSessionTurn(322, 'webview', {
+        turnId: 'turn_ack_001',
+        requestText: 'git commit',
+        commitIntent: true,
+        baselineHead: 'a'.repeat(40),
+      }, scope);
+      completeSessionTurn(322, 'webview', {
+        turnId: 'turn_ack_001',
+        messageId: 'message_ack_001',
+        assistantText: 'unconfirmed',
+        deliveryText: 'stored unconfirmed receipt',
+        executor: null,
+        commitOutcome: {
+          status: 'unconfirmed',
+          baselineHead: 'a'.repeat(40),
+          reason: 'HEAD did not advance',
+        },
+      }, scope);
+
+      expect(getUnacknowledgedCommitMessages(322, 'webview')).toEqual([{
+        scope,
+        turnId: 'turn_ack_001',
+        messageId: 'message_ack_001',
+        text: 'stored unconfirmed receipt',
+      }]);
+      expect(acknowledgeSessionMessage(322, 'webview', 'message_ack_001')).toBe(true);
+      expect(getUnacknowledgedCommitMessages(322, 'webview')).toEqual([]);
+      expect(acknowledgeSessionMessage(322, 'webview', 'message_ack_001')).toBe(true);
+    });
+
+    it('restores legacy records and terminalizes an interrupted pending commit', () => {
+      const data = [['rune:webview:323', {
+        sessionId: 'restored-commit',
+        lastActivity: '2026-07-30T12:00:00.000Z',
+        messageCount: 2,
+        firstMessage: 'commit',
+        model: 'gpt-5.6-terra',
+        messages: [{ role: 'user', text: 'commit these changes', ts: '2026-07-30 07:00' }],
+        executor: null,
+        turns: [{
+          turnId: 'turn_interrupted_001',
+          requestHash: 'hash',
+          status: 'pending',
+          commitIntent: true,
+          baselineHead: 'a'.repeat(40),
+          createdAt: '2026-07-30T12:00:00.000Z',
+        }],
+      }]];
+      writeFileSync(sessionsFile, JSON.stringify(data));
+
+      restoreSessions();
+
+      const restored = getSessionTurn(
+        323,
+        'webview',
+        'turn_interrupted_001',
+        { kind: 'product', product: 'rune' },
+      );
+      expect(restored).toMatchObject({
+        status: 'terminal',
+        commitOutcome: {
+          status: 'unconfirmed',
+          reason: expect.stringContaining('restarted'),
+        },
+        terminalMessage: {
+          messageId: expect.any(String),
+          text: expect.stringContaining('Commit completion not confirmed'),
+        },
+      });
+    });
+
+    it('drops a legacy non-commit pending turn instead of stranding it', () => {
+      const scope = { kind: 'product' as const, product: 'rune' };
+      const data = [['rune:webview:324', {
+        sessionId: 'restored-plain',
+        lastActivity: '2026-07-30T12:00:00.000Z',
+        messageCount: 1,
+        firstMessage: 'question',
+        model: 'gpt-5.6-terra',
+        messages: [],
+        executor: null,
+        turns: [
+          {
+            turnId: 'turn_plain_stale',
+            requestHash: 'hash',
+            status: 'pending',
+            commitIntent: false,
+            createdAt: '2026-07-30T12:00:00.000Z',
+          },
+          {
+            turnId: 'turn_done',
+            requestHash: 'hash',
+            status: 'terminal',
+            commitIntent: false,
+            createdAt: '2026-07-30T12:00:00.000Z',
+            terminalMessage: { messageId: 'm1', text: 'done' },
+          },
+        ],
+      }]];
+      writeFileSync(sessionsFile, JSON.stringify(data));
+
+      restoreSessions();
+
+      // It can never resolve on its own, and leaving it would make every retry
+      // of that turnId replay "interrupted" forever.
+      expect(getSessionTurn(324, 'webview', 'turn_plain_stale', scope)).toBeNull();
+      expect(getSessionTurn(324, 'webview', 'turn_done', scope)).toMatchObject({
+        status: 'terminal',
+      });
+    });
+
     it('creates new sessions with the Terra default and no executor thread yet', () => {
       const session = createSession(123, 'telegram', 'test');
       expect(session.model).toBe('gpt-5.6-terra');

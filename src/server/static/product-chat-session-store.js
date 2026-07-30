@@ -83,15 +83,19 @@ function appendStreamingChunk(session, text) {
   session.chatMessages = nextMessages;
 }
 
-function finalizeStreamingMessage(session, text) {
+function finalizeStreamingMessage(session, text, messageId) {
   const messages = list(session.chatMessages);
   const index = Number.isFinite(session.streamingMessageIndex) ? session.streamingMessageIndex : -1;
+  // Stamping the id onto the transcript entry makes chatMessages the single
+  // record of "already seen" — the REST path (product-deep-view.js) already
+  // dedupes against it, so no parallel id set is needed.
+  const entry = { role: 'assistant', text, ...(messageId ? { messageId } : {}) };
   if (index >= 0 && messages[index]) {
     const nextMessages = [...messages];
-    nextMessages[index] = { role: 'assistant', text };
+    nextMessages[index] = entry;
     session.chatMessages = nextMessages;
   } else {
-    session.chatMessages = [...messages, { role: 'assistant', text }];
+    session.chatMessages = [...messages, entry];
   }
   session.streamingMessageIndex = -1;
 }
@@ -163,10 +167,16 @@ function applyProductChatFrame(frame) {
     : null;
   if (!product) return false;
   const session = getProductSession(product);
+  // A replayed or re-broadcast delivery is accepted (so it still gets acked)
+  // but must not append a second copy of the same message.
+  if (frame.kind === 'message' && frame.messageId &&
+      list(session.chatMessages).some(message => message?.messageId === frame.messageId)) {
+    return true;
+  }
   if (frame.kind === 'chunk') {
     appendStreamingChunk(session, frame.text || '');
   } else if (frame.kind === 'message') {
-    finalizeStreamingMessage(session, frame.text || '');
+    finalizeStreamingMessage(session, frame.text || '', frame.messageId);
     setSessionStatus(session, null);
   } else if (frame.kind === 'status') {
     setSessionStatus(session, frame.label || null);
@@ -225,9 +235,14 @@ export function initializeProductChatFrameConsumer(
 ) {
   if (!targetWindow?.addEventListener || productChatConsumerWindows.has(targetWindow)) return;
   targetWindow.addEventListener('rune-webview-frame', event => {
-    applyProductChatFrame(event?.detail);
+    const frame = event?.detail;
+    const accepted = applyProductChatFrame(frame);
+    if (accepted && frame?.kind === 'message' && frame.messageId) {
+      targetWindow.runeAckWebviewMessage?.(frame.messageId);
+    }
   });
   productChatConsumerWindows.add(targetWindow);
+  targetWindow.runeProductChatReplayReady?.();
 }
 
 export function resetProductSessions() {

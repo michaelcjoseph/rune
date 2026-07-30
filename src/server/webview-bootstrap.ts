@@ -1,5 +1,6 @@
 import type { MessageSender } from '../transport/sender.js';
 import { dispatchText } from '../bot/handlers/text.js';
+import type { ChatDispatchMetadata } from '../bot/handlers/text.js';
 import type { SessionScope } from '../vault/sessions.js';
 
 /** Dispatch entrypoint for the webview transport. Mirrors the TG routing chain
@@ -11,8 +12,7 @@ export async function handleWebviewMessage(
   userId: number,
   text: string,
   scope?: SessionScope,
+  metadata?: ChatDispatchMetadata,
 ): Promise<void> {
-  return scope
-    ? dispatchText(sender, userId, text, scope)
-    : dispatchText(sender, userId, text);
+  return dispatchText(sender, userId, text, scope, metadata);
 }

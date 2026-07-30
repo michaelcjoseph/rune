@@ -8,6 +8,7 @@ import { createLogger } from '../utils/logger.js';
 import { getTodayDate, getTimestamp } from '../utils/time.js';
 import { readProductsConfig } from '../jobs/sandbox-runtime.js';
 import { isContainedIn } from '../intent/sandbox.js';
+import type { ProductChatCommitOutcome } from '../ai/product-chat-commit.js';
 
 const log = createLogger('sessions');
 
@@ -15,6 +16,7 @@ const MAX_SESSION_MESSAGES = 200;
 const PROMPT_CONTEXT_CHAR_LIMIT = 12_000;
 const PROMPT_FILE_CHAR_LIMIT = 4_000;
 const MAX_PROJECT_CONTEXTS = 5;
+const MAX_SESSION_TURNS = 100;
 
 export type Transport = 'telegram' | 'webview';
 export type ChatAuthority =
@@ -29,6 +31,28 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   text: string;
   ts: string;
+  turnId?: string;
+  messageId?: string;
+}
+
+export interface TerminalChatMessage {
+  messageId: string;
+  text: string;
+}
+
+export interface ProductChatTurn {
+  turnId: string;
+  requestHash: string;
+  status: 'pending' | 'terminal';
+  commitIntent: boolean;
+  baselineHead?: string;
+  commitOutcome?: ProductChatCommitOutcome;
+  terminalMessage?: TerminalChatMessage;
+  executor?: ConversationExecutor | null;
+  verifiedHead?: string;
+  createdAt: string;
+  completedAt?: string;
+  deliveryAcknowledgedAt?: string;
 }
 
 export interface ProductPromptDoc {
@@ -100,6 +124,7 @@ export interface Session {
   model: string;
   messages: ConversationMessage[];
   executor?: ConversationExecutor | null;
+  turns?: ProductChatTurn[];
 }
 
 export const VAULT_SYSTEM_PROMPT_BASE = `You are Rune, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
@@ -579,6 +604,7 @@ export function createSession(
     model: model || config.DEFAULT_CHAT_MODEL,
     messages: [],
     executor: null,
+    turns: [],
   };
   sessions.set(sessionKeyForScope(userId, transport, scope), session);
   persistSessions();
@@ -617,17 +643,7 @@ export function setSessionExecutor(
 ): void {
   const session = sessions.get(sessionKeyForScope(userId, transport, scope));
   if (!session) return;
-  const sameClaudeSession = executor?.format === 'claude' &&
-    executor.sessionId === session.executor?.sessionId;
-  if (session.executor?.format === 'claude' && session.executor.sessionId && !sameClaudeSession) {
-    cleanupSession(session.executor.sessionId);
-  }
-  const sameCodexSession = executor?.format === 'codex' &&
-    executor.sessionId === session.executor?.sessionId;
-  if (session.executor?.format === 'codex' && session.executor.sessionId && !sameCodexSession) {
-    cleanupCodexThread(session.executor.sessionId);
-  }
-  session.executor = executor;
+  replaceExecutor(session, executor);
   persistSessions();
 }
 
@@ -654,12 +670,223 @@ export function appendMessageToSession(
   role: 'user' | 'assistant',
   text: string,
   scope: SessionScope = { kind: 'global' },
+  identity?: { turnId?: string; messageId?: string },
 ): void {
   const session = sessions.get(sessionKeyForScope(userId, transport, scope));
   if (!session) return;
   if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
-  session.messages.push({ role, text, ts: `${getTodayDate()} ${getTimestamp()}` });
+  session.messages.push({
+    role,
+    text,
+    ts: `${getTodayDate()} ${getTimestamp()}`,
+    ...(identity?.turnId ? { turnId: identity.turnId } : {}),
+    ...(identity?.messageId ? { messageId: identity.messageId } : {}),
+  });
   // Persistence is deferred to updateSession to avoid 3 synchronous disk writes per turn.
+}
+
+function requestHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/** True when `text` is the request this turn was opened for. Callers compare
+ *  before replaying a stored terminal message so a reused `turnId` carrying
+ *  different content can never be answered with the earlier turn's receipt. */
+export function sessionTurnMatchesRequest(turn: ProductChatTurn, text: string): boolean {
+  return turn.requestHash === requestHash(text);
+}
+
+function replaceExecutor(session: Session, executor: ConversationExecutor | null): void {
+  const previous = session.executor ?? null;
+  session.executor = executor;
+  cleanupReplacedExecutor(previous, executor);
+}
+
+function cleanupReplacedExecutor(
+  previous: ConversationExecutor | null,
+  executor: ConversationExecutor | null,
+): void {
+  const sameClaudeSession = executor?.format === 'claude' &&
+    executor.sessionId === previous?.sessionId;
+  if (previous?.format === 'claude' && previous.sessionId && !sameClaudeSession) {
+    cleanupSession(previous.sessionId);
+  }
+  const sameCodexSession = executor?.format === 'codex' &&
+    executor.sessionId === previous?.sessionId;
+  if (previous?.format === 'codex' && previous.sessionId && !sameCodexSession) {
+    cleanupCodexThread(previous.sessionId);
+  }
+}
+
+export function getSessionTurn(
+  userId: number,
+  transport: Transport,
+  turnId: string,
+  scope: SessionScope = { kind: 'global' },
+): ProductChatTurn | null {
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
+  return session?.turns?.find(turn => turn.turnId === turnId) ?? null;
+}
+
+/** Open the inbound turn before the provider is invoked.
+ *
+ *  A commit-intent turn is flushed to disk here and throws if that fails: the
+ *  pending record is what stops a restart from re-executing a commit whose
+ *  outcome was never recorded. An ordinary turn only needs in-process
+ *  identity, so its write is deferred to `completeSessionTurn` — that keeps the
+ *  hot cockpit chat path at one synchronous whole-map write per turn instead of
+ *  two, and leaves no orphan `pending` row behind after a restart. */
+export function beginSessionTurn(
+  userId: number,
+  transport: Transport,
+  input: {
+    turnId: string;
+    requestText: string;
+    commitIntent: boolean;
+    baselineHead?: string;
+  },
+  scope: SessionScope = { kind: 'global' },
+): ProductChatTurn {
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
+  if (!session) throw new Error('chat session is unavailable');
+  const existing = session.turns?.find(turn => turn.turnId === input.turnId);
+  if (existing) return existing;
+  const turn: ProductChatTurn = {
+    turnId: input.turnId,
+    requestHash: requestHash(input.requestText),
+    status: 'pending',
+    commitIntent: input.commitIntent,
+    ...(input.baselineHead ? { baselineHead: input.baselineHead } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  const previousTurns = session.turns ?? [];
+  session.turns = [...previousTurns, turn].slice(-MAX_SESSION_TURNS);
+  if (input.commitIntent && !persistSessions()) {
+    session.turns = previousTurns;
+    throw new Error('failed to durably persist pending chat turn');
+  }
+  return turn;
+}
+
+/** Atomically persist assistant transcript, terminal identity, commit outcome,
+ * verified HEAD, and executor binding before the response is delivered. */
+export function completeSessionTurn(
+  userId: number,
+  transport: Transport,
+  input: {
+    turnId: string;
+    messageId: string;
+    assistantText: string;
+    deliveryText: string;
+    executor: ConversationExecutor | null;
+    commitOutcome?: ProductChatCommitOutcome;
+  },
+  scope: SessionScope = { kind: 'global' },
+): ProductChatTurn {
+  const session = sessions.get(sessionKeyForScope(userId, transport, scope));
+  if (!session) throw new Error('chat session is unavailable');
+  const previousTurns = session.turns ?? [];
+  const index = previousTurns.findIndex(candidate => candidate.turnId === input.turnId);
+  if (index < 0) throw new Error('pending chat turn is unavailable');
+  const pending = previousTurns[index]!;
+  if (pending.status === 'terminal') return pending;
+
+  const verifiedHead = input.commitOutcome?.status === 'confirmed'
+    ? input.commitOutcome.head
+    : input.commitOutcome?.observedHead;
+  // Built as a replacement rather than mutated in place so the rollback below
+  // is a plain reference restore — no delete-every-key dance, no unsafe cast.
+  const terminal: ProductChatTurn = {
+    ...pending,
+    status: 'terminal',
+    terminalMessage: { messageId: input.messageId, text: input.deliveryText },
+    executor: input.executor,
+    completedAt: new Date().toISOString(),
+    ...(input.commitOutcome ? { commitOutcome: input.commitOutcome } : {}),
+    ...(verifiedHead ? { verifiedHead } : {}),
+  };
+
+  const previousExecutor = session.executor ?? null;
+  const previousMessages = session.messages;
+  const previousLastActivity = session.lastActivity;
+  const previousMessageCount = session.messageCount;
+  const nextMessages = [...previousMessages];
+  if (nextMessages.length >= MAX_SESSION_MESSAGES) nextMessages.shift();
+  nextMessages.push({
+    role: 'assistant',
+    text: input.assistantText,
+    ts: `${getTodayDate()} ${getTimestamp()}`,
+    turnId: input.turnId,
+    messageId: input.messageId,
+  });
+
+  session.executor = input.executor;
+  session.messages = nextMessages;
+  session.turns = [...previousTurns.slice(0, index), terminal, ...previousTurns.slice(index + 1)];
+  session.lastActivity = new Date().toISOString();
+  session.messageCount++;
+  if (!persistSessions()) {
+    session.executor = previousExecutor;
+    session.messages = previousMessages;
+    session.turns = previousTurns;
+    session.lastActivity = previousLastActivity;
+    session.messageCount = previousMessageCount;
+    throw new Error('failed to durably persist terminal chat turn');
+  }
+  cleanupReplacedExecutor(previousExecutor, input.executor);
+  return terminal;
+}
+
+export interface UndeliveredCommitMessage {
+  scope: Extract<SessionScope, { kind: 'product' }>;
+  turnId: string;
+  messageId: string;
+  text: string;
+}
+
+export function getUnacknowledgedCommitMessages(
+  userId: number,
+  transport: Transport,
+): UndeliveredCommitMessage[] {
+  const messages: UndeliveredCommitMessage[] = [];
+  for (const [key, session] of sessions.entries()) {
+    const parsed = parseSessionKey(key);
+    if (!parsed || parsed.userId !== userId || parsed.transport !== transport ||
+        parsed.scope.kind !== 'product') continue;
+    for (const turn of session.turns ?? []) {
+      if (!turn.commitIntent || turn.status !== 'terminal' || !turn.terminalMessage ||
+          turn.deliveryAcknowledgedAt) continue;
+      messages.push({
+        scope: parsed.scope,
+        turnId: turn.turnId,
+        messageId: turn.terminalMessage.messageId,
+        text: turn.terminalMessage.text,
+      });
+    }
+  }
+  return messages.slice(-MAX_SESSION_TURNS);
+}
+
+export function acknowledgeSessionMessage(
+  userId: number,
+  transport: Transport,
+  messageId: string,
+): boolean {
+  for (const [key, session] of sessions.entries()) {
+    const parsed = parseSessionKey(key);
+    if (!parsed || parsed.userId !== userId || parsed.transport !== transport) continue;
+    const turn = session.turns?.find(candidate => candidate.terminalMessage?.messageId === messageId);
+    if (!turn) continue;
+    if (!turn.deliveryAcknowledgedAt) {
+      turn.deliveryAcknowledgedAt = new Date().toISOString();
+      if (!persistSessions()) {
+        delete turn.deliveryAcknowledgedAt;
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 export function getSessionMessages(
@@ -717,6 +944,10 @@ export function restoreSessions(): void {
     let migrated = 0;
     for (const [rawKey, session] of entries) {
       if (!session.messages) session.messages = [];
+      if (!Array.isArray(session.turns)) {
+        session.turns = [];
+        migrated++;
+      }
       // Sessions persisted before provider-aware chat were Claude-backed.
       if (!session.model) session.model = 'opus';
       if (session.executor === undefined) {
@@ -737,6 +968,49 @@ export function restoreSessions(): void {
         log.warn('Skipping session with unrecognized key', { rawKey });
         continue;
       }
+      const restoredTurns: ProductChatTurn[] = [];
+      for (const turn of session.turns) {
+        if (!turn) {
+          migrated++;
+          continue;
+        }
+        if (turn.status !== 'pending') {
+          restoredTurns.push(turn);
+          continue;
+        }
+        if (!turn.commitIntent) {
+          // An ordinary turn is never flushed to disk while pending, so a
+          // `pending` row here predates that rule. It can never resolve on its
+          // own — drop it instead of letting it block a retry of the same
+          // turnId forever.
+          migrated++;
+          continue;
+        }
+        const messageId = randomUUID();
+        const reason = 'server restarted before commit completion was confirmed';
+        const deliveryText = `Commit completion not confirmed: ${reason}.\n\n_— chatting · /fresh to end_`;
+        turn.status = 'terminal';
+        turn.commitOutcome = {
+          status: 'unconfirmed',
+          ...(turn.baselineHead ? { baselineHead: turn.baselineHead } : {}),
+          reason,
+        };
+        turn.terminalMessage = { messageId, text: deliveryText };
+        turn.executor = session.executor ?? null;
+        turn.completedAt = new Date().toISOString();
+        if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
+        session.messages.push({
+          role: 'assistant',
+          text: `Commit completion not confirmed: ${reason}.`,
+          ts: `${getTodayDate()} ${getTimestamp()}`,
+          turnId: turn.turnId,
+          messageId,
+        });
+        session.messageCount++;
+        migrated++;
+        restoredTurns.push(turn);
+      }
+      session.turns = restoredTurns;
       sessions.set(key, session);
     }
     if (migrated > 0) {
@@ -751,13 +1025,15 @@ export function restoreSessions(): void {
   }
 }
 
-export function persistSessions(): void {
+export function persistSessions(): boolean {
   try {
     mkdirSync(dirname(config.SESSIONS_FILE), { recursive: true });
     const tmp = config.SESSIONS_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify([...sessions.entries()], null, 2));
     renameSync(tmp, config.SESSIONS_FILE);
+    return true;
   } catch (err) {
     log.error('Failed to persist sessions', { error: (err as Error).message });
+    return false;
   }
 }
