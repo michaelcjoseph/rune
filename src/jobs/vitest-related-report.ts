@@ -6,13 +6,6 @@
  * enforced before the result can enter Rune's durable or user-facing records.
  */
 
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readSync,
-} from 'node:fs';
 import { basename, relative } from 'node:path';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import {
@@ -23,6 +16,7 @@ import {
   type RelatedTestStructuredError,
 } from '../intent/related-test-diagnostic.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import { readBoundedRegularFileNoFollow } from '../utils/bounded-file.js';
 import { redactSecrets } from './work-run-transcript.js';
 
 export const MAX_VITEST_RELATED_REPORT_BYTES = 2_000_000;
@@ -71,42 +65,15 @@ export function parseVitestRelatedReport(
   cwd: string,
 ): VitestRelatedReport | undefined {
   let parsed: unknown;
-  let fd: number | undefined;
   try {
-    fd = openSync(
-      reportPath,
-      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW,
-    );
-    const file = fstatSync(fd);
-    if (!file.isFile() || file.size > MAX_VITEST_RELATED_REPORT_BYTES) {
-      return undefined;
-    }
-    const buffer = Buffer.alloc(MAX_VITEST_RELATED_REPORT_BYTES + 1);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const count = readSync(
-        fd,
-        buffer,
-        bytesRead,
-        buffer.length - bytesRead,
-        null,
-      );
-      if (count === 0) break;
-      bytesRead += count;
-    }
-    if (bytesRead > MAX_VITEST_RELATED_REPORT_BYTES) return undefined;
-    parsed = JSON.parse(buffer.toString('utf8', 0, bytesRead));
+    const buffer = readBoundedRegularFileNoFollow(reportPath, {
+      maxBytes: MAX_VITEST_RELATED_REPORT_BYTES,
+      nonBlocking: true,
+    });
+    if (buffer === undefined) return undefined;
+    parsed = JSON.parse(buffer.toString('utf8'));
   } catch {
     return undefined;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // Parsing already fails closed; cleanup failure must not surface a
-        // product-controlled report path or overturn that result.
-      }
-    }
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
   const testResults = (parsed as Record<string, unknown>)['testResults'];

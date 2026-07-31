@@ -469,9 +469,17 @@ function relatedTestStatus(run) {
   return '';
 }
 
+function gateValidationStatus(run) {
+  const receipt = run.gateValidationReceipt;
+  if (!receipt || !Array.isArray(receipt.commands)) return '';
+  const count = receipt.commands.length;
+  return `Merge validation ${receipt.outcome} · ${count} command${count === 1 ? '' : 's'}`;
+}
+
 function renderRuns(view, liveRuns = {}) {
   const history = list(view.runs).map((run) => {
     const relatedStatus = relatedTestStatus(run);
+    const gateStatus = gateValidationStatus(run);
     return `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
       `<div class="deep-row-head">` +
         `<strong>${escHtml(run.runId)}</strong>` +
@@ -506,6 +514,11 @@ function renderRuns(view, liveRuns = {}) {
       (relatedStatus
         ? `<div class="deep-run-meta deep-run-related-validation">` +
             `<span>${escHtml(relatedStatus)}</span>` +
+          `</div>`
+        : '') +
+      (gateStatus
+        ? `<div class="deep-run-meta deep-run-validation">` +
+            `<span>${escHtml(gateStatus)}</span>` +
           `</div>`
         : '') +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +

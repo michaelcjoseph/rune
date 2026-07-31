@@ -35,6 +35,12 @@ import {
   type ExecutionFailure,
 } from './execution-failure.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
+import type {
+  DurableValidationReceipt,
+  FullSuiteAttestation,
+} from './full-suite-attestation.js';
+import { isGitObjectId } from './git-object-id.js';
+export { isGitObjectId } from './git-object-id.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 export interface RoleCancellation extends OperationCancellation {
@@ -261,12 +267,6 @@ export interface CoderSelfReviewRecord {
  * second copy could silently widen or narrow what one of them accepts. This
  * module holds it rather than `jobs/canonical-git` so `intent/` consumers keep
  * their no-import-from-`jobs/` purity boundary. */
-const GIT_OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
-
-export function isGitObjectId(value: string): boolean {
-  return GIT_OBJECT_ID.test(value);
-}
-
 /** The worktree state captured with canonical Git after a coder self-review. */
 export interface CanonicalReviewState {
   diff: string;
@@ -500,6 +500,10 @@ export interface TaskEvidence {
   taskValidationFailure?: TaskValidationFailure;
   /** Typed `vitest related` closeout result. Optional for historical evidence. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Rune-owned full-suite evidence, absent on legacy or unsupported runners. */
+  fullSuiteAttestation?: FullSuiteAttestation;
+  /** Compact closeout provenance safe for transcripts and Cockpit. */
+  validationReceipt?: DurableValidationReceipt;
   /** Fail-closed review-surface mismatch; never carries raw diff content. */
   reviewSurfaceFailure?: ReviewSurfaceFailure;
   /** Scrubbed canonical review-surface hash approved by downstream roles.

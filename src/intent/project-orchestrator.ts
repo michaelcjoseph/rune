@@ -78,6 +78,10 @@ import {
 } from './execution-failure.js';
 import type { TaskValidationFailure } from './task-validation.js';
 import type { ReviewSurfaceFailure } from './team-task-workflow.js';
+import type {
+  DurableValidationReceipt,
+  FullSuiteAttestation,
+} from './full-suite-attestation.js';
 import {
   collectRelatedTestTaskDiagnostics,
   type RelatedTestDiagnostic,
@@ -113,7 +117,12 @@ export interface CloseoutCheckFailure {
 }
 
 export type CloseoutCheckResult =
-  | { ok: true; relatedTestDiagnostic?: RelatedTestDiagnostic }
+  | {
+      ok: true;
+      relatedTestDiagnostic?: RelatedTestDiagnostic;
+      fullSuiteAttestation?: FullSuiteAttestation;
+      validationReceipt?: DurableValidationReceipt;
+    }
   | { ok: false; failure: CloseoutCheckFailure };
 
 export interface TaskBaseRecord {
@@ -403,11 +412,31 @@ async function runProjectOrchestrationImpl(
       // Mechanical validation is a separate gate. Closeout itself is not
       // entered until validation and post-validation review-surface checks pass.
       const checks = await deps.runCloseoutChecks(task, evidence);
+      // Validation can settle at the same moment a cancellation arrives. Keep
+      // the final boundary immediately before any context/task write or
+      // closeout commit, mirroring the merge finalizer's pre-merge check.
+      const cancelledAfterChecks = cancellationResult(deps, task);
+      if (cancelledAfterChecks) return cancelledAfterChecks;
       const relatedTestDiagnostic = checks.ok
         ? checks.relatedTestDiagnostic
         : checks.failure.relatedTestDiagnostic;
       if (relatedTestDiagnostic !== undefined) {
         evidence = { ...evidence, relatedTestDiagnostic };
+      }
+      if (
+        checks.ok &&
+        (checks.fullSuiteAttestation !== undefined ||
+          checks.validationReceipt !== undefined)
+      ) {
+        evidence = {
+          ...evidence,
+          ...(checks.fullSuiteAttestation !== undefined
+            ? { fullSuiteAttestation: checks.fullSuiteAttestation }
+            : {}),
+          ...(checks.validationReceipt !== undefined
+            ? { validationReceipt: checks.validationReceipt }
+            : {}),
+        };
       }
       if (
         !checks.ok &&
@@ -1042,6 +1071,12 @@ function taskRecordFromEvidence(
       : {}),
     ...(evidence.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
+      : {}),
+    ...(evidence.fullSuiteAttestation !== undefined
+      ? { fullSuiteAttestation: evidence.fullSuiteAttestation }
+      : {}),
+    ...(evidence.validationReceipt !== undefined
+      ? { validationReceipt: evidence.validationReceipt }
       : {}),
     ...(evidence.judgmentOutcomes !== undefined
       ? { judgmentOutcomes: evidence.judgmentOutcomes }

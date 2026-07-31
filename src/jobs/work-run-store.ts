@@ -12,9 +12,21 @@
  * writes summary.json + the index row before the terminal event).
  */
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  constants as fsConstants,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
+import { readBoundedRegularFileNoFollow } from '../utils/bounded-file.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classify.js';
 // `PHASE_ORDER` is a runtime value, `FinalizerPhase` a type — both from the
@@ -51,6 +63,10 @@ import {
   checkpointWipSha,
   isContextUpdateReason,
 } from '../intent/context-closeout.js';
+import {
+  isGateValidationReceipt,
+  type GateValidationReceipt,
+} from '../intent/full-suite-attestation.js';
 
 const log = createLogger('work-run-store');
 
@@ -138,6 +154,8 @@ export interface WorkRunSummary {
    *  refusal reason) — persisted so the hold reason survives a restart and
    *  reaches the cockpit, not just the live Telegram notification. */
   gateHeldReason?: string;
+  /** Compact receipt for the independent integration-worktree validation. */
+  gateValidationReceipt?: GateValidationReceipt;
   /** Durable correlation for a nested team-role cancellation. */
   cancellation?: WorkRunCancellation;
   /** Bounded secondary outcomes from a post-coder judgment batch. */
@@ -250,6 +268,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     (parsed as Record<string, unknown>)['relatedTestDiagnostic'];
   const rawRelatedTestDiagnostics =
     (parsed as Record<string, unknown>)['relatedTestDiagnostics'];
+  const rawGateValidationReceipt =
+    (parsed as Record<string, unknown>)['gateValidationReceipt'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -289,6 +309,9 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     relatedTestDiagnostics === undefined ||
     JSON.stringify(relatedTestDiagnostic) ===
       JSON.stringify(relatedTestDiagnostics.at(-1)?.diagnostic);
+  const gateValidationReceipt = isGateValidationReceipt(rawGateValidationReceipt)
+    ? rawGateValidationReceipt
+    : undefined;
   if (
     s.id === id &&
     typeof s.product === 'string' &&
@@ -300,13 +323,18 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
     relatedTestProjectionConsistent
   ) {
+    const {
+      gateValidationReceipt: _untrustedGateValidationReceipt,
+      ...baseSummary
+    } = s;
     const summary = {
-      ...s,
+      ...baseSummary,
       ...(cancellation !== undefined ? { cancellation } : {}),
       ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
       ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
+      ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
     } as WorkRunSummary;
     if (
       contextFailure !== undefined &&
@@ -552,4 +580,72 @@ export function readLastWorkRunPhase(baseDir: string, id: string): FinalizerPhas
   }
   const phase = raw.trim();
   return KNOWN_PHASES.has(phase) ? (phase as FinalizerPhase) : null;
+}
+
+const GATE_VALIDATION_RECEIPT_FILE = 'gate-validation.json';
+const MAX_GATE_VALIDATION_RECEIPT_BYTES = 64 * 1024;
+
+/**
+ * Persist the independent merge-gate receipt before merge starts. Unlike the
+ * best-effort phase file, this authorization evidence is fail-closed: callers
+ * must not merge when the atomic write fails.
+ */
+export function writeGateValidationReceipt(
+  baseDir: string,
+  id: string,
+  receipt: GateValidationReceipt,
+): void {
+  if (!VALID_SLUG.test(id) || !isGateValidationReceipt(receipt)) {
+    throw new Error('invalid merge-gate validation receipt');
+  }
+  if (receipt.outcome !== 'passed') {
+    throw new Error('merge-gate authorization receipt is not green');
+  }
+  const dir = join(baseDir, id);
+  const target = join(dir, GATE_VALIDATION_RECEIPT_FILE);
+  const tmp = join(
+    dir,
+    `.${GATE_VALIDATION_RECEIPT_FILE}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const encoded = JSON.stringify(receipt);
+  if (Buffer.byteLength(encoded, 'utf8') > MAX_GATE_VALIDATION_RECEIPT_BYTES) {
+    throw new Error('merge-gate validation receipt exceeds durable bound');
+  }
+  mkdirSync(dir, { recursive: true });
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const fd = openSync(
+    tmp,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow,
+    0o600,
+  );
+  try {
+    const bytes = Buffer.from(encoded, 'utf8');
+    let offset = 0;
+    while (offset < bytes.length) {
+      offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, target);
+}
+
+/** Read only a bounded, regular, schema-valid pre-merge receipt. */
+export function readGateValidationReceipt(
+  baseDir: string,
+  id: string,
+): GateValidationReceipt | undefined {
+  if (!VALID_SLUG.test(id)) return undefined;
+  const target = join(baseDir, id, GATE_VALIDATION_RECEIPT_FILE);
+  try {
+    const bytes = readBoundedRegularFileNoFollow(target, {
+      maxBytes: MAX_GATE_VALIDATION_RECEIPT_BYTES,
+      minBytes: 2,
+    });
+    if (bytes === undefined) return undefined;
+    const parsed: unknown = JSON.parse(bytes.toString('utf8'));
+    return isGateValidationReceipt(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

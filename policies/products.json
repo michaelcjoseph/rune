@@ -73,6 +73,12 @@
       "npm run build",
       "npm test"
     ],
+    "validationAdapters": [
+      {
+        "command": "npm test",
+        "runner": "vitest"
+      }
+    ],
     "closeoutValidationStrategy": "vitest-related"
   },
   "rune-mcp": {
@@ -99,6 +105,12 @@
     "validationCommands": [
       "npm run build",
       "npm test"
+    ],
+    "validationAdapters": [
+      {
+        "command": "npm test",
+        "runner": "vitest"
+      }
     ],
     "closeoutValidationStrategy": "vitest-related"
   },

@@ -65,6 +65,7 @@ import {
   type FinalizerEffects,
   type GateFailReason,
 } from './work-run-finalizer.js';
+import type { GateValidationReceipt } from './work-run-gate.js';
 import { runGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import {
@@ -72,6 +73,7 @@ import {
   appendIndexRow,
   recordWorkRunPhase,
   readLastWorkRunPhase,
+  writeGateValidationReceipt,
   type WorkRunSummary,
 } from './work-run-store.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
@@ -406,6 +408,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
   const startedAtMs = Number.isNaN(Date.parse(run.startedAt)) ? Date.parse(endedAt) : Date.parse(run.startedAt);
 
   let gateHeldReason: GateFailReason | null = null;
+  let gateValidationReceipt: GateValidationReceipt | undefined;
   const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${run.product}-${run.id}`);
 
   const terminalEvent: MutationEvent = {
@@ -441,6 +444,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     // branchDeleted rides the same re-write.
     ...(merged !== undefined ? { merged, baseBranch } : {}),
     ...(branchDeleted !== undefined ? { branchDeleted } : {}),
+    ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
   });
 
   const effects: FinalizerEffects = {
@@ -485,15 +489,18 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     },
     recordPhase: (phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, run.id, phase),
     readLastPhase: () => readLastWorkRunPhase(config.WORK_RUNS_DIR, run.id),
+    recordGateValidationReceipt: (receipt) =>
+      writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt),
     gate: () =>
-      withBaseBranchLock(run.product, baseBranch, () =>
-        runGate({
+      withBaseBranchLock(run.product, baseBranch, async () => {
+        const verdict = await runGate({
           product: run.product,
           repoPath,
           baseBranch,
           branch,
           integrationWorktree,
           validationCommands,
+          validationAdapters: product.validationAdapters ?? [],
           ...(product.validationCwd !== undefined
             ? { validationCwd: product.validationCwd }
             : {}),
@@ -501,8 +508,10 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
           concurrentRun: hasConcurrentRunForProduct(run.product, run.id),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
           validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
-        }),
-      ),
+        });
+        gateValidationReceipt = verdict.validationReceipt;
+        return verdict;
+      }),
     alert: (reason: GateFailReason) => {
       gateHeldReason = reason;
       log.warn('release: held at branch-complete (gate failed)', { id: run.id, branch, reason });
@@ -547,6 +556,9 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     termData['merged'] = result.merged;
     termData['branchDeleted'] = result.branchDeleted;
     termData['baseBranch'] = baseBranch;
+    if (gateValidationReceipt !== undefined) {
+      termData['gateValidationReceipt'] = gateValidationReceipt;
+    }
     if (!result.merged && gateHeldReason) termData['gateHeldReason'] = gateHeldReason;
     result.terminalEvent.data = termData;
     try {

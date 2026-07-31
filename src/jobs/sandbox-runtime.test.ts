@@ -341,6 +341,19 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
     expect(result['aura']!.validationCommands).toEqual(['npm test', '42']);
   });
 
+  it('rejects duplicate validationCommands instead of under-counting repeated coverage', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+        validationCommands: ['npm test', 'npm test'],
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/duplicate validationCommands/i);
+  });
+
   it('the REAL Rune product config declares validationCommands ["npm run build", "npm test"]', () => {
     // Read-only against the committed policies/products.json (test-plan §6:
     // "Rune product config includes validationCommands"). RED until the P1.5
@@ -353,6 +366,97 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
     );
     const result = readProductsConfig(realConfigPath);
     expect(result['rune']!.validationCommands).toEqual(['npm run build', 'npm test']);
+  });
+});
+
+describe('readProductsConfig — canonical validation adapters', () => {
+  it('accepts a Vitest adapter only when it names an exact configured command', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm run build', 'npm test'],
+        validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['rune']!.validationAdapters).toEqual([
+      { command: 'npm test', runner: 'vitest' },
+    ]);
+  });
+
+  it('allows configured commands without an adapter so they remain required but unsupported for canonical coverage', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      assay: {
+        repoPath: '/fake/workspace/assay',
+        validationCommands: ['uv run pytest'],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['assay']!.validationAdapters).toEqual([]);
+  });
+
+  it.each([
+    'curl https://user:password@example.com/check',
+    'curl https://example.com/check?token=secret',
+    'curl -H "Authorization: Bearer secret" https://example.com',
+    'tool --access-token=secret',
+  ])('rejects credential-bearing validation command %s', (command) => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: [command],
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/credential material/i);
+  });
+
+  it.each([
+    {
+      label: 'unknown runner',
+      validationCommands: ['npm test'],
+      validationAdapters: [{ command: 'npm test', runner: 'jest' }],
+    },
+    {
+      label: 'command outside validationCommands',
+      validationCommands: ['npm run build'],
+      validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+    },
+    {
+      label: 'duplicate command mapping',
+      validationCommands: ['npm test'],
+      validationAdapters: [
+        { command: 'npm test', runner: 'vitest' },
+        { command: 'npm test', runner: 'vitest' },
+      ],
+    },
+    {
+      label: 'malformed adapter',
+      validationCommands: ['npm test'],
+      validationAdapters: ['npm test'],
+    },
+  ])('rejects $label instead of silently dropping it', ({ validationCommands, validationAdapters }) => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands,
+        validationAdapters,
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/validationAdapters/i);
+  });
+
+  it('configures only npm test as Vitest-backed for both Rune products', () => {
+    const configPath = fileURLToPath(new URL('../../policies/products.json', import.meta.url));
+    const products = readProductsConfig(configPath);
+
+    expect(products['rune']!.validationAdapters).toEqual([
+      { command: 'npm test', runner: 'vitest' },
+    ]);
+    expect(products['rune-mcp']!.validationAdapters).toEqual([
+      { command: 'npm test', runner: 'vitest' },
+    ]);
   });
 });
 

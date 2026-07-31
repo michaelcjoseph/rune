@@ -26,6 +26,16 @@ vi.mock('../config.js', () => ({
 import { readWorkRunProjections } from './work-run-projection.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 
+const gateReceiptIdentity = {
+  version: 1,
+  treeOid: 'a'.repeat(40),
+  fullTaskReviewHash: 'b'.repeat(64),
+  completedAt: '2026-07-30T12:00:00.000Z',
+  commandFingerprint: 'c'.repeat(64),
+  configurationFingerprint: 'd'.repeat(64),
+  dependencyFingerprint: 'e'.repeat(64),
+};
+
 let dir: string;
 let indexFile: string;
 
@@ -87,6 +97,47 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
 
     expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
       outcome: 'failed', trigger, disposition,
+    });
+  });
+
+  it('projects the bounded merge-gate validation receipt after restart', () => {
+    const id = 'terminal-gate-receipt-001';
+    const gateValidationReceipt = {
+      ...gateReceiptIdentity,
+      outcome: 'passed',
+      commands: [
+        { command: 'npm run build', outcome: 'passed', coverage: 'unsupported' },
+        {
+          command: 'npm test',
+          outcome: 'passed',
+          coverage: 'complete',
+          discovered: { suites: 1, tests: 2 },
+          completed: {
+            suites: 1, tests: 2, passed: 2, failed: 0,
+            skipped: 0, todo: 0, cancelled: 0,
+          },
+        },
+      ],
+    };
+    mkdirSync(join(dir, id), { recursive: true });
+    writeFileSync(join(dir, id, 'summary.json'), JSON.stringify({
+      id, project: '02-growth', product: 'aura', outcome: 'branch-complete',
+      reason: 'merged',
+      exit: { exitCode: 0, signal: null, cancelled: false, durationMs: 10, exitFact: 'clean-exit' },
+      workProduct: { commitCount: 1, commitShas: ['deadbeef'], filesChanged: ['src/a.ts'],
+        diffstat: '', dirty: false, untracked: false,
+        transitions: { tasksNewlyChecked: 1, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+      baseSha: 'base', branch: 'rune-work/demo', startedAt: '2026-07-30T00:00:00.000Z',
+      endedAt: '2026-07-30T00:00:01.000Z', transcriptPath: '', forensicsPath: '',
+      gateValidationReceipt,
+    }));
+    writeFileSync(indexFile, `${JSON.stringify({
+      id, project: '02-growth', outcome: 'branch-complete', durationMs: 10,
+      startedAt: '2026-07-30T00:00:00.000Z', endedAt: '2026-07-30T00:00:01.000Z',
+    })}\n`);
+
+    expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
+      gateValidationReceipt,
     });
   });
 

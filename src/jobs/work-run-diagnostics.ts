@@ -17,6 +17,7 @@ import { VALID_SLUG } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import { isGitObjectId } from '../intent/team-task-workflow.js';
+import { parseDurableValidationReceipt } from '../intent/full-suite-attestation.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets, parseStreamJsonLine, streamJsonToDisplay } from './work-run-transcript.js';
 import type { WorkRunSummary, WorkRunSummaryReadResult } from './work-run-store.js';
@@ -166,6 +167,9 @@ function summaryRow(summary: WorkRunSummary | null, supervised: SupervisedRun | 
       ...(summary.cancellation !== undefined ? { cancellation: summary.cancellation } : {}),
       ...(summary.trigger !== undefined ? { trigger: summary.trigger } : {}),
       ...(summary.disposition !== undefined ? { disposition: summary.disposition } : {}),
+      ...(summary.gateValidationReceipt !== undefined
+        ? { gateValidationReceipt: summary.gateValidationReceipt }
+        : {}),
     } : {}),
     startedAt: summary?.startedAt ?? supervised?.startedAt,
     ...(summary?.endedAt ? { endedAt: summary.endedAt } : {}),
@@ -219,6 +223,7 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
   const executionFailure = isExecutionFailure(record.executionFailure)
     ? durableExecutionFailure(record.executionFailure)
     : undefined;
+  const validationReceipt = parseDurableValidationReceipt(record.validationReceipt);
   return {
     taskId: record.taskId,
     ...(typeof record.taskText === 'string' ? { taskText: record.taskText } : {}),
@@ -235,6 +240,7 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ...(record.relatedTestDiagnostic
       ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
       : {}),
+    ...(validationReceipt !== undefined ? { validationReceipt } : {}),
     ...(isObjectId(record.taskBaseTree)
       ? { taskBaseTree: record.taskBaseTree }
       : {}),

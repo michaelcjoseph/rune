@@ -48,13 +48,15 @@ import {
   type FinalizerPhase,
   type FinalizerSupervisionStatus,
 } from './work-run-finalizer.js';
-import type { GateResult } from './work-run-gate.js';
+import type { GateResult, GateValidationReceipt } from './work-run-gate.js';
 import { runGate, type GateRuntimeOpts } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import {
   writeSummary,
+  readGateValidationReceipt,
+  writeGateValidationReceipt,
   appendIndexRow,
   recordWorkRunPhase,
   readLastWorkRunPhase,
@@ -106,6 +108,8 @@ export interface RecoveryFinalizeIO {
   worktreeExists: (path: string) => boolean;
   /** Read the worktree's tasks.md, or '' if absent/unreadable. */
   readTasks: (worktreePath: string, project: string) => string;
+  /** Read the fail-closed receipt written immediately before merge. */
+  readGateValidationReceipt?: (baseDir: string, id: string) => GateValidationReceipt | undefined;
   writeSummaryFile: (dir: string, summary: WorkRunSummary) => void;
   appendIndex: (filePath: string, row: import('./work-run-store.js').WorkRunIndexRow) => void;
   upsertSupervision: (run: SupervisedRun) => void;
@@ -136,6 +140,7 @@ function defaultIO(): RecoveryFinalizeIO {
         return '';
       }
     },
+    readGateValidationReceipt,
     writeSummaryFile: writeSummary,
     appendIndex: appendIndexRow,
     upsertSupervision: (run) => upsertRun(run, config.SUPERVISED_RUNS_FILE),
@@ -186,6 +191,8 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   }
 
   const product = io.getProduct(run.product); // throws on unknown product
+  let gateValidationReceipt: GateValidationReceipt | undefined =
+    io.readGateValidationReceipt?.(config.WORK_RUNS_DIR, run.id);
   const worktree = io.worktreeFor(run.product, run.project); // throws on bad slug
   if (!io.worktreeExists(worktree)) {
     throw new Error(`recovery: worktree absent (already swept?) for run ${run.id}`);
@@ -304,6 +311,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
           // rather than pointing at a directory that holds neither.
           transcriptPath: '',
           forensicsPath: '',
+          ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
         };
         io.writeSummaryFile(join(config.WORK_RUNS_DIR, run.id), summary);
       },
@@ -347,17 +355,22 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     ? {
         ...baseEffects,
         baseBranchCriticalSection: (fn) => withBaseBranchLock(run.product, product.baseBranch, fn),
+        recordGateValidationReceipt: (receipt) => {
+          writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt);
+          gateValidationReceipt = receipt;
+        },
         gate: async () => {
           if (resumeAfterMerge) {
             throw new Error('recovery resume must not re-run the gate (merge already landed)');
           }
-          return io.runGate({
+          const verdict = await io.runGate({
             product: run.product,
             repoPath: product.repoPath,
             baseBranch: product.baseBranch,
             branch,
             integrationWorktree,
             validationCommands: product.validationCommands ?? [],
+            validationAdapters: product.validationAdapters ?? [],
             ...(product.validationCwd !== undefined
               ? { validationCwd: product.validationCwd }
               : {}),
@@ -366,6 +379,8 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
             validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
           });
+          gateValidationReceipt = verdict.validationReceipt;
+          return verdict;
         },
         mergeBranch: async () => {
           if (resumeAfterMerge) {
@@ -406,6 +421,11 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     },
     effects,
   );
+  if (gateValidationReceipt !== undefined) {
+    const data = (result.terminalEvent.data ?? {}) as Record<string, unknown>;
+    data['gateValidationReceipt'] = gateValidationReceipt;
+    result.terminalEvent.data = data;
+  }
 
   // On a completed gated-merge resume the finalizer SKIPPED `writeSummary` (the
   // pre-merge summary was already on disk, phase `summary-written` reached), so
@@ -433,6 +453,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
         merged: true,
         branchDeleted: result.branchDeleted,
         baseBranch: product.baseBranch,
+        ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
       });
     } catch (err) {
       log.warn('recovery: post-resume summary re-write failed (best-effort)', {

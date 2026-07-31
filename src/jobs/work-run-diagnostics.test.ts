@@ -265,6 +265,81 @@ describe('product-scoped work-run diagnostics', () => {
     expect(JSON.stringify(result)).not.toContain('/Users/example');
   });
 
+  it('projects only a compact validation receipt from durable attestation evidence', async () => {
+    const deps = makeDeps();
+    deps.readTaskRunRecords.mockReturnValue([
+      taskRecord({
+        fullSuiteAttestation: {
+          version: 1,
+          treeOid: '1'.repeat(40),
+          fullTaskReviewHash: 'a'.repeat(64),
+          validationCwd: '.',
+          configuredArgv: [['npm', 'test']],
+          adapter: { runner: 'vitest', version: 1 },
+          commandFingerprint: 'c'.repeat(64),
+          configurationFingerprint: 'd'.repeat(64),
+          dependencyFingerprint: 'e'.repeat(64),
+          startedAt: '2026-07-30T12:00:00.000Z',
+          completedAt: '2026-07-30T12:00:05.000Z',
+          durationMs: 5_000,
+          execution: { outcome: 'passed', exitCode: 0, timedOut: false, cancelled: false },
+          coverage: {
+            status: 'complete',
+            manifest: {
+              version: 1,
+              runner: 'vitest',
+              completedNormally: true,
+              collectionErrors: 0,
+              discovered: { suites: 3, tests: 7 },
+              completed: {
+                suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+              },
+            },
+          },
+          // Historical/untrusted extras must never cross the diagnostic surface.
+          outputTail: 'TELEGRAM_BOT_TOKEN=secret',
+          reporterPath: '/Users/operator/private/reporter.ts',
+        },
+        validationReceipt: {
+          provenance: 'full-suite-reused',
+          command: 'npm test',
+          treeOid: '1'.repeat(40),
+          outcome: 'passed',
+          coverage: 'complete',
+          discovered: { suites: 3, tests: 7 },
+          completed: {
+            suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+          },
+        },
+      } as unknown as Partial<TaskRunRecord>),
+    ]);
+
+    const result = await createWorkRunDiagnostics(deps, 'assay').inspectRun({
+      runId: 'assay-run-1',
+    }) as { taskRecords: Array<Record<string, unknown>> };
+    const serialized = JSON.stringify(result.taskRecords);
+
+    expect(result.taskRecords[0]).toMatchObject({
+      validationReceipt: {
+        provenance: 'full-suite-reused',
+        command: 'npm test',
+        treeOid: '1'.repeat(40),
+        outcome: 'passed',
+        coverage: 'complete',
+        discovered: { suites: 3, tests: 7 },
+        completed: {
+          suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+        },
+      },
+    });
+    expect(serialized).not.toContain('fullSuiteAttestation');
+    expect(serialized).not.toContain('configurationFingerprint');
+    expect(serialized).not.toContain('outputTail');
+    expect(serialized).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(serialized).not.toContain('/Users/operator');
+    expect(serialized.length).toBeLessThan(4_000);
+  });
+
   it('projects bounded coder-self-review artifact evidence without raw artifacts', async () => {
     const deps = makeDeps();
     deps.readTaskRunRecords.mockReturnValue([

@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
 
+type AttestedTaskRunRecord = Omit<TaskRunRecord, 'fullSuiteAttestation' | 'validationReceipt'> & {
+  fullSuiteAttestation?: Record<string, unknown>;
+  validationReceipt?: Record<string, unknown>;
+};
+
 vi.hoisted(() => {
   process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
   process.env['TELEGRAM_USER_ID'] = '12345';
@@ -16,7 +21,11 @@ vi.hoisted(() => {
 import * as runnerModule from './orchestrated-work-runner.js';
 
 type OrchestratedRunStoreExports = {
-  appendOrchestratedTaskRunRecord?: (baseDir: string, runId: string, record: TaskRunRecord) => void | Promise<void>;
+  appendOrchestratedTaskRunRecord?: (
+    baseDir: string,
+    runId: string,
+    record: TaskRunRecord | AttestedTaskRunRecord,
+  ) => void | Promise<void>;
   readOrchestratedTaskRunRecords?: (baseDir: string, runId: string) => TaskRunRecord[] | Promise<TaskRunRecord[]>;
   writeOrchestratedRunCursor?: (baseDir: string, runId: string, cursor: OrchestrationRunCursor) => void | Promise<void>;
   readOrchestratedRunCursor?: (baseDir: string, runId: string) => OrchestrationRunCursor | null | Promise<OrchestrationRunCursor | null>;
@@ -80,7 +89,7 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function readyRecord(overrides: Partial<TaskRunRecord> = {}): TaskRunRecord {
+function readyRecord(overrides: Partial<AttestedTaskRunRecord> = {}): AttestedTaskRunRecord {
   return {
     taskId: 'persist-records-and-cursor',
     taskText: 'Persist records and cursor',
@@ -94,6 +103,37 @@ function readyRecord(overrides: Partial<TaskRunRecord> = {}): TaskRunRecord {
     gates: { objectionOpen: false },
     outcome: 'ready-for-closeout',
     ...overrides,
+  };
+}
+
+function durableAttestation(): Record<string, unknown> {
+  return {
+    version: 1,
+    treeOid: '1'.repeat(40),
+    fullTaskReviewHash: 'a'.repeat(64),
+    validationCwd: '.',
+    configuredArgv: [['npm', 'test']],
+    adapter: { runner: 'vitest', version: 1 },
+    commandFingerprint: 'c'.repeat(64),
+    configurationFingerprint: 'd'.repeat(64),
+    dependencyFingerprint: 'e'.repeat(64),
+    startedAt: '2026-07-30T12:00:00.000Z',
+    completedAt: '2026-07-30T12:00:05.000Z',
+    durationMs: 5_000,
+    execution: { outcome: 'passed', exitCode: 0, timedOut: false, cancelled: false },
+    coverage: {
+      status: 'complete',
+      manifest: {
+        version: 1,
+        runner: 'vitest',
+        completedNormally: true,
+        collectionErrors: 0,
+        discovered: { suites: 3, tests: 7 },
+        completed: {
+          suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+        },
+      },
+    },
   };
 }
 
@@ -215,6 +255,62 @@ describe('orchestrated run store', () => {
     await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-orch-legacy', legacy);
 
     await expect(readRecords(tmpDir, 'mut-orch-legacy')).resolves.toEqual([legacy]);
+  });
+
+  it('round-trips a bounded full-suite attestation and compact receipt across restart', async () => {
+    const record = readyRecord({
+      fullSuiteAttestation: durableAttestation(),
+      validationReceipt: {
+        provenance: 'full-suite-ran',
+        command: 'npm test',
+        treeOid: '1'.repeat(40),
+        outcome: 'passed',
+        coverage: 'complete',
+        discovered: { suites: 3, tests: 7 },
+        completed: { suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0 },
+      },
+    });
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-attested', record);
+
+    await expect(readRecords(tmpDir, 'mut-attested')).resolves.toEqual([record]);
+    const persisted = readFileSync(
+      join(tmpDir, 'mut-attested', 'task-records.jsonl'),
+      'utf8',
+    );
+    expect(persisted).not.toContain('/Users/');
+    expect(persisted).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(persisted).not.toContain('outputTail');
+  });
+
+  it('keeps a legacy task record readable but drops a malformed historical attestation', async () => {
+    const malformed = readyRecord({
+      fullSuiteAttestation: {
+        ...durableAttestation(),
+        validationCwd: '/Users/operator/private/rune',
+        environment: { TELEGRAM_BOT_TOKEN: 'secret' },
+      },
+      validationReceipt: {
+        provenance: 'related-ran',
+        command: 'npx vitest --config=/Users/operator/private/vitest.config.ts',
+        treeOid: '1'.repeat(40),
+        outcome: 'passed',
+        coverage: 'unsupported',
+      },
+    });
+    mkdirSync(join(tmpDir, 'mut-malformed-attestation'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'mut-malformed-attestation', 'task-records.jsonl'),
+      JSON.stringify(malformed) + '\n',
+      'utf8',
+    );
+
+    const [restored] = await readRecords(tmpDir, 'mut-malformed-attestation') as AttestedTaskRunRecord[];
+    expect(restored).toMatchObject({ taskId: malformed.taskId });
+    expect(restored).not.toHaveProperty('fullSuiteAttestation');
+    expect(restored).not.toHaveProperty('validationReceipt');
+    expect(JSON.stringify(restored)).not.toContain('/Users/operator');
+    expect(JSON.stringify(restored)).not.toContain('secret');
   });
 
   it('skips a torn trailing TaskRunRecord line without throwing or losing earlier records', async () => {

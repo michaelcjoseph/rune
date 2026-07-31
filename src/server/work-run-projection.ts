@@ -117,7 +117,7 @@ function buildProjection(
   startedAt: string,
   terminal?: Pick<
     NonNullable<ReturnType<typeof readWorkRunSummary>>,
-    'trigger' | 'disposition' | 'contextFailure'
+    'trigger' | 'disposition' | 'contextFailure' | 'gateValidationReceipt'
   >,
 ): WorkRunProjection {
   const transcriptPath = join(dir, id, 'transcript.jsonl');
@@ -133,6 +133,9 @@ function buildProjection(
     ...(terminal?.disposition !== undefined ? { disposition: terminal.disposition } : {}),
     ...(terminal?.contextFailure !== undefined
       ? { contextFailure: terminal.contextFailure }
+      : {}),
+    ...(terminal?.gateValidationReceipt !== undefined
+      ? { gateValidationReceipt: terminal.gateValidationReceipt }
       : {}),
   };
 }

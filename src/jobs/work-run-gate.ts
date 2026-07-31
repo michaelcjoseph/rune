@@ -15,6 +15,11 @@
  * Fail-closed: a product with no `validationCommands` fails the gate with
  * `missing-validation-command` (req 16) — never an unverified merge.
  */
+import type { GateValidationReceipt } from '../intent/full-suite-attestation.js';
+export {
+  isGateValidationReceipt,
+  type GateValidationReceipt,
+} from '../intent/full-suite-attestation.js';
 
 /**
  * Why the hard merge gate refused to land a run on `main`. Canonical home is
@@ -32,10 +37,13 @@ export type GateFailReason =
   | 'merge-conflict'
   | 'concurrent-run'
   | 'missing-validation-command'
-  | 'validation-timeout';
+  | 'validation-timeout'
+  | 'validation-cancelled';
 
 /** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
-export type GateResult = { ok: true } | { ok: false; reason: GateFailReason };
+export type GateResult =
+  | { ok: true; validationReceipt?: GateValidationReceipt }
+  | { ok: false; reason: GateFailReason; validationReceipt?: GateValidationReceipt };
 
 /** The facts the gate decides on, gathered by the runtime before `evaluateGate`. */
 export interface GateFacts {
@@ -51,6 +59,8 @@ export interface GateFacts {
   testsGreen: boolean;
   /** A validation command exceeded WORK_RUN_GATE_COMMAND_TIMEOUT_MS. */
   validationTimedOut: boolean;
+  /** A user/system cancellation was observed while validation was running. */
+  validationCancelled: boolean;
   /** Merging the branch onto the base conflicts / the base relationship is unsound. */
   mergeConflict: boolean;
 }
@@ -87,6 +97,7 @@ export function evaluateGate(facts: GateFacts): GateResult {
   if (facts.tasksRemaining > 0) return { ok: false, reason: 'tasks-remaining' };
   // Uncommitted changes in the integration worktree.
   if (!facts.treeClean) return { ok: false, reason: 'dirty-tree' };
+  if (facts.validationCancelled) return { ok: false, reason: 'validation-cancelled' };
   // A validation command ran past its budget (a timeout is a red gate, not a wedge).
   if (facts.validationTimedOut) return { ok: false, reason: 'validation-timeout' };
   // A validation command exited non-zero.

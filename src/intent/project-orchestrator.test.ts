@@ -2501,6 +2501,38 @@ describe('project-orchestrator — closeout repair loop', () => {
     ]);
   });
 
+  it('rechecks cancellation after validation settles and before closeout mutates files', async () => {
+    let cancelled = false;
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-commit',
+      subject: 'must not commit',
+    }));
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => 'user',
+      runCloseoutChecks: async () => {
+        cancelled = true;
+        return { ok: true } as const;
+      },
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+    }, '# Tasks\n- [ ] Validate without crossing cancellation\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'cancelled',
+      reason: 'user',
+      task: { text: 'Validate without crossing cancellation' },
+    });
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+  });
+
   it('preserves WIP and durable TaskValidationFailure evidence when dependency installation exhausts repair', async () => {
     const command = 'uv sync --all-groups';
     const taskValidationFailure = {

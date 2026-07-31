@@ -41,6 +41,7 @@ export interface RunSummaryRow {
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
   relatedTestDiagnostics?: import('./related-test-diagnostic.js').RelatedTestTaskDiagnostic[];
+  gateValidationReceipt?: import('./full-suite-attestation.js').GateValidationReceipt;
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
   branch?: string;
   routePath?: string;
@@ -117,6 +118,7 @@ export interface ProductDeepViewWorkRun {
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
   relatedTestDiagnostics?: import('./related-test-diagnostic.js').RelatedTestTaskDiagnostic[];
+  gateValidationReceipt?: import('./full-suite-attestation.js').GateValidationReceipt;
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
   branch?: string;
   routePath?: string;
@@ -473,6 +475,7 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       if (run.contextFailure) row.contextFailure = run.contextFailure;
       if (run.relatedTestDiagnostic) row.relatedTestDiagnostic = run.relatedTestDiagnostic;
       if (run.relatedTestDiagnostics) row.relatedTestDiagnostics = run.relatedTestDiagnostics;
+      if (run.gateValidationReceipt) row.gateValidationReceipt = run.gateValidationReceipt;
       if (run.disposition) row.disposition = run.disposition;
       Object.assign(row, writingRunMetadata(run));
       return row;

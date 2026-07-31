@@ -9,28 +9,34 @@
  * gate's checks NEVER mutates the product repo's base-branch ref or working
  * tree. That invariant can only be shown against real git, not spies.
  *
- * Written TEST-FIRST: `runGate` is a `notImplemented` scaffold, so every test
- * here is RED until the P1.5 impl lands. Expected failure: the `notImplemented`
- * throw (the `await` rejects) — never a module-resolution / syntax error. The
- * validation COMMAND is injected (deterministic, no npm dependency); git is
- * real so the byte-for-byte main-unchanged proof is meaningful.
+ * Most validation commands are injected for deterministic gate tests; focused
+ * integration cases use the real bounded launcher and trusted observer.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PROJECT_ROOT } from '../config.js';
-import { defaultRunGit, removeVitestCache, vitestCacheDirFor } from './sandbox-runtime.js';
+import {
+  defaultRunGit,
+  removeVitestCache,
+  vitestCacheDirFor,
+  type GitRunner,
+} from './sandbox-runtime.js';
 import {
   runGate,
   collectTaskChangedPaths,
   taskChangesRequireFullValidation,
   runValidationCommandArgv,
+  runTrustedVitestObserver,
   runValidationCommands,
+  runFullSuiteValidation,
   MAX_VALIDATION_OUTPUT_HEAD_CHARS,
   MAX_VALIDATION_OUTPUT_TAIL_CHARS,
+  type FullSuiteValidationIO,
   type GateRuntimeOpts,
   type GateRuntimeIO,
   type ValidationCommandResult,
@@ -161,11 +167,16 @@ describe('runGate — test before mutating main (P1.5)', () => {
     const cache = vitestCacheDirFor(integrationWorktree);
     mkdirSync(cache, { recursive: true });
 
-    // RED now: runGate throws notImplemented. GREEN when the impl runs the
-    // failing validation in the integration worktree and returns tests-red.
     const result = await runGate(gateOpts(), io);
 
-    expect(result).toEqual({ ok: false, reason: 'tests-red' });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'tests-red',
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [{ command: 'npm test', outcome: 'failed', coverage: 'unsupported' }],
+      },
+    });
 
     // The core invariant: a red gate never mutated local `main`. `toEqual`'s
     // diff already names exactly which field (baseSha / currentBranch /
@@ -178,16 +189,72 @@ describe('runGate — test before mutating main (P1.5)', () => {
     expect(existsSync(cache)).toBe(false);
   });
 
+  it('returns validation-cancelled and never authorizes merge after a cancelled command', async () => {
+    const result = await runGate(gateOpts(), gateIO({
+      exitCode: null,
+      timedOut: false,
+      cancelled: true,
+      outputTail: '',
+    }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'validation-cancelled',
+      validationReceipt: {
+        outcome: 'cancelled',
+        commands: [{
+          command: 'npm test',
+          outcome: 'cancelled',
+          coverage: 'unsupported',
+        }],
+      },
+    });
+  });
+
+  it('prioritizes a later cancellation over an earlier red command', async () => {
+    let cancelled = false;
+    const runValidationCommand = vi.fn(async (command: string) => {
+      if (command === 'npm run build') {
+        return { exitCode: 1, timedOut: false, cancelled: false, outputTail: '' };
+      }
+      cancelled = true;
+      return { exitCode: 0, timedOut: false, cancelled: false, outputTail: '' };
+    });
+
+    const result = await runGate(gateOpts({
+      validationCommands: ['npm run build', 'npm test'],
+      cancelled: () => cancelled,
+    }), {
+      runGit: defaultRunGit,
+      runValidationCommand,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'validation-cancelled',
+      validationReceipt: {
+        outcome: 'cancelled',
+        commands: [
+          { command: 'npm run build', outcome: 'failed' },
+          { command: 'npm test', outcome: 'cancelled' },
+        ],
+      },
+    });
+  });
+
   it('even a GREEN gate does NOT merge: the gate only decides — the merge is the finalizer\'s post-gate step', async () => {
     const before = baseState();
     const io = gateIO({ exitCode: 0, timedOut: false, outputTail: '' });
 
-    // RED now: notImplemented. GREEN when the impl validates in the integration
-    // worktree, finds everything clean, and returns { ok: true } — having
-    // touched the integration worktree only, never the product repo's `main`.
     const result = await runGate(gateOpts(), io);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toMatchObject({
+      ok: true,
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'unsupported' }],
+      },
+    });
 
     // The gate is a decision, not a mutation: `main` is untouched even on pass.
     // (The actual `git merge` happens in work-run-finalizer.ts AFTER this.)
@@ -209,9 +276,6 @@ describe('runGate — test before mutating main (P1.5)', () => {
     const before = baseState();
     const diagnosticsDir = join(tmpRoot, 'durable-run', 'validation-diagnostics');
 
-    // RED now: notImplemented. GREEN when the impl runs each validation command
-    // with cwd === the integration worktree (never the product repo's base
-    // checkout), so a command that writes files can't dirty local `main`.
     await runGate(gateOpts({ validationArtifactsDir: diagnosticsDir }), io);
 
     expect(runValidationCommand).toHaveBeenCalled();
@@ -228,6 +292,147 @@ describe('runGate — test before mutating main (P1.5)', () => {
     // cwd-routing is the path most likely to leak a dirty-`main` side effect —
     // assert the product repo is still byte-for-byte unchanged here too.
     expect(baseState()).toEqual(before);
+    expect(existsSync(integrationWorktree)).toBe(false);
+  });
+
+  it('always executes every configured command and returns a compact merge-gate receipt even when one command is red', async () => {
+    const runValidationCommand = vi.fn(
+      async (command: string): Promise<ValidationCommandResult> => ({
+        exitCode: command === 'npm run build' ? 1 : 0,
+        timedOut: false,
+        outputHead: `private head from ${repoPath}`,
+        outputTail: `TELEGRAM_BOT_TOKEN=never-persist ${repoPath}`,
+        diagnosticArtifacts: [],
+      }),
+    );
+
+    const result = await runGate(
+      gateOpts({ validationCommands: ['npm run build', 'npm test'] }),
+      { runGit: defaultRunGit, runValidationCommand },
+    );
+    const projected = result as unknown as {
+      ok: boolean;
+      reason?: string;
+      validationReceipt?: {
+        outcome: string;
+        commands: Array<{ command: string; outcome: string; coverage: string }>;
+      };
+    };
+
+    expect(result).toMatchObject({ ok: false, reason: 'tests-red' });
+    expect(runValidationCommand.mock.calls.map(([command]) => command)).toEqual([
+      'npm run build',
+      'npm test',
+    ]);
+    expect(projected.validationReceipt).toMatchObject({
+      version: 1,
+      treeOid: expect.stringMatching(/^[0-9a-f]{40}$/),
+      fullTaskReviewHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      completedAt: expect.any(String),
+      commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      configurationFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      dependencyFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      outcome: 'failed',
+      commands: [
+        { command: 'npm run build', outcome: 'failed', coverage: 'unsupported' },
+        { command: 'npm test', outcome: 'passed', coverage: 'unsupported' },
+      ],
+    });
+    const serialized = JSON.stringify(projected.validationReceipt);
+    expect(serialized).not.toContain(repoPath);
+    expect(serialized).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(serialized.length).toBeLessThan(2_000);
+  });
+
+  it('fails closed when a mapped command exits zero without canonical reporter evidence', async () => {
+    git(repoPath, 'checkout', '-q', BRANCH);
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'gate-fixture',
+      private: true,
+      scripts: { test: 'vitest run' },
+    }));
+    git(repoPath, 'add', 'package.json');
+    git(repoPath, 'commit', '-q', '-m', 'add mapped validation command');
+    git(repoPath, 'checkout', '-q', BASE);
+    const runValidationCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+    }));
+
+    const result = await runGate(gateOpts({
+      validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+    }), { runGit: defaultRunGit, runValidationCommand });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'tests-red',
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'invalid' }],
+      },
+    });
+  });
+
+  it('uses the production isolated observer for mapped merge-gate coverage', async () => {
+    git(repoPath, 'checkout', '-q', BRANCH);
+    writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'real-gate-attestation-fixture',
+      private: true,
+      scripts: { test: 'vitest run' },
+    }));
+    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+      name: 'real-gate-attestation-fixture',
+      lockfileVersion: 3,
+    }));
+    writeFileSync(join(repoPath, 'vitest.config.cjs'), [
+      "if (process.env.RUNE_VITEST_ATTESTATION_CAPABILITY !== undefined) throw new Error('secret leaked');",
+      "if (process.env.RUNE_VITEST_ATTESTATION_FILE !== undefined) throw new Error('path leaked');",
+      'module.exports = {};',
+      '',
+    ].join('\n'));
+    writeFileSync(join(repoPath, 'gate.test.js'), [
+      "import { expect, it } from 'vitest';",
+      "it('runs without attestation credentials', () => {",
+      "  expect(process.env.RUNE_VITEST_ATTESTATION_CAPABILITY).toBeUndefined();",
+      "  expect(process.env.RUNE_VITEST_ATTESTATION_FILE).toBeUndefined();",
+      '});',
+      '',
+    ].join('\n'));
+    git(repoPath, 'add', '-A');
+    git(repoPath, 'commit', '-q', '-m', 'add real mapped validation');
+    git(repoPath, 'checkout', '-q', BASE);
+
+    const result = await (async () => {
+      vi.stubEnv(
+        'PATH',
+        `${join(PROJECT_ROOT, 'node_modules', '.bin')}:${process.env['PATH'] ?? ''}`,
+      );
+      try {
+        return await runGate(gateOpts({
+          validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+          commandTimeoutMs: 30_000,
+        }));
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    })();
+
+    expect(result).toMatchObject({
+      ok: true,
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{
+          command: 'npm test',
+          outcome: 'passed',
+          coverage: 'complete',
+          discovered: { tests: 1 },
+          completed: { tests: 1, passed: 1 },
+        }],
+      },
+    });
     expect(existsSync(integrationWorktree)).toBe(false);
   });
 
@@ -249,7 +454,13 @@ describe('runGate — test before mutating main (P1.5)', () => {
       { runGit: defaultRunGit, runValidationCommand },
     );
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toMatchObject({
+      ok: true,
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'unsupported' }],
+      },
+    });
     expect(runValidationCommand).toHaveBeenCalledWith(
       'npm test',
       join(integrationWorktree, 'harness'),
@@ -724,6 +935,30 @@ describe('runValidationCommands', () => {
     expect(external.exitCode).toBe(0);
   });
 
+  it.runIf(process.platform === 'darwin')(
+    'carves a default-layout validation worktree out of the denied Rune trust root',
+    async () => {
+      const worktreesDir = join(PROJECT_ROOT, '.worktrees');
+      mkdirSync(worktreesDir, { recursive: true });
+      const worktree = mkdtempSync(join(worktreesDir, 'validation-write-probe-'));
+      try {
+        const result = await runValidationCommandArgv([
+          process.execPath,
+          '-e',
+          "require('node:fs').writeFileSync('build-artifact.txt','ok')",
+        ], worktree, 5_000, undefined, {
+          deniedWriteRoots: [PROJECT_ROOT],
+          allowedWriteRoots: [worktree],
+        });
+
+        expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+        expect(readFileSync(join(worktree, 'build-artifact.txt'), 'utf8')).toBe('ok');
+      } finally {
+        rmSync(worktree, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('strips diagnostic NODE_OPTIONS before a direct runner creates workers', async () => {
     const fixture = join(tmpRoot, 'worker-fixture');
     const diagnosticsDir = join(tmpRoot, 'worker-diagnostics');
@@ -768,6 +1003,73 @@ describe('runValidationCommands', () => {
     }
     expect(state === '' || state.startsWith('Z')).toBe(true);
   }, 15_000);
+
+  it('reaps descendants left behind by a normally exiting validation leader', async () => {
+    const pidFile = join(tmpRoot, 'green-grandchild.pid');
+    const parent = join(tmpRoot, 'green-parent.cjs');
+    writeFileSync(parent, [
+      "const {spawn}=require('node:child_process');",
+      "const fs=require('node:fs');",
+      `const child=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:'ignore'});`,
+      `fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));`,
+      'process.exit(0);',
+    ].join('\n'));
+
+    const result = await runValidationCommandArgv(
+      [process.execPath, parent],
+      tmpRoot,
+      30_000,
+    );
+
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    let state = '';
+    try {
+      state = execFileSync('ps', ['-p', String(pid), '-o', 'state='], { encoding: 'utf8' }).trim();
+    } catch {
+      // ps exits non-zero once the reaped process has disappeared entirely.
+    }
+    expect(state === '' || state.startsWith('Z')).toBe(true);
+  }, 15_000);
+
+  it.runIf(process.platform === 'darwin')(
+    'detects and reaps a detached new-session descendant by its private launch nonce',
+    async () => {
+      const pidFile = join(tmpRoot, 'escaped-child.pid');
+      const childScript = join(tmpRoot, 'escaped-child.cjs');
+      const parentScript = join(tmpRoot, 'escaped-parent.cjs');
+      writeFileSync(childScript, [
+        "const fs=require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        'setInterval(()=>{}, 1000);',
+        '',
+      ].join('\n'));
+      writeFileSync(parentScript, [
+        "const {spawn}=require('node:child_process');",
+        `spawn(process.execPath,[${JSON.stringify(childScript)}],{detached:true,stdio:'ignore'}).unref();`,
+        'setTimeout(()=>process.exit(0), 100);',
+        '',
+      ].join('\n'));
+
+      const result = await runValidationCommandArgv(
+        [process.execPath, parentScript],
+        tmpRoot,
+        5_000,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+      const escapedPid = Number(readFileSync(pidFile, 'utf8'));
+      let state = '';
+      try {
+        state = execFileSync('ps', ['-p', String(escapedPid), '-o', 'state='], {
+          encoding: 'utf8',
+        }).trim();
+      } catch {
+        // The escaped process was fully reaped.
+      }
+      expect(state === '' || state.startsWith('Z')).toBe(true);
+    },
+  );
 
   it('passes when every command exits 0', async () => {
     await expect(runValidationCommands([
@@ -836,6 +1138,31 @@ describe('runValidationCommands', () => {
     expect(listResult.result.outputTail).toContain('EARLY-MARKER');
   });
 
+  it('reaps the validation process group when live cancellation is observed', async () => {
+    const startedAt = Date.now();
+    let cancelled = false;
+    const trigger = setTimeout(() => {
+      cancelled = true;
+    }, 150);
+    try {
+      const result = await runValidationCommandArgv(
+        [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+        tmpRoot,
+        30_000,
+        undefined,
+        { cancelled: () => cancelled },
+      );
+
+      expect(result).toMatchObject({
+        timedOut: false,
+        cancelled: true,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+    } finally {
+      clearTimeout(trigger);
+    }
+  });
+
   it('captures a durable diagnostic report before reaping a silent startup wedge', async () => {
     const diagnosticsDir = join(tmpRoot, 'validation-diagnostics');
     const command = 'node -e setTimeout(()=>{},120000)';
@@ -868,5 +1195,1072 @@ describe('runValidationCommands', () => {
     } finally {
       delete process.env['RUNE_DIAGNOSTIC_TEST_SECRET'];
     }
+  });
+});
+
+describe('runFullSuiteValidation — canonical attestation launcher', () => {
+  const completeManifest = (tests = 7) => ({
+    version: 1 as const,
+    runner: 'vitest' as const,
+    completedNormally: true,
+    collectionErrors: 0,
+    discovered: { suites: 3, tests },
+    completed: {
+      suites: 3,
+      tests,
+      passed: Math.max(0, tests - 2),
+      failed: 0,
+      skipped: tests > 0 ? 1 : 0,
+      todo: tests > 1 ? 1 : 0,
+      cancelled: 0,
+    },
+  });
+
+  function prepareAttestationFixture(): { expectedTreeOid: string } {
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'attestation-fixture',
+      scripts: { test: 'vitest run' },
+    }));
+    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+      name: 'attestation-fixture',
+      lockfileVersion: 3,
+    }));
+    writeFileSync(join(repoPath, 'vitest.config.ts'), 'export default {};\n');
+    git(repoPath, 'add', '-A');
+    return { expectedTreeOid: git(repoPath, 'write-tree') };
+  }
+
+  function opts(expectedTreeOid: string) {
+    return {
+      commands: ['npm test'],
+      adapters: [{ command: 'npm test', runner: 'vitest' as const }],
+      worktree: repoPath,
+      cwd: repoPath,
+      validationCwd: '.',
+      expectedTreeOid,
+      fullTaskReviewHash: 'a'.repeat(64),
+      timeoutMs: 30_000,
+      diagnosticDir: join(tmpRoot, 'validation-diagnostics'),
+    };
+  }
+
+  function ioReturning(
+    result: ValidationCommandResult,
+    runGit: GitRunner = defaultRunGit,
+  ): FullSuiteValidationIO & { runCommand: ReturnType<typeof vi.fn> } {
+    return {
+      runGit,
+      runCommand: vi.fn(async () => result),
+      runTrustedVitestObserver: vi.fn(async () => result),
+    };
+  }
+
+  it('runs the real injected reporter end to end without persisting its host path', async () => {
+    writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'real-attestation-fixture',
+      private: true,
+      scripts: { test: 'vitest run' },
+    }));
+    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+      name: 'real-attestation-fixture',
+      lockfileVersion: 3,
+    }));
+    writeFileSync(
+      join(repoPath, 'vitest.config.cjs'),
+      [
+        "const escapedProcess = require.constructor('return process')();",
+        "if (escapedProcess.env.RUNE_VITEST_ATTESTATION_FILE !== undefined) {",
+        "  throw new Error('attestation output leaked to product config');",
+        "}",
+        "if (escapedProcess.env.RUNE_VITEST_ATTESTATION_CAPABILITY !== undefined) {",
+        "  throw new Error('attestation capability leaked to product config');",
+        "}",
+        'module.exports = {};',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(repoPath, 'attested.test.js'),
+      [
+        "import { expect, it } from 'vitest';",
+        "it('passes without reporter capabilities',()=>{",
+        "  expect(2+2).toBe(4);",
+        "  expect(process.env.RUNE_VITEST_ATTESTATION_FILE).toBeUndefined();",
+        "  expect(process.env.RUNE_VITEST_ATTESTATION_CAPABILITY).toBeUndefined();",
+        "});",
+        '',
+      ].join('\n'),
+    );
+    symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
+    git(repoPath, 'add', '-A');
+    const expectedTreeOid = git(repoPath, 'write-tree');
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid));
+    expect(result).toMatchObject({
+      ok: true,
+      coverageComplete: true,
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{
+          command: 'npm test',
+          outcome: 'passed',
+          coverage: 'complete',
+          discovered: { tests: 1 },
+          completed: { tests: 1, passed: 1 },
+        }],
+      },
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(PROJECT_ROOT);
+    expect(serialized).not.toContain('vitest-attestation-reporter.mjs');
+  });
+
+  it.runIf(process.platform === 'darwin')(
+    'prevents escaped product config from mutating the boot-anchored trust root',
+    async () => {
+      const sentinel = join(PROJECT_ROOT, `.rune-attestation-sentinel-${process.pid}`);
+      writeFileSync(sentinel, 'trusted\n', { mode: 0o600 });
+      try {
+        writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+        writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+          name: 'runtime-tamper-adversary',
+          private: true,
+          scripts: { test: 'vitest run' },
+        }));
+        writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+          name: 'runtime-tamper-adversary',
+          lockfileVersion: 3,
+        }));
+        writeFileSync(
+          join(repoPath, 'vitest.config.cjs'),
+          [
+            "const escapedProcess = require.constructor('return process')();",
+            "const fs = escapedProcess.getBuiltinModule('node:fs');",
+            `try { fs.appendFileSync(${JSON.stringify(sentinel)}, 'tampered\\n'); } catch {}`,
+            'module.exports = {};',
+            '',
+          ].join('\n'),
+        );
+        writeFileSync(
+          join(repoPath, 'attested.test.js'),
+          "import { it } from 'vitest'; it('passes', () => {});\n",
+        );
+        symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
+        git(repoPath, 'add', '-A');
+        const expectedTreeOid = git(repoPath, 'write-tree');
+
+        const result = await runFullSuiteValidation(opts(expectedTreeOid));
+
+        expect(result).toMatchObject({ ok: true, coverageComplete: true });
+        expect(readFileSync(sentinel, 'utf8')).toBe('trusted\n');
+      } finally {
+        rmSync(sentinel, { force: true });
+      }
+    },
+  );
+
+  it('fails closed when product config imports the trusted reporter as a signing oracle', async () => {
+    writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'reporter-import-adversary',
+      private: true,
+      scripts: { test: 'vitest run' },
+    }));
+    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+      name: 'reporter-import-adversary',
+      lockfileVersion: 3,
+    }));
+    const reporterUrl = pathToFileURL(
+      join(PROJECT_ROOT, 'scripts', 'vitest-attestation-reporter.mjs'),
+    ).href;
+    writeFileSync(
+      join(repoPath, 'vitest.config.mjs'),
+      [
+        `import Reporter from ${JSON.stringify(reporterUrl)};`,
+        'const reporter = new Reporter();',
+        "if ('output' in reporter || 'capability' in reporter) throw new Error('public signing material');",
+        'export default {};',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(repoPath, 'attested.test.js'),
+      "import { it } from 'vitest'; it('passes', () => {});\n",
+    );
+    symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
+    git(repoPath, 'add', '-A');
+    const expectedTreeOid = git(repoPath, 'write-tree');
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid));
+
+    expect(result).toMatchObject({
+      ok: false,
+      coverageComplete: false,
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [{ coverage: 'invalid' }],
+      },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('observes a clean materialization of the reviewed tree, excluding ignored tests', async () => {
+    writeFileSync(join(repoPath, '.gitignore'), 'node_modules\nignored.test.js\n');
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'reviewed-tree-observer-fixture',
+      private: true,
+      scripts: { test: 'vitest run' },
+    }));
+    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+      name: 'reviewed-tree-observer-fixture',
+      lockfileVersion: 3,
+    }));
+    writeFileSync(join(repoPath, 'tracked.test.js'),
+      "import { it } from 'vitest'; it('tracked', () => {});\n");
+    symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
+    git(repoPath, 'add', '-A');
+    const expectedTreeOid = git(repoPath, 'write-tree');
+    writeFileSync(join(repoPath, 'ignored.test.js'),
+      "import { it } from 'vitest'; it('ignored failure', () => { throw new Error('ignored'); });\n");
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+      })),
+      runTrustedVitestObserver,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      validationReceipt: {
+        commands: [{
+          coverage: 'complete',
+          discovered: { tests: 1 },
+          completed: { tests: 1, passed: 1 },
+        }],
+      },
+    });
+  });
+
+  it('binds exact configured argv and private reporter evidence to the reviewed tree', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputHead: '',
+      outputTail: `private output at ${repoPath}`,
+      diagnosticArtifacts: [],
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: true,
+      coverageComplete: true,
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'complete' }],
+      },
+      receipts: [{
+        command: 'npm test',
+        treeOid: expectedTreeOid,
+        outcome: 'passed',
+        coverage: 'complete',
+        discovered: { suites: 3, tests: 7 },
+      }],
+    });
+    expect(io.runCommand).toHaveBeenCalledWith(
+      'npm test',
+      ['npm', 'test'],
+      repoPath,
+      30_000,
+      join(tmpRoot, 'validation-diagnostics'),
+      {
+        deniedWriteRoots: [PROJECT_ROOT],
+        allowedWriteRoots: [repoPath],
+      },
+    );
+    const durable = JSON.stringify(result);
+    expect(durable).not.toContain(repoPath);
+    expect(durable).not.toContain('reporterPath');
+    expect(durable).not.toContain('outputPath');
+    expect(durable).not.toContain('private output');
+  });
+
+  it('rejects npm lifecycle hooks as a canonical full Vitest invocation', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'attestation-fixture',
+      scripts: {
+        pretest: 'node mutate-tests.js',
+        test: 'vitest run',
+        posttest: 'node restore-tests.js',
+      },
+    }));
+    git(repoPath, 'add', '-A');
+    const hookedTree = git(repoPath, 'write-tree');
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation(opts(hookedTree), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      coverageComplete: false,
+      validationReceipt: {
+        commands: [{ command: 'npm test', coverage: 'invalid' }],
+      },
+    });
+    expect(io.runCommand).toHaveBeenCalledWith(
+      'npm test',
+      ['npm', 'test'],
+      repoPath,
+      30_000,
+      join(tmpRoot, 'validation-diagnostics'),
+      {
+        deniedWriteRoots: [PROJECT_ROOT],
+        allowedWriteRoots: [repoPath],
+      },
+    );
+    expect(expectedTreeOid).not.toBe(hookedTree);
+  });
+
+  it.each([
+    ['missing manifest', undefined],
+    ['partial manifest', {
+      ...completeManifest(),
+      discovered: { suites: 3, tests: 7 },
+      completed: { suites: 2, tests: 6, passed: 4, failed: 0, skipped: 1, todo: 1, cancelled: 0 },
+    }],
+  ])('rejects a green exit with %s', async (_label, vitestManifest) => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      ...(vitestManifest !== undefined ? { vitestManifest } : {}),
+    });
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      coverageComplete: false,
+      validationReceipt: {
+        commands: [{ command: 'npm test', coverage: 'invalid' }],
+      },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('rejects post-run canonical tree drift', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io: FullSuiteValidationIO = {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async () => {
+        writeFileSync(join(repoPath, 'generated-after-validation.txt'), 'drift\n');
+        return {
+          exitCode: 0,
+          timedOut: false,
+          cancelled: false,
+          outputTail: '',
+          vitestManifest: completeManifest(),
+        };
+      }),
+    };
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      coverageComplete: false,
+      validationReceipt: { outcome: 'drifted' },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('rejects a cwd that is not the contained resolution of validationCwd', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const outside = join(tmpRoot, 'wrong-validation-cwd');
+    mkdirSync(outside);
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      cwd: outside,
+    }, io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      validationReceipt: { outcome: 'drifted', commands: [] },
+    });
+    expect(io.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale reviewed tree before executing validation', async () => {
+    prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation(opts('f'.repeat(40)), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      validationReceipt: { outcome: 'drifted', commands: [] },
+    });
+    expect(io.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('turns private reporter setup failure into a bounded red result', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = {
+      ...ioReturning({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(),
+      }),
+      createVitestManifestDir: () => {
+        throw new Error(`private setup at ${repoPath}`);
+      },
+    };
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: {
+        exitCode: 0,
+        outputTail: expect.stringContaining('trusted Vitest reporter setup failed'),
+      },
+    });
+    expect(io.runCommand).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain(repoPath);
+  });
+
+  it('runs the exact configured command when the isolated observer rejects', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: 'configured command passed',
+      vitestManifest: completeManifest(),
+    }));
+    const runTrustedVitestObserver = vi.fn(async () => {
+      throw new Error(`observer rejected at ${repoPath}`);
+    });
+
+    const result = await runFullSuiteValidation(
+      opts(expectedTreeOid),
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: {
+        exitCode: 0,
+        outputTail: expect.stringContaining('trusted Vitest observer runner failed'),
+      },
+      validationReceipt: {
+        commands: [{ outcome: 'passed', coverage: 'invalid' }],
+      },
+    });
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain(repoPath);
+  });
+
+  it('rejects a validation cwd whose reviewed-tree symlink resolves to the live worktree', async () => {
+    const liveCwd = join(repoPath, 'live-cwd');
+    mkdirSync(liveCwd);
+    writeFileSync(join(liveCwd, 'package.json'), JSON.stringify({
+      scripts: { test: 'vitest run' },
+    }));
+    symlinkSync(liveCwd, join(repoPath, 'test-cwd'), 'dir');
+    git(repoPath, 'add', '-A');
+    const expectedTreeOid = git(repoPath, 'write-tree');
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+    }));
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      cwd: realpathSync(join(repoPath, 'test-cwd')),
+      validationCwd: 'test-cwd',
+    }, {
+      runGit: defaultRunGit,
+      runCommand,
+      runTrustedVitestObserver,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: {
+        exitCode: 0,
+        outputTail: expect.stringContaining('trusted Vitest reporter setup failed'),
+      },
+      validationReceipt: {
+        commands: [{ outcome: 'passed', coverage: 'invalid' }],
+      },
+    });
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
+  it('continues all merge-gate commands after a rejected command runner', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const runCommand = vi.fn(async (command: string) => {
+      if (command === 'npm run build') {
+        throw new Error(`spawn failed at ${repoPath}`);
+      }
+      return {
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(),
+      };
+    });
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commands: ['npm run build', 'npm test'],
+      continueOnFailure: true,
+    }, {
+      runGit: defaultRunGit,
+      runCommand,
+      runTrustedVitestObserver: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(),
+      })),
+    });
+
+    expect(runCommand.mock.calls.map(([command]) => command)).toEqual([
+      'npm run build',
+      'npm test',
+    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [
+          { command: 'npm run build', outcome: 'failed', coverage: 'unsupported' },
+          {
+            command: 'npm test',
+            outcome: 'passed',
+            coverage: 'complete',
+            discovered: { suites: 3, tests: 7 },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(repoPath);
+  });
+
+  it('stops launching merge-gate commands after cancellation even in all-command mode', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const runCommand = vi.fn(async () => ({
+      exitCode: null,
+      timedOut: false,
+      cancelled: true,
+      outputTail: '',
+    }));
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commands: ['npm run build', 'npm test'],
+      continueOnFailure: true,
+    }, { runGit: defaultRunGit, runCommand });
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: false,
+      validationReceipt: {
+        outcome: 'cancelled',
+        commands: [{
+          command: 'npm run build',
+          outcome: 'cancelled',
+          coverage: 'unsupported',
+        }],
+      },
+    });
+  });
+
+  it('rejects cancellation that arrives during post-run identity capture', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    let cancelled = false;
+    let gitCalls = 0;
+    const runGit: GitRunner = async (args, options) => {
+      const result = await defaultRunGit(args, options);
+      gitCalls += 1;
+      // captureValidationTree performs three probes before and three after the
+      // child. Flip only as the final post-run identity probe settles.
+      if (gitCalls === 6) cancelled = true;
+      return result;
+    };
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    }, runGit);
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      cancelled: () => cancelled,
+    }, io);
+
+    expect(io.runCommand).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      ok: false,
+      result: { cancelled: true },
+      validationReceipt: {
+        outcome: 'cancelled',
+        commands: [{
+          command: 'npm test',
+          outcome: 'cancelled',
+          coverage: 'invalid',
+        }],
+      },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('rejects trusted reporter implementation drift', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const reporterPath = join(tmpRoot, 'trusted-reporter.mjs');
+    writeFileSync(reporterPath, 'export default class Reporter {}\\n');
+    const io: FullSuiteValidationIO = {
+      runGit: defaultRunGit,
+      trustedVitestReporterPath: reporterPath,
+      runCommand: vi.fn(async () => {
+        writeFileSync(reporterPath, 'export default class ChangedReporter {}\\n');
+        return {
+          exitCode: 0,
+          timedOut: false,
+          cancelled: false,
+          outputTail: '',
+          vitestManifest: completeManifest(),
+        };
+      }),
+    };
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      validationReceipt: { outcome: 'drifted' },
+    });
+  });
+
+  it('preserves reconciled failed-test counts as complete red gate evidence', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const failedManifest = {
+      ...completeManifest(),
+      completed: {
+        suites: 3,
+        tests: 7,
+        passed: 4,
+        failed: 1,
+        skipped: 1,
+        todo: 1,
+        cancelled: 0,
+      },
+    };
+    const io = ioReturning({
+      exitCode: 1,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: failedManifest,
+    });
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [{
+          command: 'npm test',
+          outcome: 'failed',
+          coverage: 'complete',
+          discovered: { suites: 3, tests: 7 },
+          completed: { tests: 7, failed: 1 },
+        }],
+      },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('runs the isolated observer after a red configured command and retains its red counts', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const failedManifest = {
+      ...completeManifest(),
+      completed: {
+        suites: 3,
+        tests: 7,
+        passed: 4,
+        failed: 1,
+        skipped: 1,
+        todo: 1,
+        cancelled: 0,
+      },
+    };
+    const runCommand = vi.fn(async () => ({
+      exitCode: 1,
+      timedOut: false,
+      cancelled: false,
+      outputTail: 'configured command failed',
+    }));
+    const runTrustedVitestObserver = vi.fn(async () => ({
+      exitCode: 1,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: failedManifest,
+    }));
+
+    const result = await runFullSuiteValidation(
+      opts(expectedTreeOid),
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+    );
+
+    expect(runTrustedVitestObserver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      ok: false,
+      result: { exitCode: 1 },
+      validationReceipt: {
+        commands: [{
+          outcome: 'failed',
+          coverage: 'complete',
+          completed: { tests: 7, failed: 1 },
+        }],
+      },
+    });
+  });
+
+  it('keeps green execution separate from complete red observer coverage', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const redManifest = {
+      ...completeManifest(),
+      completed: {
+        suites: 3,
+        tests: 7,
+        passed: 4,
+        failed: 1,
+        skipped: 1,
+        todo: 1,
+        cancelled: 0,
+      },
+    };
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+      })),
+      runTrustedVitestObserver: vi.fn(async () => ({
+        exitCode: 1,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: redManifest,
+      })),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      validationReceipt: {
+        commands: [{ outcome: 'failed', coverage: 'complete', completed: { failed: 1 } }],
+      },
+    });
+  });
+
+  it('keeps red execution separate from complete green observer coverage', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async () => ({
+        exitCode: 1,
+        timedOut: false,
+        cancelled: false,
+        outputTail: 'configured command failed',
+      })),
+      runTrustedVitestObserver: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(),
+      })),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: { exitCode: 1 },
+      validationReceipt: {
+        commands: [{ outcome: 'failed', coverage: 'complete', completed: { failed: 0 } }],
+      },
+    });
+  });
+
+  it.each([
+    ['configuration', 'vitest.config.ts', 'export default { test: { pool: "forks" } };\n'],
+    ['dependency', 'package-lock.json', '{"name":"changed","lockfileVersion":3}\n'],
+  ])('rejects %s fingerprint drift even when the Git tree seam is pinned', async (
+    _label,
+    file,
+    contents,
+  ) => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const pinnedTreeGit: GitRunner = vi.fn(async (args) => {
+      if (args[0] === 'add') return { stdout: '', stderr: '' };
+      return { stdout: `${expectedTreeOid}\n`, stderr: '' };
+    });
+    const io: FullSuiteValidationIO = {
+      runGit: pinnedTreeGit,
+      runCommand: vi.fn(async () => {
+        writeFileSync(join(repoPath, file), contents);
+        return {
+          exitCode: 0,
+          timedOut: false,
+          cancelled: false,
+          outputTail: '',
+          vitestManifest: completeManifest(),
+        };
+      }),
+    };
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      validationReceipt: { outcome: 'drifted' },
+    });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it.each([
+    ['timeout', { exitCode: null, timedOut: true, cancelled: false }],
+    ['cancellation', { exitCode: null, timedOut: false, cancelled: true }],
+    ['missing executable', { exitCode: null, timedOut: false, cancelled: false }],
+  ])('rejects a %s execution without manufacturing coverage', async (_label, execution) => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      ...execution,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(result).toMatchObject({ ok: false, coverageComplete: false });
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('accepts legitimate changed discovery counts as a new attestation without a fixed repository count', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    let tests = 7;
+    const io: FullSuiteValidationIO = {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+      })),
+      runTrustedVitestObserver: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(tests),
+      })),
+    };
+
+    const first = await runFullSuiteValidation(opts(expectedTreeOid), io);
+    tests = 11;
+    const second = await runFullSuiteValidation(opts(expectedTreeOid), io);
+
+    expect(first).toMatchObject({
+      ok: true,
+      receipts: [{ discovered: { tests: 7 }, completed: { tests: 7 } }],
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      receipts: [{ discovered: { tests: 11 }, completed: { tests: 11 } }],
+    });
+  });
+
+  it('binds reusable evidence to the complete configured command list', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io: FullSuiteValidationIO = {
+      runGit: defaultRunGit,
+      runCommand: vi.fn(async (command) => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+      })),
+      runTrustedVitestObserver: vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: '',
+        vitestManifest: completeManifest(),
+      })),
+    };
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commands: ['npm run build', 'npm test'],
+      adapters: [{ command: 'npm test', runner: 'vitest' }],
+    }, io);
+
+    expect(result).toMatchObject({
+      ok: true,
+      coverageComplete: true,
+      attestations: [{
+        configuredArgv: [
+          ['npm', 'run', 'build'],
+          ['npm', 'test'],
+        ],
+        execution: { outcome: 'passed' },
+        coverage: { status: 'complete' },
+      }],
+      receipts: [{ command: 'npm run build + npm test' }],
+    });
+  });
+
+  it('preserves a green configured-command outcome when the isolated observer fails', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: 'configured command passed',
+    }));
+    const runTrustedVitestObserver = vi.fn(async () => ({
+      exitCode: 1,
+      timedOut: false,
+      cancelled: false,
+      outputTail: 'observer rejected product configuration',
+      vitestManifest: completeManifest(),
+    }));
+
+    const result = await runFullSuiteValidation(
+      opts(expectedTreeOid),
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: {
+        exitCode: 0,
+        outputTail: expect.stringContaining('observer rejected product configuration'),
+      },
+      validationReceipt: {
+        commands: [{ outcome: 'passed', coverage: 'invalid' }],
+      },
+    });
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runTrustedVitestObserver).toHaveBeenCalledOnce();
+    expect(result.attestations).toEqual([]);
+  });
+
+  it('retains a compact receipt for an all-unsupported green suite', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commands: ['npm run build'],
+      adapters: [],
+    }, ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      coverageComplete: false,
+      receipts: [{
+        command: 'npm run build',
+        treeOid: expectedTreeOid,
+        outcome: 'passed',
+        coverage: 'unsupported',
+      }],
+      validationReceipt: {
+        outcome: 'passed',
+        commands: [{
+          command: 'npm run build',
+          outcome: 'passed',
+          coverage: 'unsupported',
+        }],
+      },
+    });
+  });
+
+  it('tracks mapped completion by the exact configured command despite argv whitespace normalization', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const command = 'npm   test';
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commands: [command],
+      adapters: [{ command, runner: 'vitest' }],
+    }, io);
+
+    expect(result).toMatchObject({
+      ok: true,
+      coverageComplete: true,
+      attestations: [{ configuredArgv: [['npm', 'test']] }],
+    });
   });
 });

@@ -32,6 +32,10 @@ import {
   worktreePathFor,
   type SandboxSpec,
 } from '../intent/sandbox.js';
+import {
+  containsCredentialMaterial,
+  type ValidationAdapter,
+} from '../intent/full-suite-attestation.js';
 import { createLogger } from '../utils/logger.js';
 import {
   assertManagedWorktreeDirectory,
@@ -114,6 +118,10 @@ export interface ProductConfig {
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
    *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
   validationCommands?: string[];
+  /** Exact configured validation commands that have a trusted structured
+   * coverage adapter. Commands without a mapping still must exit zero but
+   * cannot claim canonical suite coverage. */
+  validationAdapters?: ValidationAdapter[];
   /** Optional repository-relative directory from which validation commands
    * run. The concrete worktree path is realpath/boundary-validated before any
    * orchestrated role is dispatched. */
@@ -137,7 +145,7 @@ export interface ProductConfig {
  *  subset of `execFile`'s result. */
 export type GitRunner = (
   args: string[],
-  opts?: { cwd?: string },
+  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 // ---------------------------------------------------------------------------
@@ -151,6 +159,7 @@ export type GitRunner = (
 export const defaultRunGit: GitRunner = async (args, opts) => {
   const result = await execFile('git', args, {
     ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+    ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
     // Cap a single git invocation so a hung process can't block the runtime.
     timeout: 30_000,
   });
@@ -283,6 +292,54 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
           'expected a relative string',
       );
     }
+    const validationCommands = Array.isArray(entry['validationCommands'])
+      ? (entry['validationCommands'] as unknown[]).map(String)
+      : [];
+    if (validationCommands.some(containsCredentialMaterial)) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' validationCommands contain credential material in ${path}`,
+      );
+    }
+    if (new Set(validationCommands).size !== validationCommands.length) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has duplicate validationCommands in ${path}`,
+      );
+    }
+    const rawValidationAdapters = entry['validationAdapters'];
+    const validationAdapters: NonNullable<ProductConfig['validationAdapters']> = [];
+    if (rawValidationAdapters !== undefined) {
+      if (!Array.isArray(rawValidationAdapters)) {
+        throw new Error(
+          `readProductsConfig: product '${slug}' has invalid validationAdapters in ${path} — expected an array`,
+        );
+      }
+      const mappedCommands = new Set<string>();
+      for (const value of rawValidationAdapters) {
+        if (
+          value === null ||
+          typeof value !== 'object' ||
+          Array.isArray(value) ||
+          typeof (value as Record<string, unknown>)['command'] !== 'string' ||
+          (value as Record<string, unknown>)['runner'] !== 'vitest' ||
+          !Object.keys(value).every((key) => key === 'command' || key === 'runner')
+        ) {
+          throw new Error(
+            `readProductsConfig: product '${slug}' has invalid validationAdapters entry in ${path}`,
+          );
+        }
+        const adapter = value as { command: string; runner: 'vitest' };
+        if (
+          !validationCommands.includes(adapter.command) ||
+          mappedCommands.has(adapter.command)
+        ) {
+          throw new Error(
+            `readProductsConfig: product '${slug}' validationAdapters must map unique exact validationCommands in ${path}`,
+          );
+        }
+        mappedCommands.add(adapter.command);
+        validationAdapters.push({ command: adapter.command, runner: 'vitest' });
+      }
+    }
     out[slug] = {
       ...(productClass ? { class: productClass } : {}),
       ...(entry['containerCapabilities'] !== undefined
@@ -300,9 +357,8 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       // Always an array (fail-closed `[]` when absent/non-array) — mirrors
       // egressAllowlist. An empty list fails the merge gate with
       // `missing-validation-command`, never an unverified merge.
-      validationCommands: Array.isArray(entry['validationCommands'])
-        ? (entry['validationCommands'] as unknown[]).map(String)
-        : [],
+      validationCommands,
+      validationAdapters,
       ...(typeof entry['validationCwd'] === 'string'
         ? { validationCwd: entry['validationCwd'] }
         : {}),

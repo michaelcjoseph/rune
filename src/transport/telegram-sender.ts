@@ -3,6 +3,7 @@ import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegr
 import type { MessageSender, SendOpts } from './sender.js';
 import type { BusMutationEvent, BusOpEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
+import { isGateValidationReceipt } from '../intent/full-suite-attestation.js';
 
 const log = createLogger('telegram-sender');
 
@@ -20,6 +21,14 @@ const TRACKER_EDIT_THROTTLE_MS = 10_000;
  *  cross-reference. */
 function shortMutationId(id: string): string {
   return id.slice(0, 8);
+}
+
+function validationReceiptSuffix(data: Record<string, unknown>): string {
+  const receipt = isGateValidationReceipt(data['gateValidationReceipt'])
+    ? data['gateValidationReceipt']
+    : undefined;
+  if (receipt === undefined) return '';
+  return ` · validation ${receipt.outcome} (${receipt.commands.length} command${receipt.commands.length === 1 ? '' : 's'})`;
 }
 
 /** Phase 6 C5: structured terminal message for a gen-eval-loop mutation.
@@ -167,18 +176,19 @@ function formatWorkRunTerminal(event: BusMutationEvent, opts: { suppressMergeCla
       // (or a disposition not stamped) keeps the legacy "not yet on <base>"
       // wording. The base branch is stamped on the event (defaults to `main`).
       const base = typeof data['baseBranch'] === 'string' ? (data['baseBranch'] as string) : 'main';
+      const validation = validationReceiptSuffix(data);
       if (data['merged'] === true) {
         if (opts.suppressMergeClaim) {
-          return `✅ ${slug} branch-complete · ${commits} commit(s) · id=${id}`;
+          return `✅ ${slug} branch-complete · ${commits} commit(s)${validation} · id=${id}`;
         }
         const branchNote = data['branchDeleted'] === true ? 'branch deleted' : 'branch retained';
-        return `✅ ${slug} merged to ${base} · ${commits} commit(s) · ${branchNote} · id=${id}`;
+        return `✅ ${slug} merged to ${base} · ${commits} commit(s) · ${branchNote}${validation} · id=${id}`;
       }
       const held = typeof data['gateHeldReason'] === 'string' ? (data['gateHeldReason'] as string) : '';
       if (held) {
-        return `✅ ${slug} branch-complete · held off ${base}: ${held} · ${commits} commit(s) · id=${id}`;
+        return `✅ ${slug} branch-complete · held off ${base}: ${held} · ${commits} commit(s)${validation} · id=${id}`;
       }
-      return `✅ ${slug} branch-complete · ${commits} commit(s), all tasks checked (not yet on ${base}) · id=${id}`;
+      return `✅ ${slug} branch-complete · ${commits} commit(s), all tasks checked (not yet on ${base})${validation} · id=${id}`;
     }
     case 'partial':
       return `📊 ${slug} partial · ${commits} commit(s), ${checked}/${total} tasks done · id=${id}`;

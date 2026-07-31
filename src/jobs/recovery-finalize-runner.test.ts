@@ -186,6 +186,47 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(lastSummary.baseBranch).toBe('main');
   });
 
+  it('preserves the mapped Vitest gate receipt when recovery resumes after the gate', async () => {
+    const receipt = {
+      version: 1 as const,
+      treeOid: 'a'.repeat(40),
+      fullTaskReviewHash: 'b'.repeat(64),
+      completedAt: '2026-07-30T12:00:00.000Z',
+      commandFingerprint: 'c'.repeat(64),
+      configurationFingerprint: 'd'.repeat(64),
+      dependencyFingerprint: 'e'.repeat(64),
+      outcome: 'passed' as const,
+      commands: [{
+        command: 'npm test',
+        outcome: 'passed' as const,
+        coverage: 'complete' as const,
+        discovered: { suites: 4, tests: 12 },
+        completed: {
+          suites: 4,
+          tests: 12,
+          passed: 11,
+          failed: 0,
+          skipped: 1,
+          todo: 0,
+          cancelled: 0,
+        },
+      }],
+    };
+    const { io, captured } = makeIO({
+      getProduct: () => ({
+        ...PRODUCT,
+        validationCommands: ['npm test'],
+        validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+      }),
+      readLastPhase: () => 'merged-not-pushed',
+      readGateValidationReceipt: () => receipt,
+    });
+
+    await __finalizeStaleRunForTest(makeRun(), io);
+
+    expect(captured.summaries.at(-1)?.summary.gateValidationReceipt).toEqual(receipt);
+  });
+
   it('resumes from `pushed-not-deleted`: only deletes the branch, never re-merges or re-pushes (Phase 3.5)', async () => {
     const run = makeRun();
     const gitCalls: string[][] = [];

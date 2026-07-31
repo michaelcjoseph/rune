@@ -2,7 +2,10 @@
 
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TaskRunRecord } from '../intent/orch-run-record.js';
+import {
+  buildTaskRunRecord,
+  type TaskRunRecord,
+} from '../intent/orch-run-record.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import { readJsonlTail } from './jsonl-tail.js';
@@ -14,7 +17,11 @@ export function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, 
   if (!VALID_SLUG.test(runId)) throw new Error('Invalid run ID.');
   const dir = join(baseDir, runId);
   mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, TASK_RUN_RECORDS_FILE), JSON.stringify(record) + '\n', 'utf8');
+  appendFileSync(
+    join(dir, TASK_RUN_RECORDS_FILE),
+    JSON.stringify(buildTaskRunRecord(record)) + '\n',
+    'utf8',
+  );
 }
 
 export function readOrchestratedTaskRunRecords(baseDir: string, runId: string): TaskRunRecord[] {
@@ -28,7 +35,9 @@ export function readOrchestratedTaskRunRecords(baseDir: string, runId: string): 
   const records: TaskRunRecord[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    try { records.push(JSON.parse(line) as TaskRunRecord); } catch {
+    try {
+      records.push(buildTaskRunRecord(JSON.parse(line) as TaskRunRecord));
+    } catch {
       log.warn('task-records.jsonl: skipped malformed line', { runId });
     }
   }

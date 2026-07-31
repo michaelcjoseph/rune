@@ -22,6 +22,16 @@ vi.mock('../integrations/telegram/client.js', () => ({
 
 const { TelegramSender } = await import('./telegram-sender.js');
 
+const gateReceiptIdentity = {
+  version: 1,
+  treeOid: 'a'.repeat(40),
+  fullTaskReviewHash: 'b'.repeat(64),
+  completedAt: '2026-07-30T12:00:00.000Z',
+  commandFingerprint: 'c'.repeat(64),
+  configurationFingerprint: 'd'.repeat(64),
+  dependencyFingerprint: 'e'.repeat(64),
+};
+
 function mockBot() {
   return {
     sendMessage: vi.fn().mockResolvedValue({}),
@@ -281,12 +291,22 @@ describe('TelegramSender', () => {
           workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
           merged: true,
           branchDeleted: true,
+          gateValidationReceipt: {
+            ...gateReceiptIdentity,
+            outcome: 'passed',
+            commands: [{
+              command: 'npm test',
+              outcome: 'passed',
+              coverage: 'unsupported',
+            }],
+          },
         }),
       );
       await flush();
       const text = mockSendLongMessage.mock.calls[0]![2] as string;
       expect(text).toContain('✅');
       expect(text.toLowerCase()).toContain('merged to main');
+      expect(text.toLowerCase()).toContain('validation passed (1 command)');
       // A merged run must NOT read as "not yet on main".
       expect(text.toLowerCase()).not.toContain('not yet');
     });
@@ -345,6 +365,15 @@ describe('TelegramSender', () => {
           workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
           merged: false,
           gateHeldReason: 'tests-red',
+          gateValidationReceipt: {
+            ...gateReceiptIdentity,
+            outcome: 'failed',
+            commands: [{
+              command: 'npm test',
+              outcome: 'failed',
+              coverage: 'unsupported',
+            }],
+          },
         }),
       );
       await flush();
@@ -352,6 +381,7 @@ describe('TelegramSender', () => {
       // The operator sees the run held off main AND why.
       expect(text.toLowerCase()).toMatch(/held|not yet|off main/);
       expect(text).toContain('tests-red');
+      expect(text.toLowerCase()).toContain('validation failed (1 command)');
       expect(text.toLowerCase()).not.toContain('merged to main');
     });
 

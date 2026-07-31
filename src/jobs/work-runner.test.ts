@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import type { GateResult } from './work-run-gate.js';
 
 // --- Mocks before any dynamic imports ---
 
@@ -117,6 +118,7 @@ const mockGetProductConfig = vi.fn(() => ({
   baseBranch: 'main',
   egressAllowlist: [],
   validationCommands: ['npm run build', 'npm test'],
+  validationAdapters: [{ command: 'npm test', runner: 'vitest' as const }],
 }));
 const mockReadProductsConfig = vi.fn<
   () => Record<string, ReturnType<typeof mockGetProductConfig>>
@@ -150,9 +152,24 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
 // imports them. Defaults: a GREEN gate + a pass-through lock, so the happy-path
 // wiring test goes green once apply() composes the gate effect as
 // `gate = () => withBaseBranchLock(product, baseBranch, () => runGate(...))`.
-const mockRunGate = vi.fn(
-  async (): Promise<{ ok: true } | { ok: false; reason: string }> => ({ ok: true }),
-);
+const mockRunGate = vi.fn(async (): Promise<GateResult> => ({
+  ok: true as const,
+  validationReceipt: {
+    version: 1 as const,
+    treeOid: 'a'.repeat(40),
+    fullTaskReviewHash: 'b'.repeat(64),
+    completedAt: '2026-07-30T12:00:00.000Z',
+    commandFingerprint: 'c'.repeat(64),
+    configurationFingerprint: 'd'.repeat(64),
+    dependencyFingerprint: 'e'.repeat(64),
+    outcome: 'passed' as const,
+    commands: [{
+      command: 'npm test',
+      outcome: 'passed' as const,
+      coverage: 'unsupported' as const,
+    }],
+  },
+}));
 vi.mock('./work-run-gate-runtime.js', () => ({ runGate: mockRunGate }));
 const mockWithBaseBranchLock = vi.fn(
   async (_product: string, _base: string, fn: () => unknown) => fn(),
@@ -352,6 +369,7 @@ describe('workRunApplier', () => {
   let gitStub: ReturnType<typeof makeGitStub>;
   let runForensicsSpy: ReturnType<typeof vi.fn>;
   let refreshRegistrySpy: ReturnType<typeof vi.fn>;
+  let writeGateValidationReceiptSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -378,6 +396,7 @@ describe('workRunApplier', () => {
       baseBranch: 'main',
       egressAllowlist: [],
       validationCommands: ['npm run build', 'npm test'],
+      validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
     });
     mockReadProductsConfig.mockImplementation(() => ({ rune: mockGetProductConfig() }));
 
@@ -396,6 +415,7 @@ describe('workRunApplier', () => {
     // work-run-forensics.test.ts; here we only assert it's invoked correctly.
     runForensicsSpy = vi.fn(async () => ({ forensicsPath: '/tmp/test-work-runs/x', files: [] }));
     refreshRegistrySpy = vi.fn();
+    writeGateValidationReceiptSpy = vi.fn();
     __setWorkRunRuntimeForTest({
       runGit: gitStub.stub as never,
       verifyWorktree: async (opts: { worktree: string; project?: string }) => ({
@@ -409,6 +429,7 @@ describe('workRunApplier', () => {
       createSink: () => currentSink.sink as never,
       writeSummary: writeSummarySpy as never,
       appendIndexRow: ((filePath: string, row: any) => { indexRows.push({ filePath, row }); }) as never,
+      writeGateValidationReceipt: writeGateValidationReceiptSpy as never,
       runForensics: runForensicsSpy as never,
       refreshRegistry: refreshRegistrySpy as never,
     });
@@ -2092,7 +2113,17 @@ describe('workRunApplier', () => {
       // effect, which acquires the per-product/per-base-branch lock and runs the
       // gate inside it.
       expect(mockWithBaseBranchLock).toHaveBeenCalledWith('rune', 'main', expect.any(Function));
-      expect(mockRunGate).toHaveBeenCalled();
+      expect(mockRunGate).toHaveBeenCalledWith(expect.objectContaining({
+        validationCommands: ['npm run build', 'npm test'],
+        validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+        cancelled: expect.any(Function),
+      }));
+      expect(typeof effects.cancelled).toBe('function');
+      expect(writeGateValidationReceiptSpy).toHaveBeenCalledWith(
+        '/tmp/test-work-runs',
+        'mut-gm-gate',
+        expect.objectContaining({ outcome: 'passed' }),
+      );
     });
 
     it('merges, pushes, then deletes the branch — push BEFORE delete (decomposed realMergeBranch git steps) (RED until wiring)', async () => {

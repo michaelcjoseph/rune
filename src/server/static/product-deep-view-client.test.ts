@@ -1792,6 +1792,28 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/Disposition preserved/i);
   });
 
+  it('renders the independent merge-gate validation receipt in run history', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-attested-gate',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'completed',
+        endedAt: '2026-07-30T12:00:00.000Z',
+        gateValidationReceipt: {
+          outcome: 'passed',
+          commands: [
+            { command: 'npm run build', outcome: 'passed', coverage: 'unsupported' },
+            { command: 'npm test', outcome: 'passed', coverage: 'complete' },
+          ],
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('run-attested-gate');
+    expect(html).toContain('Merge validation passed · 2 commands');
+  });
+
   it('renders the final Cockpit label for every related-test diagnostic state', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
     const states = [

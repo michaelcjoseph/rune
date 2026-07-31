@@ -35,11 +35,15 @@
 import {
   appendFileSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
@@ -122,6 +126,7 @@ import {
   appendIndexRow,
   recordWorkRunPhase,
   readLastWorkRunPhase,
+  writeGateValidationReceipt,
   parseWorkRunCancellation,
   type WorkRunSummary,
   type WorkRunCancellation,
@@ -155,14 +160,25 @@ import {
   type FinalizerPhase,
   type GateFailReason,
 } from './work-run-finalizer.js';
+import { isGateValidationReceipt } from './work-run-gate.js';
 import {
   collectTaskChangedPaths,
   taskChangesRequireFullValidation,
   runGate as defaultRunGate,
+  runFullSuiteValidation as defaultRunFullSuiteValidation,
+  runTrustedVitestObserver,
   runValidationCommandArgv as defaultRunValidationCommandArgv,
   runValidationCommands as defaultRunValidationCommands,
+  type FullSuiteValidationResult,
   type ValidationCommandListResult,
 } from './work-run-gate-runtime.js';
+import {
+  durableValidationReceipt,
+  type CompactValidationReceipt,
+  type DurableValidationReceipt,
+  type FullSuiteAttestation,
+  type ValidationAdapter,
+} from '../intent/full-suite-attestation.js';
 import {
   diagnoseRelatedTestFallback,
   diagnoseRelatedTestResult,
@@ -210,6 +226,35 @@ import {
   type ExecutionTerminalTrigger,
   sanitizeExecutionDiagnostic,
 } from '../intent/execution-failure.js';
+
+export function selectReusableFullSuiteEvidence(
+  result: FullSuiteValidationResult,
+): {
+  attestation: FullSuiteAttestation;
+  receipt: CompactValidationReceipt;
+} | undefined {
+  if (!result.ok || result.coverageComplete !== true) return undefined;
+  const attestation = result.attestations
+    .find((entry) => entry.coverage.status === 'complete');
+  const receipt = result.receipts
+    .find((entry) => entry.coverage === 'complete');
+  return attestation !== undefined && receipt !== undefined
+    ? { attestation, receipt }
+    : undefined;
+}
+
+export function fullSuiteFailureAllowsCloseoutFallback(
+  result: FullSuiteValidationResult,
+): boolean {
+  if (result.ok) return false;
+  return result.result.exitCode === 0 &&
+    !result.result.timedOut &&
+    !result.result.cancelled &&
+    result.validationReceipt.outcome === 'failed' &&
+    result.validationReceipt.commands.length > 0 &&
+    result.validationReceipt.commands.every((entry) => entry.outcome === 'passed') &&
+    result.validationReceipt.commands.some((entry) => entry.coverage === 'invalid');
+}
 
 export {
   invalidateOrchestratedRunCursor,
@@ -949,6 +994,7 @@ export interface OrchestratedRuntimeDeps {
   /** Run the hard merge gate in its throwaway integration worktree. */
   runGate: typeof defaultRunGate;
   /** Task-scoped validation seams, including the compatible related-test rerun. */
+  runFullSuiteValidation: typeof defaultRunFullSuiteValidation;
   runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
   runValidationCommands: typeof defaultRunValidationCommands;
   /** Build the throwaway integration worktree path used by the gate runtime. */
@@ -984,6 +1030,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
     runGate: defaultRunGate,
+    runFullSuiteValidation: defaultRunFullSuiteValidation,
     runValidationCommandArgv: defaultRunValidationCommandArgv,
     runValidationCommands: defaultRunValidationCommands,
     integrationWorktree: (product, runId) => join(config.WORKTREE_ROOT, `gate-${product}-${runId}`),
@@ -1034,6 +1081,89 @@ function refreshRegistryAfterLanding(
 
 /** Build the real-effect OrchestrationDeps for a run against its worktree.
  *  Pure-loop logic lives in project-orchestrator.ts; this binds the I/O. */
+export async function commitReviewedCloseoutTree(input: {
+  cwd: string;
+  branch: string;
+  reviewedTreeOid: string;
+  contextPath: string;
+  contextContent: string;
+  tasksPath: string;
+  tasksContent: string;
+  message: string;
+  runGit: GitRunner;
+}): Promise<string> {
+  const isolatedDir = mkdtempSync(join(tmpdir(), 'rune-closeout-index-'));
+  const isolatedIndex = join(isolatedDir, 'index');
+  const preparedContext = join(isolatedDir, 'context.md');
+  const preparedTasks = join(isolatedDir, 'tasks.md');
+  writeFileSync(preparedContext, input.contextContent, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(preparedTasks, input.tasksContent, { encoding: 'utf8', mode: 0o600 });
+  const isolatedOpts = {
+    cwd: input.cwd,
+    env: { GIT_INDEX_FILE: isolatedIndex },
+  };
+  let closeoutTree: string;
+  try {
+    await input.runGit(['read-tree', input.reviewedTreeOid], isolatedOpts);
+    for (const [path, prepared] of [
+      [input.contextPath, preparedContext],
+      [input.tasksPath, preparedTasks],
+    ] as const) {
+      const { stdout: blobOut } = await input.runGit(
+        ['hash-object', '-w', prepared],
+        { cwd: input.cwd },
+      );
+      const blob = blobOut.trim();
+      if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(blob)) {
+        throw new Error('closeout managed blob could not be verified');
+      }
+      await input.runGit(
+        ['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`],
+        isolatedOpts,
+      );
+    }
+    const { stdout: treeOut } = await input.runGit(['write-tree'], isolatedOpts);
+    closeoutTree = treeOut.trim();
+  } finally {
+    rmSync(isolatedDir, { recursive: true, force: true });
+  }
+  const { stdout: changedOut } = await input.runGit([
+    'diff-tree',
+    '--no-commit-id',
+    '--name-only',
+    '-r',
+    input.reviewedTreeOid,
+    closeoutTree,
+  ], { cwd: input.cwd });
+  const allowed = new Set([input.contextPath, input.tasksPath]);
+  const unexpected = changedOut
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean)
+    .filter((path) => !allowed.has(path));
+  if (unexpected.length > 0) {
+    throw new Error('closeout staged tree diverged from the reviewed tree');
+  }
+  const { stdout: parentOut } = await input.runGit(['rev-parse', 'HEAD'], { cwd: input.cwd });
+  const parent = parentOut.trim();
+  const branchRef = `refs/heads/${input.branch}`;
+  if (!/^refs\/heads\/[A-Za-z0-9._/-]+$/.test(branchRef)) {
+    throw new Error('closeout branch ref could not be verified');
+  }
+  const { stdout: commitOut } = await input.runGit([
+    'commit-tree',
+    closeoutTree,
+    '-p',
+    parent,
+    '-m',
+    input.message,
+  ], { cwd: input.cwd });
+  const sha = commitOut.trim();
+  await input.runGit(['update-ref', branchRef, sha, parent], { cwd: input.cwd });
+  await input.runGit(['read-tree', closeoutTree], { cwd: input.cwd });
+  return sha;
+}
+
 function buildOrchestrationDeps(args: {
   descriptor: MutationDescriptor<OrchestratedWorkPayload>;
   sandbox: SandboxSpec;
@@ -1043,6 +1173,7 @@ function buildOrchestrationDeps(args: {
   branch: string;
   baseBranch: string;
   validationCommands: string[];
+  validationAdapters: ValidationAdapter[];
   validationCwd?: string;
   closeoutValidationStrategy: CloseoutValidationStrategy;
   workRunsDir: string;
@@ -1051,6 +1182,7 @@ function buildOrchestrationDeps(args: {
   captureTaskBaseTree: (runGit: GitRunner, cwd: string) => Promise<string>;
   runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
   runValidationCommands: typeof defaultRunValidationCommands;
+  runFullSuiteValidation: typeof defaultRunFullSuiteValidation;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
   cancel?: () => boolean;
@@ -1076,6 +1208,9 @@ function buildOrchestrationDeps(args: {
           scrubPathsInText(relativeContextFile),
         ),
       );
+  let pendingCloseoutContext: string | undefined;
+  let pendingCloseoutTasks: string | undefined;
+  let pendingReviewedTreeOid: string | undefined;
   const taskWorkflowRunner = args.createTaskWorkflowRunner({
     sandbox,
     productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -1202,15 +1337,18 @@ function buildOrchestrationDeps(args: {
     writeContextMd: async (content: string) => {
       assertCloseoutManagedPaths(cwd, tasksPath, contextPath);
       writeManagedWorktreeFile(cwd, contextPath, content, true);
+      pendingCloseoutContext = content;
     },
     writeTasksMd: async (content: string) => {
       assertCloseoutManagedPaths(cwd, tasksPath, contextPath);
       writeManagedWorktreeFile(cwd, tasksPath, content, false);
+      pendingCloseoutTasks = content;
     },
 
     // Task-scoped closeout checks use the product policy's short-budget
     // strategy. The project-level finalizer independently owns the full gate.
     runCloseoutChecks: async (task, evidence) => {
+      pendingReviewedTreeOid = evidence.currentReviewTree;
       const runDir = join(args.workRunsDir, descriptor.id);
       const diagnosticDir = join(runDir, 'validation-diagnostics');
       const scrub = (text: string): string =>
@@ -1241,35 +1379,121 @@ function buildOrchestrationDeps(args: {
           },
         };
       }
-      let validation: ValidationCommandListResult;
+      let validation: ValidationCommandListResult | undefined;
       let relatedTestDiagnostic: RelatedTestDiagnostic | undefined;
+      let relatedRan = false;
+      let fullSuiteAttestation: FullSuiteAttestation | undefined;
+      let validationReceipt: DurableValidationReceipt | undefined;
       if (task.validationPolicy === 'reviewed-no-validation') {
         validation = { ok: true };
-      } else if (args.closeoutValidationStrategy === 'vitest-related') {
-        const changedPaths = evidence.taskBaseTree !== undefined
-          ? await captureCanonicalChangedPaths(
-              canonicalGit,
-              sandbox.worktree,
-              evidence.taskBaseTree,
-            )
-          : await collectTaskChangedPaths(sandbox.worktree, runGit);
-        if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
-          validation = await args.runValidationCommands(
-            args.validationCommands,
-            admission.cwd,
-            config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-            undefined,
+      } else {
+        let ownedValidationHandled = false;
+        if (
+          evidence.currentReviewTree !== undefined &&
+          evidence.fullTaskReviewHash !== undefined
+        ) {
+          const fullResult = await args.runFullSuiteValidation({
+            commands: args.validationCommands,
+            adapters: args.validationAdapters,
+            worktree: sandbox.worktree,
+            cwd: admission.cwd,
+            validationCwd: args.validationCwd?.trim() || '.',
+            expectedTreeOid: evidence.currentReviewTree,
+            fullTaskReviewHash: evidence.fullTaskReviewHash,
+            timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
             diagnosticDir,
-          );
-        } else {
-          // Paths from Git are worktree-relative, while Vitest runs from the
-          // validated product directory. Rebase them before argv construction.
-          // Vitest related has no `--` terminator, so prefix a leading dash.
-          const pathArgs = changedPaths
-            .map((path) => relative(admission.cwd, resolve(sandbox.worktree, path)).replaceAll('\\', '/'))
-            .map((path) => path.startsWith('-') ? `./${path}` : path);
-          const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
-          if (!relatedTestInvocationSelectionFits(pathArgs, argv)) {
+            ...(args.cancel !== undefined ? { cancelled: args.cancel } : {}),
+          }, {
+            runGit: canonicalGit,
+            runCommand: (_command, argv, commandCwd, timeoutMs, commandDiagnosticDir, options) =>
+              args.runValidationCommandArgv(
+                argv,
+                commandCwd,
+                timeoutMs,
+                commandDiagnosticDir,
+                options,
+              ),
+            ...(args.runValidationCommandArgv === defaultRunValidationCommandArgv
+              ? { runTrustedVitestObserver }
+              : {}),
+          });
+          if (!fullResult.ok && !fullSuiteFailureAllowsCloseoutFallback(fullResult)) {
+            validation = fullResult;
+            ownedValidationHandled = true;
+          } else if (fullResult.ok) {
+            const reusableEvidence = selectReusableFullSuiteEvidence(fullResult);
+            fullSuiteAttestation = reusableEvidence?.attestation;
+            if (reusableEvidence !== undefined) {
+              validationReceipt =
+                durableValidationReceipt(reusableEvidence.receipt, 'full-suite-reused');
+              validation = { ok: true };
+              ownedValidationHandled = true;
+            } else if (
+              args.closeoutValidationStrategy === 'product-commands' &&
+              fullResult.validationReceipt.outcome === 'passed'
+            ) {
+              const compactAny = fullResult.receipts[0];
+              validationReceipt = compactAny !== undefined
+                ? durableValidationReceipt(compactAny, 'full-suite-ran')
+                : undefined;
+              validation = { ok: true };
+              ownedValidationHandled = true;
+            }
+          }
+        }
+        if (!ownedValidationHandled) {
+          if (args.closeoutValidationStrategy === 'vitest-related') {
+            const changedPaths = evidence.taskBaseTree !== undefined
+              ? await captureCanonicalChangedPaths(
+                  canonicalGit,
+                  sandbox.worktree,
+                  evidence.taskBaseTree,
+                )
+              : await collectTaskChangedPaths(sandbox.worktree, runGit);
+            if (await taskChangesRequireFullValidation(sandbox.worktree, changedPaths, runGit)) {
+              validation = await args.runValidationCommands(
+                args.validationCommands,
+                admission.cwd,
+                config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+                undefined,
+                diagnosticDir,
+              );
+            } else {
+              // Paths from Git are worktree-relative, while Vitest runs from the
+              // validated product directory. Rebase them before argv construction.
+              // Vitest related has no `--` terminator, so prefix a leading dash.
+              const pathArgs = changedPaths
+                .map((path) => relative(admission.cwd, resolve(sandbox.worktree, path)).replaceAll('\\', '/'))
+                .map((path) => path.startsWith('-') ? `./${path}` : path);
+              const argv = ['npx', 'vitest', 'related', '--run', '--passWithNoTests', ...pathArgs];
+              if (!relatedTestInvocationSelectionFits(pathArgs, argv)) {
+                validation = await args.runValidationCommands(
+                  args.validationCommands,
+                  admission.cwd,
+                  config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+                  undefined,
+                  diagnosticDir,
+                );
+              } else {
+                const related = await runRelatedTestCloseout({
+                  task,
+                  selectedPaths: pathArgs,
+                  argv,
+                  cwd: admission.cwd,
+                  validationCwd: validationCwdLabel,
+                  timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+                  diagnosticDir,
+                  workRunsDir: args.workRunsDir,
+                  runId: descriptor.id,
+                  runValidationCommandArgv: args.runValidationCommandArgv,
+                  emit: args.emit,
+                });
+                validation = related.validation;
+                relatedTestDiagnostic = related.diagnostic;
+                relatedRan = true;
+              }
+            }
+          } else {
             validation = await args.runValidationCommands(
               args.validationCommands,
               admission.cwd,
@@ -1277,39 +1501,48 @@ function buildOrchestrationDeps(args: {
               undefined,
               diagnosticDir,
             );
-          } else {
-            const related = await runRelatedTestCloseout({
-              task,
-              selectedPaths: pathArgs,
-              argv,
-              cwd: admission.cwd,
-              validationCwd: validationCwdLabel,
-              timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-              diagnosticDir,
-              workRunsDir: args.workRunsDir,
-              runId: descriptor.id,
-              runValidationCommandArgv: args.runValidationCommandArgv,
-              emit: args.emit,
-            });
-            validation = related.validation;
-            relatedTestDiagnostic = related.diagnostic;
           }
         }
-      } else {
-        validation = await args.runValidationCommands(
-          args.validationCommands,
-          admission.cwd,
-          config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-          undefined,
-          diagnosticDir,
-        );
+      }
+      if (validation === undefined) {
+        throw new Error('closeout validation did not produce a result');
       }
       if (validation.ok) {
+        if (
+          validationReceipt === undefined &&
+          relatedRan &&
+          evidence.currentReviewTree !== undefined
+        ) {
+          validationReceipt = {
+            provenance: 'related-ran',
+            command: 'npx vitest related',
+            treeOid: evidence.currentReviewTree,
+            outcome: 'passed',
+            coverage: 'unsupported',
+          };
+        }
+        if (validationReceipt !== undefined) {
+          args.emit?.({
+            kind: 'activity',
+            data: {
+              event: 'closeout-validation',
+              taskId: task.id,
+              provenance: validationReceipt.provenance,
+              treeOid: validationReceipt.treeOid,
+              validationReceipt,
+              line: validationReceipt.provenance === 'full-suite-reused'
+                ? `closeout reused Rune-owned full-suite validation for ${task.id}`
+                : `closeout recorded ${validationReceipt.provenance} validation for ${task.id}`,
+            },
+          });
+        }
         const approvedHash = evidence.reviewSurfaceHash;
         if (approvedHash === undefined) {
           return {
             ok: true,
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+            ...(fullSuiteAttestation !== undefined ? { fullSuiteAttestation } : {}),
+            ...(validationReceipt !== undefined ? { validationReceipt } : {}),
           };
         }
         if (
@@ -1349,6 +1582,8 @@ function buildOrchestrationDeps(args: {
           return {
             ok: true,
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+            ...(fullSuiteAttestation !== undefined ? { fullSuiteAttestation } : {}),
+            ...(validationReceipt !== undefined ? { validationReceipt } : {}),
           };
         }
         const reviewSurfaceFailure: ReviewSurfaceFailure = {
@@ -1461,14 +1696,48 @@ function buildOrchestrationDeps(args: {
 
     commitCloseout: async (task: SelectedTask): Promise<CloseoutCommit> => {
       const message = `rune(${product}): closeout — ${task.text}`.slice(0, 200);
-      // `-A` (not `-u`) is deliberate: a task's work product routinely includes
-      // NEW files (new source/test modules), which `-u` would miss. This runs in
-      // the isolated throwaway worktree on a GC'd branch — never the live repo —
-      // so staging everything is the correct capture of the task's full output.
-      await runGit(['add', '-A'], { cwd });
-      await runGit(['commit', '-m', message], { cwd });
-      const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd });
-      return { sha: stdout.trim(), subject: message };
+      if (pendingCloseoutContext === undefined || pendingCloseoutTasks === undefined) {
+        throw new Error('closeout managed content was not prepared');
+      }
+      if (
+        readManagedWorktreeFile(cwd, contextPath, true) !== pendingCloseoutContext ||
+        readManagedWorktreeFile(cwd, tasksPath, false) !== pendingCloseoutTasks
+      ) {
+        throw new Error('closeout managed content changed before commit');
+      }
+      // The canonical post-validation capture left the reviewed task tree in
+      // the index. Stage only Rune's two deterministic closeout mutations;
+      // never `add -A` here, because a late validation descendant could mutate
+      // the worktree after review and otherwise smuggle that mutation into the
+      // commit.
+      const closeoutContextPath = relative(cwd, contextPath).replaceAll('\\', '/');
+      const closeoutTasksPath = relative(cwd, tasksPath).replaceAll('\\', '/');
+      let sha: string;
+      if (pendingReviewedTreeOid !== undefined) {
+        sha = await commitReviewedCloseoutTree({
+          cwd,
+          branch,
+          reviewedTreeOid: pendingReviewedTreeOid,
+          contextPath: closeoutContextPath,
+          contextContent: pendingCloseoutContext,
+          tasksPath: closeoutTasksPath,
+          tasksContent: pendingCloseoutTasks,
+          message,
+          runGit,
+        });
+      } else {
+        // Legacy task evidence predating canonical review trees remains
+        // compatible, but current role workflows always take the exact-tree
+        // commit path above.
+        await runGit(['add', '--', closeoutContextPath, closeoutTasksPath], { cwd });
+        await runGit(['commit', '-m', message], { cwd });
+        const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd });
+        sha = stdout.trim();
+      }
+      pendingCloseoutContext = undefined;
+      pendingCloseoutTasks = undefined;
+      pendingReviewedTreeOid = undefined;
+      return { sha, subject: message };
     },
     // WIP preservation checkpoint before a closeout terminal. The
     // discriminated result keeps "already clean" distinct from a failed git
@@ -2263,12 +2532,14 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let baseBranch = 'main';
       let repoPath = runSandbox.worktree;
       let validationCommands: string[] = [];
+      let validationAdapters: ValidationAdapter[] = [];
       let validationCwd: string | undefined;
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
         baseBranch = productConfig.baseBranch;
         repoPath = productConfig.repoPath;
         validationCommands = productConfig.validationCommands ?? [];
+        validationAdapters = productConfig.validationAdapters ?? [];
         validationCwd = productConfig.validationCwd;
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
       } catch (err) {
@@ -2311,6 +2582,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let finalizerTerminal: MutationEvent | null = null;
       let finalizerDisposition: ExecutionTerminalDisposition | null = null;
       let gateHeldReason: GateFailReason | null = null;
+      let gateValidationReceipt: import('./work-run-gate.js').GateValidationReceipt | undefined;
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
         sandbox: runSandbox,
@@ -2320,6 +2592,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch: recovery?.baseBranch ?? baseBranch,
         validationCommands,
+        validationAdapters,
         ...(validationCwd !== undefined ? { validationCwd } : {}),
         closeoutValidationStrategy,
         workRunsDir: deps.workRunsDir,
@@ -2328,6 +2601,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         captureTaskBaseTree: deps.captureTaskBaseTree,
         runValidationCommandArgv: deps.runValidationCommandArgv,
         runValidationCommands: deps.runValidationCommands,
+        runFullSuiteValidation: deps.runFullSuiteValidation,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         cancel: ctx.cancel,
         cancelReason: ctx.cancelReason,
@@ -2508,22 +2782,29 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             },
             recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
             readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
+            recordGateValidationReceipt: (receipt) =>
+              writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
             gate: () =>
-              withBaseBranchLock(product, baseBranch, () =>
-                deps.runGate({
+              withBaseBranchLock(product, baseBranch, async () => {
+                const verdict = await deps.runGate({
                   product,
                   repoPath,
                   baseBranch,
                   branch,
                   integrationWorktree,
                   validationCommands,
+                  validationAdapters,
                   ...(validationCwd !== undefined ? { validationCwd } : {}),
                   tasksRemaining: gateTasksRemaining,
                   concurrentRun: hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
                   validationArtifactsDir: join(deps.workRunsDir, descriptor.id, 'validation-diagnostics'),
-                }),
-              ),
+                  cancelled: ctx.cancel,
+                });
+                gateValidationReceipt = verdict.validationReceipt;
+                return verdict;
+              }),
+            cancelled: ctx.cancel,
             alert: (reason) => {
               gateHeldReason = reason;
               log.warn('orchestrated run held at branch-complete: gate failed', {
@@ -2618,6 +2899,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           if (relatedTestDiagnostics.length > 0) {
             data['relatedTestDiagnostics'] = relatedTestDiagnostics;
             data['relatedTestDiagnostic'] = relatedTestDiagnostic;
+          }
+          if (gateValidationReceipt !== undefined) {
+            data['gateValidationReceipt'] = gateValidationReceipt;
           }
           if (readOutcome(finalizerResult.terminalEvent) === 'branch-complete') {
             data['merged'] = finalizerResult.merged;
@@ -2885,6 +3169,9 @@ async function persistTerminalArtifacts(args: {
       const data = (terminal.data ?? {}) as Record<string, unknown>;
       const trigger = isExecutionTerminalTrigger(data['trigger']) ? data['trigger'] : undefined;
       const disposition = isExecutionTerminalDisposition(data['disposition']) ? data['disposition'] : undefined;
+      const gateValidationReceipt = isGateValidationReceipt(data['gateValidationReceipt'])
+        ? data['gateValidationReceipt']
+        : undefined;
       const terminalFactEvent = {
         mutationId: descriptor.id,
         ts: terminal.ts,
@@ -2893,13 +3180,21 @@ async function persistTerminalArtifacts(args: {
           event: 'terminal-facts',
           ...(trigger !== undefined ? { trigger } : {}),
           ...(disposition !== undefined ? { disposition } : {}),
+          ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
           line: [
             trigger ? `terminal ${trigger.kind}: ${trigger.reason}` : '',
             disposition ? `disposition ${disposition.kind}: ${disposition.reason}` : '',
+            gateValidationReceipt
+              ? `merge validation ${gateValidationReceipt.outcome} (${gateValidationReceipt.commands.length} commands)`
+              : '',
           ].filter(Boolean).join(' · '),
         },
       };
-      if (trigger !== undefined || disposition !== undefined) {
+      if (
+        trigger !== undefined ||
+        disposition !== undefined ||
+        gateValidationReceipt !== undefined
+      ) {
         await sink.append(terminalFactEvent);
       }
       await sink.finish();
@@ -3090,6 +3385,9 @@ function buildOrchestratedSummary(args: {
   const relatedTestDiagnostic = isRelatedTestDiagnostic(data['relatedTestDiagnostic'])
     ? data['relatedTestDiagnostic']
     : relatedTestDiagnostics?.at(-1)?.diagnostic;
+  const gateValidationReceipt = isGateValidationReceipt(data['gateValidationReceipt'])
+    ? data['gateValidationReceipt']
+    : undefined;
   const cancelReason = trigger.kind === 'cancellation' ? trigger.cancellationSource : data['cancelReason'];
   const exit: ExitFacts = {
     exitCode:
@@ -3138,6 +3436,7 @@ function buildOrchestratedSummary(args: {
     ...(contextFailure !== undefined ? { contextFailure } : {}),
     ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
     ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
+    ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
   };
 }
 

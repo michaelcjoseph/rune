@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROJECT_ROOT } from '../config.js';
-import type { GitRunner } from './sandbox-runtime.js';
+import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import type { ValidationCommandResult } from './work-run-gate-runtime.js';
 import type {
   FinalizerEffects,
@@ -58,7 +58,24 @@ const mockRunFinalizer = vi.hoisted(() =>
     ],
   })),
 );
-const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({ ok: true })));
+const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({
+  ok: true,
+  validationReceipt: {
+    version: 1,
+    treeOid: 'a'.repeat(40),
+    fullTaskReviewHash: 'b'.repeat(64),
+    completedAt: '2026-07-30T12:00:00.000Z',
+    commandFingerprint: 'c'.repeat(64),
+    configurationFingerprint: 'd'.repeat(64),
+    dependencyFingerprint: 'e'.repeat(64),
+    outcome: 'passed',
+    commands: [{
+      command: 'npm test',
+      outcome: 'passed',
+      coverage: 'unsupported',
+    }],
+  },
+})));
 type MockValidationCommandListResult =
   | { ok: true }
   | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean; outputTail: string } };
@@ -68,6 +85,9 @@ const mockRunValidationCommands = vi.hoisted(() =>
     _cwd: string,
     _timeoutMs: number,
   ): Promise<MockValidationCommandListResult> => ({ ok: true })),
+);
+const mockRunFullSuiteValidation = vi.hoisted(() =>
+  vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
 );
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
@@ -113,7 +133,9 @@ vi.mock('./work-run-gate-runtime.js', () => ({
   collectTaskChangedPaths: mockCollectTaskChangedPaths,
   taskChangesRequireFullValidation: mockTaskChangesRequireFullValidation,
   runValidationCommandArgv: mockRunValidationCommandArgv,
+  runTrustedVitestObserver: mockRunValidationCommandArgv,
   runValidationCommands: mockRunValidationCommands,
+  runFullSuiteValidation: mockRunFullSuiteValidation,
 }));
 
 import {
@@ -125,6 +147,9 @@ import {
   fileTerminalBugsToBacklog,
   parkInFlightOrchestratedRuns,
   defaultShutdownParkDeps,
+  selectReusableFullSuiteEvidence,
+  fullSuiteFailureAllowsCloseoutFallback,
+  commitReviewedCloseoutTree,
 } from './orchestrated-work-runner.js';
 import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
 import {
@@ -210,6 +235,20 @@ function initGitRepo(dir: string): void {
   execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env, stdio: 'ignore' });
   execFileSync('git', ['add', '.'], { cwd: dir, env, stdio: 'ignore' });
   execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir, env, stdio: 'ignore' });
+}
+
+function git(dir: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  }).trim();
 }
 
 function makeDescriptor(
@@ -331,6 +370,174 @@ function latestRun(id: string): SupervisedRun {
   return runs[runs.length - 1]!;
 }
 
+describe('commitReviewedCloseoutTree — real Git isolation', () => {
+  function makeReviewedRepo(): {
+    dir: string;
+    reviewedTree: string;
+    contextPath: string;
+    tasksPath: string;
+  } {
+    const { dir } = makeWorktree('demo', '- [ ] task one\n');
+    writeValidProjectContext(dir);
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'feature.ts'), 'export const reviewed = true;\n');
+    initGitRepo(dir);
+    git(dir, 'config', 'user.name', 'test');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'checkout', '-b', 'rune-work/demo');
+    writeFileSync(join(dir, 'src', 'feature.ts'), 'export const reviewed = "complete";\n');
+    git(dir, 'add', '-A');
+    const reviewedTree = git(dir, 'write-tree');
+    return {
+      dir,
+      reviewedTree,
+      contextPath: 'docs/projects/demo/context.md',
+      tasksPath: 'docs/projects/demo/tasks.md',
+    };
+  }
+
+  it('commits the reviewed tree plus only prepared managed files and leaves late work dirty', async () => {
+    const fixture = makeReviewedRepo();
+    try {
+      const nextContext = '# Project Context\n\n## Current State\nClosed out.\n';
+      const nextTasks = '- [x] task one\n';
+      writeFileSync(join(fixture.dir, fixture.contextPath), nextContext);
+      writeFileSync(join(fixture.dir, fixture.tasksPath), nextTasks);
+      writeFileSync(join(fixture.dir, 'late-unreviewed.txt'), 'must not land\n');
+
+      const sha = await commitReviewedCloseoutTree({
+        cwd: fixture.dir,
+        branch: 'rune-work/demo',
+        reviewedTreeOid: fixture.reviewedTree,
+        contextPath: fixture.contextPath,
+        contextContent: nextContext,
+        tasksPath: fixture.tasksPath,
+        tasksContent: nextTasks,
+        message: 'closeout',
+        runGit: defaultRunGit,
+      });
+
+      expect(git(fixture.dir, 'show', `${sha}:src/feature.ts`))
+        .toBe('export const reviewed = "complete";');
+      expect(git(fixture.dir, 'show', `${sha}:${fixture.contextPath}`)).toBe(nextContext.trim());
+      expect(git(fixture.dir, 'show', `${sha}:${fixture.tasksPath}`)).toBe(nextTasks.trim());
+      expect(git(fixture.dir, 'ls-tree', '-r', '--name-only', sha))
+        .not.toContain('late-unreviewed.txt');
+      expect(git(fixture.dir, 'status', '--porcelain'))
+        .toContain('?? late-unreviewed.txt');
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the update-ref CAS when HEAD advances concurrently', async () => {
+    const fixture = makeReviewedRepo();
+    try {
+      const parent = git(fixture.dir, 'rev-parse', 'HEAD');
+      let advanced = false;
+      const racingGit: GitRunner = async (args, options) => {
+        const result = await defaultRunGit(args, options);
+        if (args[0] === 'commit-tree' && !advanced) {
+          advanced = true;
+          const competing = git(
+            fixture.dir,
+            'commit-tree',
+            fixture.reviewedTree,
+            '-p',
+            parent,
+            '-m',
+            'concurrent',
+          );
+          git(
+            fixture.dir,
+            'update-ref',
+            'refs/heads/rune-work/demo',
+            competing,
+            parent,
+          );
+        }
+        return result;
+      };
+
+      await expect(commitReviewedCloseoutTree({
+        cwd: fixture.dir,
+        branch: 'rune-work/demo',
+        reviewedTreeOid: fixture.reviewedTree,
+        contextPath: fixture.contextPath,
+        contextContent: '# Project Context\n\nconcurrent-safe\n',
+        tasksPath: fixture.tasksPath,
+        tasksContent: '- [x] task one\n',
+        message: 'closeout',
+        runGit: racingGit,
+      })).rejects.toThrow();
+      expect(git(fixture.dir, 'rev-parse', 'HEAD')).not.toBe(parent);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('selectReusableFullSuiteEvidence', () => {
+  const attestation = { coverage: { status: 'complete' } };
+  const receipt = { coverage: 'complete' };
+
+  it('requires the launcher aggregate verdict even when one adapter produced evidence', () => {
+    expect(selectReusableFullSuiteEvidence({
+      ok: true,
+      attestations: [attestation],
+      receipts: [receipt],
+      coverageComplete: false,
+      validationReceipt: { outcome: 'passed', commands: [] },
+    } as never)).toBeUndefined();
+  });
+
+  it('requires both a complete attestation and compact receipt', () => {
+    expect(selectReusableFullSuiteEvidence({
+      ok: true,
+      attestations: [attestation],
+      receipts: [receipt],
+      coverageComplete: true,
+      validationReceipt: { outcome: 'passed', commands: [] },
+    } as never)).toEqual({ attestation, receipt });
+    expect(selectReusableFullSuiteEvidence({
+      ok: true,
+      attestations: [attestation],
+      receipts: [],
+      coverageComplete: true,
+      validationReceipt: { outcome: 'passed', commands: [] },
+    } as never)).toBeUndefined();
+  });
+
+  it('allows closeout fallback only for green execution with invalid structured coverage', () => {
+    const coverageOnlyFailure = {
+      ok: false,
+      command: 'npm test',
+      result: {
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputTail: 'trusted evidence missing',
+      },
+      attestations: [],
+      receipts: [],
+      coverageComplete: false,
+      validationReceipt: {
+        outcome: 'failed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'invalid' }],
+      },
+    };
+    expect(fullSuiteFailureAllowsCloseoutFallback(coverageOnlyFailure as never)).toBe(true);
+    expect(fullSuiteFailureAllowsCloseoutFallback({
+      ...coverageOnlyFailure,
+      result: { ...coverageOnlyFailure.result, exitCode: 1 },
+    } as never)).toBe(false);
+    expect(fullSuiteFailureAllowsCloseoutFallback({
+      ...coverageOnlyFailure,
+      validationReceipt: { outcome: 'drifted', commands: [] },
+    } as never)).toBe(false);
+  });
+});
+
 describe('orchestratedWorkApplier', () => {
   it('is a non-auto-approve? — registered as autoApprove work applier kind', () => {
     expect(orchestratedWorkApplier.kind).toBe('orchestrated-work');
@@ -416,9 +623,28 @@ describe('orchestratedWorkApplier', () => {
       refreshRegistrySpy = vi.fn();
       mockRunFinalizer.mockClear();
       mockRunGate.mockReset();
-      mockRunGate.mockResolvedValue({ ok: true });
+      mockRunGate.mockResolvedValue({
+        ok: true,
+        validationReceipt: {
+          version: 1,
+          treeOid: 'a'.repeat(40),
+          fullTaskReviewHash: 'b'.repeat(64),
+          completedAt: '2026-07-30T12:00:00.000Z',
+          commandFingerprint: 'c'.repeat(64),
+          configurationFingerprint: 'd'.repeat(64),
+          dependencyFingerprint: 'e'.repeat(64),
+          outcome: 'passed',
+          commands: [{
+            command: 'npm test',
+            outcome: 'passed',
+            coverage: 'unsupported',
+          }],
+        },
+      });
       mockRunValidationCommands.mockReset();
       mockRunValidationCommands.mockResolvedValue({ ok: true });
+      mockRunFullSuiteValidation.mockReset();
+      mockRunFullSuiteValidation.mockResolvedValue({ ok: true });
       mockCollectTaskChangedPaths.mockReset();
       mockCollectTaskChangedPaths.mockResolvedValue([]);
       mockRunValidationCommandArgv.mockReset();
@@ -1887,7 +2113,12 @@ describe('orchestratedWorkApplier', () => {
         ]),
       );
       expect(gitCalls).toEqual(expect.arrayContaining([
-        ['add', '-A'],
+        [
+          'add',
+          '--',
+          'docs/projects/demo/context.md',
+          'docs/projects/demo/tasks.md',
+        ],
         ['commit', '-m', 'rune(rune): closeout — Build the streak core'],
         ['rev-parse', 'HEAD'],
       ]));
@@ -2181,6 +2412,183 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it('reuses an exact Rune-owned full-suite attestation at closeout without spawning vitest related', async () => {
+      const runId = 'mut-closeout-full-suite-reused';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-full-suite-reused-'));
+      const productsFile = join(artifactsDir, 'products.json');
+      const repoPath = join(artifactsDir, 'canonical-repo');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      const canonicalDiff = 'diff --git a/src/feature.ts b/src/feature.ts\n+attested\n';
+      const reviewHash = canonicalReviewDiffHash(canonicalDiff);
+      const reviewTree = '2'.repeat(40);
+      const attestation = {
+        version: 1,
+        treeOid: reviewTree,
+        fullTaskReviewHash: reviewHash,
+        validationCwd: '.',
+        configuredArgv: [['npm', 'run', 'build'], ['npm', 'test']],
+        adapter: { runner: 'vitest', version: 1 },
+        commandFingerprint: 'c'.repeat(64),
+        configurationFingerprint: 'd'.repeat(64),
+        dependencyFingerprint: 'e'.repeat(64),
+        startedAt: '2026-07-30T12:00:00.000Z',
+        completedAt: '2026-07-30T12:00:05.000Z',
+        durationMs: 5_000,
+        execution: { outcome: 'passed', exitCode: 0, timedOut: false, cancelled: false },
+        coverage: {
+          status: 'complete',
+          manifest: {
+            version: 1,
+            runner: 'vitest',
+            completedNormally: true,
+            collectionErrors: 0,
+            discovered: { suites: 3, tests: 7 },
+            completed: {
+              suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+            },
+          },
+        },
+      };
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(productsFile, JSON.stringify({
+        rune: {
+          repoPath,
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+          validationCommands: ['npm run build', 'npm test'],
+          validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
+          closeoutValidationStrategy: 'vitest-related',
+        },
+      }));
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockRunFullSuiteValidation.mockResolvedValueOnce({
+        ok: true,
+        attestations: [attestation],
+        receipts: [{
+          version: 1,
+          command: 'npm test',
+          treeOid: reviewTree,
+          fullTaskReviewHash: reviewHash,
+          outcome: 'passed',
+          coverage: 'complete',
+          completedAt: '2026-07-30T12:00:05.000Z',
+          discovered: { suites: 3, tests: 7 },
+          completed: {
+            suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+          },
+        }],
+        coverageComplete: true,
+        validationReceipt: {
+          outcome: 'passed',
+          commands: [{
+            command: 'npm test',
+            outcome: 'passed',
+            coverage: 'complete',
+            discovered: { suites: 3, tests: 7 },
+            completed: {
+              suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
+            },
+          }],
+        },
+      });
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'rev-list') return { stdout: 'closeout-sha\n', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-sha\n', stderr: '' };
+        if (gitArgs[0] === 'hash-object') return { stdout: `${'4'.repeat(40)}\n`, stderr: '' };
+        if (gitArgs[0] === 'write-tree') return { stdout: `${'3'.repeat(40)}\n`, stderr: '' };
+        if (gitArgs[0] === 'commit-tree') return { stdout: 'closeout-sha\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const runCanonicalGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'write-tree') return { stdout: `${reviewTree}\n`, stderr: '' };
+        if (gitArgs.includes('diff')) return { stdout: canonicalDiff, stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Build the streak core\n');
+          writeValidProjectContext(dir);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runGit,
+        runCanonicalGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+          reviewSurfaceHash: reviewHash,
+          taskBaseTree: '1'.repeat(40),
+          currentReviewTree: reviewTree,
+          fullTaskReviewHash: reviewHash,
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, runId),
+          ctx,
+        ));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+        expect(terminal?.kind).toBe('completed');
+        expect(mockRunFullSuiteValidation).toHaveBeenCalledTimes(1);
+        expect(mockRunValidationCommandArgv).not.toHaveBeenCalled();
+        expect(mockRunValidationCommands).not.toHaveBeenCalled();
+        expect(mockCollectTaskChangedPaths).not.toHaveBeenCalled();
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'closeout-validation',
+              taskId: 'build-the-streak-core',
+              provenance: 'full-suite-reused',
+              treeOid: reviewTree,
+              validationReceipt: expect.objectContaining({
+                provenance: 'full-suite-reused',
+                command: 'npm test',
+                coverage: 'complete',
+              }),
+            }),
+          }),
+        ]));
+        const taskRecords = readFileSync(
+          join(artifactsDir, runId, 'task-records.jsonl'),
+          'utf8',
+        );
+        expect(taskRecords).toContain('"fullSuiteAttestation"');
+        expect(taskRecords).toContain('"provenance":"full-suite-reused"');
+        expect(taskRecords).not.toContain('/Users/');
+        expect(taskRecords).not.toContain('outputTail');
+        const transcript = readFileSync(
+          join(artifactsDir, runId, 'transcript.jsonl'),
+          'utf8',
+        );
+        expect(transcript).toContain('"validationReceipt"');
+        expect(transcript).toContain('"provenance":"full-suite-reused"');
+        expect(destroyed).toBe(true);
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('confirms a structured loopback host conflict with the exact related selection before hash verification and closeout', async () => {
       const runId = 'mut-closeout-validation-passes';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-passes-'));
@@ -2250,11 +2658,20 @@ describe('orchestratedWorkApplier', () => {
         });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
-        if (gitArgs[0] === 'add') operations.push('git:add');
-        if (gitArgs[0] === 'commit') operations.push('git:commit');
+        if (gitArgs[0] === 'update-index') operations.push('git:add');
+        if (gitArgs[0] === 'commit-tree') operations.push('git:commit-tree');
         if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-pass-sha\n', stderr: '' };
         if (gitArgs[0] === 'rev-list') return { stdout: 'closeout-pass-sha\n', stderr: '' };
         if (gitArgs[0] === 'diff') return { stdout: ' src/feature.ts | 1 +\n', stderr: '' };
+        if (gitArgs[0] === 'hash-object') {
+          return { stdout: `${'4'.repeat(40)}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'write-tree') {
+          return { stdout: `${'3'.repeat(40)}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'commit-tree') {
+          return { stdout: 'closeout-pass-sha\n', stderr: '' };
+        }
         if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
         return { stdout: '', stderr: '' };
       });
@@ -2331,13 +2748,14 @@ describe('orchestratedWorkApplier', () => {
           'validation:compatible-fallback',
           'review-surface:hash',
           'git:add',
-          'git:commit',
+          'git:commit-tree',
         ]));
         expect(operations.indexOf('validation:initial-conflict'))
           .toBeLessThan(operations.indexOf('validation:compatible-fallback'));
         expect(operations.indexOf('validation:compatible-fallback'))
           .toBeLessThan(operations.indexOf('review-surface:hash'));
-        expect(operations.indexOf('review-surface:hash')).toBeLessThan(operations.indexOf('git:commit'));
+        expect(operations.indexOf('review-surface:hash'))
+          .toBeLessThan(operations.indexOf('git:commit-tree'));
         expect(mockRunValidationCommands).not.toHaveBeenCalled();
         expect(mockCollectTaskChangedPaths).not.toHaveBeenCalled();
         expect(runCanonicalGit).toHaveBeenCalledWith(
@@ -3481,7 +3899,24 @@ describe('orchestratedWorkApplier', () => {
         'utf8',
       );
       process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
-      mockRunGate.mockResolvedValueOnce({ ok: true });
+      mockRunGate.mockResolvedValueOnce({
+        ok: true,
+        validationReceipt: {
+          version: 1,
+          treeOid: 'a'.repeat(40),
+          fullTaskReviewHash: 'b'.repeat(64),
+          completedAt: '2026-07-30T12:00:00.000Z',
+          commandFingerprint: 'c'.repeat(64),
+          configurationFingerprint: 'd'.repeat(64),
+          dependencyFingerprint: 'e'.repeat(64),
+          outcome: 'passed',
+          commands: [{
+            command: 'npm test -- --runInBand',
+            outcome: 'passed',
+            coverage: 'unsupported',
+          }],
+        },
+      });
       mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
         const actual = await vi.importActual<typeof import('./work-run-finalizer.js')>('./work-run-finalizer.js');
         return actual.runFinalizer(input, effects);
@@ -3569,6 +4004,29 @@ describe('orchestratedWorkApplier', () => {
     it('production finalize adapter preserves the failed-gate hold invariant through the real finalizer', async () => {
       const runId = 'mut-orch-real-gate-held';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-real-gate-held-artifacts-'));
+      const gateValidationReceipt = {
+        version: 1 as const,
+        treeOid: 'a'.repeat(40),
+        fullTaskReviewHash: 'b'.repeat(64),
+        completedAt: '2026-07-30T12:00:00.000Z',
+        commandFingerprint: 'c'.repeat(64),
+        configurationFingerprint: 'd'.repeat(64),
+        dependencyFingerprint: 'e'.repeat(64),
+        outcome: 'failed' as const,
+        commands: [
+          { command: 'npm run build', outcome: 'passed' as const, coverage: 'unsupported' as const },
+          {
+            command: 'npm test',
+            outcome: 'failed' as const,
+            coverage: 'complete' as const,
+            discovered: { suites: 3, tests: 7 },
+            completed: {
+              suites: 3, tests: 7, passed: 6, failed: 1,
+              skipped: 0, todo: 0, cancelled: 0,
+            },
+          },
+        ],
+      };
       const operations: string[] = [];
       const phases: string[] = [];
       const runGit = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
@@ -3587,7 +4045,11 @@ describe('orchestratedWorkApplier', () => {
         return { stdout: '', stderr: '' };
       });
 
-      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
+      mockRunGate.mockResolvedValueOnce({
+        ok: false,
+        reason: 'tests-red',
+        validationReceipt: gateValidationReceipt,
+      });
       mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
         const actual = await vi.importActual<typeof import('./work-run-finalizer.js')>('./work-run-finalizer.js');
         return actual.runFinalizer(input, effects);
@@ -3635,7 +4097,18 @@ describe('orchestratedWorkApplier', () => {
           gateHeldReason: 'tests-red',
           baseBranch: 'main',
           dispatchMode: 'orchestrated',
+          gateValidationReceipt,
         });
+        const summary = JSON.parse(
+          readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8'),
+        );
+        expect(summary).toMatchObject({ gateValidationReceipt });
+        const transcript = readFileSync(
+          join(artifactsDir, runId, 'transcript.jsonl'),
+          'utf8',
+        );
+        expect(transcript).toContain('"gateValidationReceipt"');
+        expect(transcript).toContain('"event":"terminal-facts"');
         expect(phases).toEqual([
           'classified',
           'transcript-flushed',
@@ -5100,6 +5573,72 @@ describe('buildOrchestrationDeps — production closures', () => {
       });
 
       expect(checks).toEqual({ ok: true });
+    });
+
+    it('falls back to related validation when execution is green but canonical coverage evidence is missing', async () => {
+      let checks: Awaited<ReturnType<OrchestrationDeps['runCloseoutChecks']>> | undefined;
+      const approvedHash = canonicalReviewDiffHash(canonicalDiff);
+      const requiredTask = { ...TASK, validationPolicy: 'required' as const };
+      mockRunFullSuiteValidation.mockReset();
+      mockRunFullSuiteValidation.mockResolvedValueOnce({
+        ok: false,
+        command: 'npm test',
+        result: {
+          exitCode: 0,
+          timedOut: false,
+          cancelled: false,
+          outputTail: 'trusted Vitest lifecycle evidence was missing or incomplete',
+        },
+        attestations: [],
+        receipts: [],
+        coverageComplete: false,
+        validationReceipt: {
+          outcome: 'failed',
+          commands: [{ command: 'npm test', outcome: 'passed', coverage: 'invalid' }],
+        },
+      });
+      mockRunValidationCommandArgv.mockClear();
+      mockRunValidationCommandArgv.mockResolvedValue({
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+        outputHead: '',
+        outputTail: '',
+        diagnosticArtifacts: [],
+      });
+
+      await withRealDeps({
+        runId: 'mut-closeout-coverage-fallback',
+        resumed: false,
+        runCanonicalGit: canonicalGitStub(),
+        probe: async (deps) => {
+          checks = await deps.runCloseoutChecks(
+            requiredTask,
+            evidence({
+              reviewSurfaceHash: approvedHash,
+              fullTaskReviewHash: approvedHash,
+              taskBaseTree: '1111111111111111111111111111111111111111',
+              currentReviewTree: currentTree,
+            }),
+          );
+        },
+      });
+
+      expect(mockRunFullSuiteValidation).toHaveBeenCalledOnce();
+      expect(mockRunValidationCommandArgv).toHaveBeenCalledWith(
+        expect.arrayContaining(['vitest', 'related']),
+        expect.any(String),
+        expect.any(Number),
+        expect.any(String),
+      );
+      expect(checks).toMatchObject({
+        ok: true,
+        validationReceipt: {
+          provenance: 'related-ran',
+          outcome: 'passed',
+          coverage: 'unsupported',
+        },
+      });
     });
   });
 });

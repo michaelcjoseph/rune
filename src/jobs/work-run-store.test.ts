@@ -23,6 +23,7 @@ import {
   existsSync,
   readdirSync,
   mkdirSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,6 +34,8 @@ import {
   readRecentIndex,
   readWorkRunSummaryResult,
   readWorkRunSummary,
+  readGateValidationReceipt,
+  writeGateValidationReceipt,
 } from './work-run-store.js';
 import type { WorkRunSummary, WorkRunIndexRow } from './work-run-store.js';
 import type { ContextCloseoutFailure } from '../intent/context-closeout.js';
@@ -41,6 +44,16 @@ import {
   executionFailureSummary,
   type ExecutionFailure,
 } from '../intent/execution-failure.js';
+
+const gateReceiptIdentity = {
+  version: 1 as const,
+  treeOid: 'a'.repeat(40),
+  fullTaskReviewHash: 'b'.repeat(64),
+  completedAt: '2026-07-30T12:00:00.000Z',
+  commandFingerprint: 'c'.repeat(64),
+  configurationFingerprint: 'd'.repeat(64),
+  dependencyFingerprint: 'e'.repeat(64),
+};
 
 // ---------------------------------------------------------------------------
 // Temp dir management — one fresh dir per test
@@ -286,6 +299,55 @@ describe('writeSummary', () => {
         },
       }],
     });
+  });
+
+  it('round-trips a compact merge-gate receipt and drops malformed optional evidence', () => {
+    const receipt = {
+      ...gateReceiptIdentity,
+      outcome: 'passed' as const,
+      commands: [
+        { command: 'npm run build', outcome: 'passed' as const, coverage: 'unsupported' as const },
+        {
+          command: 'npm test',
+          outcome: 'passed' as const,
+          coverage: 'complete' as const,
+          discovered: { suites: 1, tests: 2 },
+          completed: {
+            suites: 1, tests: 2, passed: 2, failed: 0,
+            skipped: 0, todo: 0, cancelled: 0,
+          },
+        },
+      ],
+    };
+    const summary = makeSummary({
+      id: 'merge-gate-attested',
+      gateValidationReceipt: receipt,
+    });
+    writeSummary(join(tmpDir, summary.id), summary);
+    expect(readWorkRunSummary(tmpDir, summary.id)).toMatchObject({
+      gateValidationReceipt: receipt,
+    });
+
+    const malformed = makeSummary({ id: 'merge-gate-malformed' }) as unknown as Record<string, unknown>;
+    malformed['gateValidationReceipt'] = {
+      outcome: 'passed',
+      commands: [{
+        command: 'npm test --reporter=/Users/operator/private/reporter.mjs',
+        outcome: 'passed',
+        coverage: 'complete',
+      }],
+      output: 'TELEGRAM_BOT_TOKEN=secret',
+    };
+    mkdirSync(join(tmpDir, 'merge-gate-malformed'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'merge-gate-malformed', 'summary.json'),
+      JSON.stringify(malformed),
+    );
+
+    const restored = readWorkRunSummary(tmpDir, 'merge-gate-malformed');
+    expect(restored).not.toHaveProperty('gateValidationReceipt');
+    expect(JSON.stringify(restored)).not.toContain('/Users/operator');
+    expect(JSON.stringify(restored)).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 
   it('round-trips a bounded conflict sample with its larger total count', () => {
@@ -598,6 +660,86 @@ describe('readWorkRunSummaryResult', () => {
     }));
 
     expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
+});
+
+describe('merge-gate validation receipt', () => {
+  const receipt = {
+    ...gateReceiptIdentity,
+    outcome: 'passed' as const,
+    commands: [{
+      command: 'npm test',
+      outcome: 'passed' as const,
+      coverage: 'complete' as const,
+      discovered: { suites: 2, tests: 5 },
+      completed: {
+        suites: 2,
+        tests: 5,
+        passed: 4,
+        failed: 0,
+        skipped: 1,
+        todo: 0,
+        cancelled: 0,
+      },
+    }],
+  };
+
+  it('atomically restores the bounded receipt written before merge', () => {
+    writeGateValidationReceipt(tmpDir, 'mut-gate-1', receipt);
+
+    expect(readGateValidationReceipt(tmpDir, 'mut-gate-1')).toEqual(receipt);
+    expect(readdirSync(join(tmpDir, 'mut-gate-1'))).toEqual(['gate-validation.json']);
+  });
+
+  it('drops malformed historical evidence and rejects invalid writes', () => {
+    const runDir = join(tmpDir, 'mut-gate-2');
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'gate-validation.json'), '{"outcome":"passed"}', 'utf8');
+
+    expect(readGateValidationReceipt(tmpDir, 'mut-gate-2')).toBeUndefined();
+    expect(() => writeGateValidationReceipt(
+      tmpDir,
+      'mut-gate-3',
+      { ...gateReceiptIdentity, outcome: 'passed', commands: [] } as never,
+    )).toThrow('invalid merge-gate validation receipt');
+    expect(() => writeGateValidationReceipt(tmpDir, 'mut-gate-4', {
+      ...gateReceiptIdentity,
+      outcome: 'failed',
+      commands: [{
+        command: 'npm test',
+        outcome: 'failed',
+        coverage: 'unsupported',
+      }],
+    } as never)).toThrow('merge-gate authorization receipt is not green');
+    expect(() => writeGateValidationReceipt(tmpDir, 'mut-gate-5', {
+      ...gateReceiptIdentity,
+      outcome: 'passed',
+      commands: [{
+        command: 'npm test',
+        outcome: 'passed',
+        coverage: 'complete',
+        discovered: { suites: 1, tests: 2 },
+        completed: {
+          suites: 1,
+          tests: 2,
+          passed: 1,
+          failed: 1,
+          skipped: 0,
+          todo: 0,
+          cancelled: 0,
+        },
+      }],
+    } as never)).toThrow('invalid merge-gate validation receipt');
+  });
+
+  it('does not follow a symlinked durable receipt', () => {
+    const outside = join(tmpDir, 'outside-receipt.json');
+    writeFileSync(outside, JSON.stringify(receipt), 'utf8');
+    const runDir = join(tmpDir, 'mut-gate-symlink');
+    mkdirSync(runDir);
+    symlinkSync(outside, join(runDir, 'gate-validation.json'));
+
+    expect(readGateValidationReceipt(tmpDir, 'mut-gate-symlink')).toBeUndefined();
   });
 });
 

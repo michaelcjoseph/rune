@@ -26,6 +26,12 @@ import {
   durableExecutionFailure,
 } from './execution-failure.js';
 import type { ExecutionFailure } from './execution-failure.js';
+import {
+  parseDurableValidationReceipt,
+  parseFullSuiteAttestation,
+  type DurableValidationReceipt,
+  type FullSuiteAttestation,
+} from './full-suite-attestation.js';
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -60,6 +66,10 @@ export interface TaskRunRecord {
   executionFailure?: ExecutionFailure;
   /** Related-test fallback evidence. Optional for historical JSONL. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Rune-owned canonical suite evidence. Optional for legacy records. */
+  fullSuiteAttestation?: FullSuiteAttestation;
+  /** Bounded validation provenance projected to operator surfaces. */
+  validationReceipt?: DurableValidationReceipt;
   /** Stable, bounded post-coder fan-in outcomes. Optional for historical JSONL. */
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
   /** Stable pre-mutation task tree. Optional for historical JSONL. */
@@ -82,6 +92,8 @@ export interface TaskRunRecord {
  * record carrying exactly the required field set.
  */
 export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
+  const fullSuiteAttestation = parseFullSuiteAttestation(input.fullSuiteAttestation);
+  const validationReceipt = parseDurableValidationReceipt(input.validationReceipt);
   return {
     taskId: input.taskId,
     taskText: input.taskText,
@@ -120,6 +132,12 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }
+      : {}),
+    ...(fullSuiteAttestation !== undefined
+      ? { fullSuiteAttestation }
+      : {}),
+    ...(validationReceipt !== undefined
+      ? { validationReceipt }
       : {}),
     ...(input.judgmentOutcomes !== undefined
       ? {

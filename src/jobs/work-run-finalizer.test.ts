@@ -27,6 +27,16 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const gateReceiptIdentity = {
+  version: 1 as const,
+  treeOid: 'a'.repeat(40),
+  fullTaskReviewHash: 'b'.repeat(64),
+  completedAt: '2026-07-30T12:00:00.000Z',
+  commandFingerprint: 'c'.repeat(64),
+  configurationFingerprint: 'd'.repeat(64),
+  dependencyFingerprint: 'e'.repeat(64),
+};
+
 // work-run-finalizer.ts is type-only at the scaffold stage, but the P0.4a impl
 // will import config-bearing modules (mutations/classify/store). Mock config so
 // the suite keeps loading cleanly once those imports land.
@@ -679,6 +689,103 @@ describe('runFinalizer — hold mode (P0.4a)', () => {
 // ---------------------------------------------------------------------------
 
 describe('runFinalizer — gated-merge mode (P1.5)', () => {
+  it('durably records the green validation receipt before merge begins', async () => {
+    const order: string[] = [];
+    const receipt = {
+      ...gateReceiptIdentity,
+      outcome: 'passed' as const,
+      commands: [{
+        command: 'npm test',
+        outcome: 'passed' as const,
+        coverage: 'unsupported' as const,
+      }],
+    };
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      gate: vi.fn(async () => {
+        order.push('gate');
+        return { ok: true as const, validationReceipt: receipt };
+      }),
+      recordGateValidationReceipt: vi.fn(() => {
+        order.push('receipt');
+      }),
+      mergeBranch: vi.fn(async () => {
+        order.push('merge');
+      }),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(result.merged).toBe(true);
+    expect(order).toEqual(['gate', 'receipt', 'merge']);
+  });
+
+  it('fails closed before merge when a green receipt cannot be persisted', async () => {
+    const mergeBranch = vi.fn(async () => {});
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      gate: vi.fn(async () => ({
+        ok: true as const,
+        validationReceipt: {
+          ...gateReceiptIdentity,
+          outcome: 'passed' as const,
+          commands: [{
+            command: 'npm test',
+            outcome: 'passed' as const,
+            coverage: 'unsupported' as const,
+          }],
+        },
+      })),
+      recordGateValidationReceipt: vi.fn(() => {
+        throw new Error('receipt store unavailable');
+      }),
+      mergeBranch,
+    });
+
+    await expect(runFinalizer(gatedMergeInput(), effects))
+      .rejects.toThrow('receipt store unavailable');
+    expect(mergeBranch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before persistence or merge when a green verdict carries red evidence', async () => {
+    const recordGateValidationReceipt = vi.fn();
+    const mergeBranch = vi.fn(async () => {});
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      gate: vi.fn(async () => ({
+        ok: true as const,
+        validationReceipt: {
+          ...gateReceiptIdentity,
+          outcome: 'failed' as const,
+          commands: [{
+            command: 'npm test',
+            outcome: 'failed' as const,
+            coverage: 'unsupported' as const,
+          }],
+        },
+      })),
+      recordGateValidationReceipt,
+      mergeBranch,
+    });
+
+    await expect(runFinalizer(gatedMergeInput(), effects))
+      .rejects.toThrow('green merge gate returned no green validation receipt');
+    expect(recordGateValidationReceipt).not.toHaveBeenCalled();
+    expect(mergeBranch).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after a green gate and stops before merging', async () => {
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      cancelled: vi.fn(() => true),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.alert).toHaveBeenCalledWith('validation-cancelled');
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+  });
+
   it('branch-complete project completion marks docs/projects/index.md Done exactly once after gate and merge but before summary/index persistence (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({

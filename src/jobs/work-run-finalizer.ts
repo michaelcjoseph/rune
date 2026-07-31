@@ -38,7 +38,11 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { MutationEvent } from '../transport/mutations.js';
 import type { WorkOutcome, WorkProductFacts } from './work-run-classify.js';
-import type { GateFailReason, GateResult } from './work-run-gate.js';
+import {
+  isGateValidationReceipt,
+  type GateFailReason,
+  type GateResult,
+} from './work-run-gate.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
@@ -232,6 +236,13 @@ export interface FinalizerEffects {
    *  validationCommands and they pass within the timeout). Runs in an
    *  integration worktree so a red check never alters local `main`. */
   gate?: () => Promise<GateResult>;
+  /** Fail-closed durable write of a green gate's bounded receipt. When this
+   *  effect is present, merge cannot begin until it succeeds. */
+  recordGateValidationReceipt?: (
+    receipt: NonNullable<GateResult['validationReceipt']>,
+  ) => void | Promise<void>;
+  /** Recheck cancellation after a green gate and immediately before merge. */
+  cancelled?: () => boolean;
   /** Alert the operator that a `gated-merge` run STOPPED at `branch-complete`
    *  (gate failed) instead of landing on `main`. */
   alert?: (reason: GateFailReason) => void;
@@ -910,6 +921,19 @@ async function runGatedMerge(
       const gateThroughMerge = async () => {
         const verdict = await gate();
         if (verdict.ok === true) {
+          if (effects.recordGateValidationReceipt !== undefined) {
+            if (
+              !isGateValidationReceipt(verdict.validationReceipt) ||
+              verdict.validationReceipt.outcome !== 'passed'
+            ) {
+              throw new Error('green merge gate returned no green validation receipt');
+            }
+            await effects.recordGateValidationReceipt(verdict.validationReceipt);
+          }
+          if (effects.cancelled?.() === true) {
+            alert('validation-cancelled');
+            return;
+          }
           gateAllowedBranchComplete = true;
           try {
             await mergeBranch();

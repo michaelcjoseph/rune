@@ -27,6 +27,7 @@ function greenFacts(over: Partial<GateFacts> = {}): GateFacts {
     treeClean: true,
     testsGreen: true,
     validationTimedOut: false,
+    validationCancelled: false,
     mergeConflict: false,
     ...over,
   };
@@ -69,6 +70,13 @@ describe('evaluateGate — hard merge gate (P1.5)', () => {
     expect(evaluateGate(greenFacts({ validationTimedOut: true }))).toEqual({
       ok: false,
       reason: 'validation-timeout',
+    });
+  });
+
+  it('fails with validation-cancelled when cancellation is observed', () => {
+    expect(evaluateGate(greenFacts({ validationCancelled: true }))).toEqual({
+      ok: false,
+      reason: 'validation-cancelled',
     });
   });
 

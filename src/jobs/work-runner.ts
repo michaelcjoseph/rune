@@ -12,11 +12,20 @@ import { parseAskUserQuestionEnvelope, pendingCheckForQuestion, type ParsedAskUs
 import { upsertRun, readAllRuns } from './supervision-store.js';
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
-import { writeSummary, appendIndexRow, recordWorkRunPhase, readLastWorkRunPhase, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import {
+  writeSummary,
+  appendIndexRow,
+  recordWorkRunPhase,
+  readLastWorkRunPhase,
+  writeGateValidationReceipt,
+  type WorkRunSummary,
+  type WorkRunIndexRow,
+} from './work-run-store.js';
 import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase } from './work-run-finalizer.js';
 import { runGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
-import type { GateFailReason } from './work-run-gate.js';
+import type { GateFailReason, GateValidationReceipt } from './work-run-gate.js';
+import type { ValidationAdapter } from '../intent/full-suite-attestation.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { rebuildRegistry } from './registry-rebuild.js';
@@ -63,6 +72,12 @@ export interface WorkRunRuntimeDeps {
   writeSummary: (dir: string, summary: WorkRunSummary) => void;
   /** Append one torn-line-tolerant row to the rolling index. */
   appendIndexRow: (filePath: string, row: WorkRunIndexRow) => void;
+  /** Fail-closed pre-merge persistence for the bounded validation receipt. */
+  writeGateValidationReceipt: (
+    baseDir: string,
+    runId: string,
+    receipt: GateValidationReceipt,
+  ) => void;
   /** Export the forensic evidence bundle into the per-run dir (best-effort,
    *  before the terminal event, while the worktree still exists). */
   runForensics: (opts: ExportForensicsOpts) => Promise<ForensicsResult>;
@@ -90,6 +105,7 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
     createSink: (runId, baseDir) => createTranscriptSink({ runId, baseDir }),
     writeSummary,
     appendIndexRow,
+    writeGateValidationReceipt,
     runForensics: exportForensics,
     // Durable per-run finalize-phase store (Phase 3.5) — gated-merge records its
     // resume checkpoint here; recovery reads the last phase to resume a crashed
@@ -657,12 +673,14 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         let baseBranch = 'main';
         let repoPath = '';
         let validationCommands: string[] = [];
+        let validationAdapters: ValidationAdapter[] = [];
         let validationCwd: string | undefined;
         try {
           const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
           baseBranch = productConfig.baseBranch;
           repoPath = productConfig.repoPath;
           validationCommands = productConfig.validationCommands ?? [];
+          validationAdapters = productConfig.validationAdapters ?? [];
           validationCwd = productConfig.validationCwd;
         } catch (err) {
           log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
@@ -698,6 +716,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // surface WHY a branch-complete run was held off main (never a silently-
         // dropped alert) on the Telegram/cockpit notification surface.
         let gateHeldReason: GateFailReason | null = null;
+        let gateValidationReceipt: GateValidationReceipt | undefined;
 
         // Single end timestamp shared by summary.json + the index row. Captured
         // inside the `classify` effect (when classification actually completes)
@@ -802,6 +821,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               workRunsDir: deps.workRunsDir,
               endedAt,
             });
+            if (gateValidationReceipt !== undefined) {
+              summary.gateValidationReceipt = gateValidationReceipt;
+            }
             try {
               deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
             } catch (err) {
@@ -861,19 +883,23 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // the value matters when recovery re-drives a crashed run.
           recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
           readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
+          recordGateValidationReceipt: (receipt) =>
+            deps.writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
+          cancelled: ctx.cancel,
           // --- gated-merge effects (Phase 3.5) ---
           // The hard gate runs INSIDE the per-product/per-base-branch lock so two
           // projects sharing one `main` serialize (req 14); the gate itself tests
           // `main` in a throwaway integration worktree, never the real checkout.
           gate: () =>
-            withBaseBranchLock(product, baseBranch, () =>
-              runGate({
+            withBaseBranchLock(product, baseBranch, async () => {
+              const verdict = await runGate({
                 product,
                 repoPath,
                 baseBranch,
                 branch,
                 integrationWorktree,
                 validationCommands,
+                validationAdapters,
                 ...(validationCwd !== undefined ? { validationCwd } : {}),
                 tasksRemaining: gateTasksRemaining,
                 // Live read inside the lock — accurate at gate time, not a stale
@@ -881,8 +907,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 concurrentRun: hasConcurrentRun(),
                 commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
                 validationArtifactsDir: join(config.WORK_RUNS_DIR, descriptor.id, 'validation-diagnostics'),
-              }),
-            ),
+                cancelled: ctx.cancel,
+              });
+              gateValidationReceipt = verdict.validationReceipt;
+              return verdict;
+            }),
           // Gate refused → the run holds at branch-complete off `main`. Never a
           // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
           alert: (reason: GateFailReason) => {
@@ -974,6 +1003,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // Stamp the base branch so the formatter renders "merged to <base>"
           // correctly for a non-`main` product (defaults to `main` if absent).
           termData['baseBranch'] = baseBranch;
+          if (gateValidationReceipt !== undefined) {
+            termData['gateValidationReceipt'] = gateValidationReceipt;
+          }
           if (!result.merged && gateHeldReason) termData['gateHeldReason'] = gateHeldReason;
           // Reassign covers the `data === null/undefined` case; on the normal
           // path termData aliases the existing object and the mutations above
@@ -983,27 +1015,28 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // failure must not deny the terminal — mirrors the finalizer's own
           // best-effort writeSummary).
           try {
-            deps.writeSummary(
-              join(deps.workRunsDir, descriptor.id),
-              buildSummary({
-                id: descriptor.id,
-                project: projectSlug,
-                product,
-                target: runTargetFromDescriptor(descriptor),
-                branch,
-                baseSha,
-                t0,
-                exit: streamResult.exit,
-                terminalEvent: result.terminalEvent,
-                sink,
-                workRunsDir: deps.workRunsDir,
-                endedAt,
-                merged: result.merged,
-                branchDeleted: result.branchDeleted,
-                baseBranch,
-                gateHeldReason: !result.merged && gateHeldReason ? gateHeldReason : undefined,
-              }),
-            );
+            const summary = buildSummary({
+              id: descriptor.id,
+              project: projectSlug,
+              product,
+              target: runTargetFromDescriptor(descriptor),
+              branch,
+              baseSha,
+              t0,
+              exit: streamResult.exit,
+              terminalEvent: result.terminalEvent,
+              sink,
+              workRunsDir: deps.workRunsDir,
+              endedAt,
+              merged: result.merged,
+              branchDeleted: result.branchDeleted,
+              baseBranch,
+              gateHeldReason: !result.merged && gateHeldReason ? gateHeldReason : undefined,
+            });
+            if (gateValidationReceipt !== undefined) {
+              summary.gateValidationReceipt = gateValidationReceipt;
+            }
+            deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
           } catch (err) {
             log.warn('work-runner: post-finalize summary re-write failed', {
               id: descriptor.id,
