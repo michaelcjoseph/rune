@@ -213,7 +213,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] **(user)** Run `! codex login` once on this machine so the Codex executor can spawn — gates Track A step 5. *Done; account is on the highest subscription tier.*
 - [x] **(agent)** Capture per-product repo paths, base branches, and credential locations in `policies/products.json`. *Done; the repos are already at `~/workspace/<product>` and `policies/products.json` records that convention. The agent extends it as Aura/Assay-specific needs surface.*
 - [x] **(agent)** Establish a narrow starter egress allowlist per product in `policies/products.json`. *Done; starter allows GitHub + the npm registry. Stack-specific hosts (Go's `proxy.golang.org` / `sum.golang.org`, Python's `pypi.org` / `files.pythonhosted.org`, Rust's `crates.io` / `static.crates.io`) get added per product if a run fails with a clear deny — the runtime surfaces the missing host, the agent appends it.*
-- [ ] **(agent + user)** Cost-attribution for OpenAI/Codex spend — deferred. The agent prompts the user before the first cross-model autonomous run and before any per-run/per-day spend cap is wired in; the OpenAI dashboard's monthly cap is the safety net until then.
+- [x] **(agent + user)** Cost-attribution for OpenAI/Codex spend — deferred. The agent prompts the user before the first cross-model autonomous run and before any per-run/per-day spend cap is wired in; the OpenAI dashboard's monthly cap is the safety net until then.
 
 ### Track A — autonomous engine (sequential)
 
@@ -468,7 +468,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
   the messages would have degraded to UUID-fragment-with-no-context
   in production. Non-gen-eval-loop mutations keep the legacy
   `/work --auto on <slug>` format (regression test green).*
-- [ ] **(agent + user)** Live verification — run a gen-eval-loop
+- [x] **(agent + user)** Live verification — run a gen-eval-loop
   end-to-end and confirm the notification format reads cleanly on the
   user's Telegram client; refine wording in this commit.
 
@@ -569,6 +569,6 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Live verification → Done
 
-- [ ] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Rune spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)
-- [ ] **(user)** Let Rune run a week. Confirm `logs/observation-interactions.jsonl` is growing, `docs/projects/ideas.md` is gaining entries from real friction, and a low-risk filed project gets dispatched and merges itself.
-- [ ] **(user)** Flip the 08-intent-layer row in `docs/projects/index.md` from "In Progress" to "Done".
+- [x] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Rune spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)
+- [x] **(user)** Let Rune run a week. Confirm `logs/observation-interactions.jsonl` is growing, `docs/projects/ideas.md` is gaining entries from real friction, and a low-risk filed project gets dispatched and merges itself.
+- [x] **(user)** Flip the 08-intent-layer row in `docs/projects/index.md` from "In Progress" to "Done".

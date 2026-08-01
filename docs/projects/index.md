@@ -13,7 +13,7 @@ its `spec.md`.
 | [05-library-into-kb](05-library-into-kb/spec.md) | Done | External reading library folded into the KB. |
 | [06-webview](06-webview/spec.md) | Done | A localhost web chat surface mirroring Telegram. |
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
-| [08-intent-layer](08-intent-layer/spec.md) | In Progress | Rune becomes an intent-layer orchestrator over multi-model sub-agents. |
+| [08-intent-layer](08-intent-layer/spec.md) | Done | Rune becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Done | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
 | [10-rune-identity-refactor](10-rune-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Rune orchestrator identity out of pkms/CLAUDE.md into rune. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
@@ -112,7 +112,7 @@ over non-stale wiki concepts.
   - Phase 3 — a `status: evergreen | active | stale` field on wiki concept frontmatter; `wiki-compiler` proposes (not applies) status changes via `knowledge/status-proposals.json` for weekly approval.
   - Phase 4 — polish (lapse hotspot report, graduation rule, revive-stale flow), deferred until usage data justifies.
 
-## 08-intent-layer — In Progress
+## 08-intent-layer — Done
 
 [Spec](08-intent-layer/spec.md)
 
