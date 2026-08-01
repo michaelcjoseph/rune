@@ -1,24 +1,5 @@
 ## Active
 
-- [x] **Validation sandbox behavior is discovered accidentally through test failures instead of being declared as capability-specific profiles, causing loopback and nested-sandbox tests to produce misleading red runs.**
-  - **What is broken.** Rune's default validation confinement correctly denies external networking and protects credentials, but some tests intentionally bind loopback sockets or exercise `sandbox-exec`. When a generic or `vitest related` run selects them under an incompatible outer Seatbelt profile, they fail with `EPERM` or nested-sandbox errors. The same code can pass in another invocation, making failures look flaky and sometimes routing infrastructure limits into coder repair.
-  - **Root cause.** Test capability needs are implicit in test implementation, while validation policy is primarily command-based. Multiple confinement layers can apply to one process tree, and the runner learns that a test needs loopback or nested-sandbox behavior only after it fails. The existing related-test compatible-confirmation path classifies a few known signatures, but it is reactive, output-dependent, and does not provide a shared capability contract for all validation stages.
-  - **Decided behavior.** Every Rune-owned validation command runs in one declared validation profile. Profiles specify the minimum permitted capabilities, including pure isolated execution, loopback-only server execution, and a dedicated sandbox-integration profile. External network denial and secret isolation remain mandatory in every profile. A test requiring a capability must be selected into its compatible profile before execution; product assertion failures remain distinct from unavailable-host capability failures.
-  - **Required fix.**
-    1. Define typed validation profiles and attach them to configured commands/tests with deterministic selection rules. Start with `isolated`, `loopback`, and `sandbox-integration`; do not grant broad network or filesystem access as a fallback.
-    2. Make one layer own process-tree confinement. Artifact and validation subprocesses must explicitly bypass inner Codex/Seatbelt sandboxing when an approved outer profile already encloses them; reject ambiguous or nested ownership at launch.
-    3. Configure the loopback profile to allow only local listener/client traffic required by test servers while continuing to deny external network access and Rune secrets.
-    4. Move real `sandbox-exec` assertions into a small, dedicated sandbox-integration profile. Use dependency injection or fixtures for ordinary unit tests rather than nesting Seatbelt inside generic test runs.
-    5. Run deterministic capability probes before dispatch and record the selected profile, probe result, and failure class. An unavailable required profile creates a typed operational hold, not a coder-repair loop.
-    6. Replace signature-only host-conflict inference with structured profile outcomes, retaining the existing compatible-confirmation behavior only as a transition path.
-  - **Acceptance criteria.**
-    - Pure tests run under the most restrictive profile and cannot access Rune secrets or external network.
-    - Loopback tests run successfully under a loopback-only profile and still cannot reach external hosts.
-    - Sandbox-integration tests run only in their dedicated profile; ordinary validation never invokes nested `sandbox-exec` accidentally.
-    - A missing capability is recorded as a typed operational validation failure and never becomes coder feedback.
-    - The same test selection produces deterministic profile choice and outcome across closeout, full validation, repair validation, and merge gates.
-    - Tests prove profile selection, process-tree ownership, loopback allowance/external denial, secret isolation, unavailable-capability holds, transition compatibility, and Cockpit/transcript diagnostics.
-
 - [ ] **Terminal WIP preservation has no explicit retry path, leaving a valid preserved branch stranded or tempting Recover to rewrite immutable terminal truth.**
   - **What is broken.** When terminal cleanup preserves dirty work as WIP, the run correctly retains its failure/cancellation/completion trigger and preservation disposition. The operator has no dedicated way to retry that terminal work. The existing Recover control is designed only for an active interrupted run and its resumable cursor. Reusing it for a terminal WIP would either violate its active-run preconditions or overwrite the original terminal record with a synthetic recovery.
   - **Root cause.** Rune models active-run recovery and terminal disposition separately, but exposes no operation that starts a new attempt from a terminal run's verified preserved branch/worktree while linking that attempt to the original terminal evidence. Cockpit recovery eligibility is deliberately restricted to active orchestrated mutations, and `requestOrchestratedRunRecovery()` correctly rejects a run that is no longer active.
@@ -130,6 +111,25 @@
     - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
 
 ## Done
+
+- [x] **Validation sandbox behavior is discovered accidentally through test failures instead of being declared as capability-specific profiles, causing loopback and nested-sandbox tests to produce misleading red runs.**
+  - **What is broken.** Rune's default validation confinement correctly denies external networking and protects credentials, but some tests intentionally bind loopback sockets or exercise `sandbox-exec`. When a generic or `vitest related` run selects them under an incompatible outer Seatbelt profile, they fail with `EPERM` or nested-sandbox errors. The same code can pass in another invocation, making failures look flaky and sometimes routing infrastructure limits into coder repair.
+  - **Root cause.** Test capability needs are implicit in test implementation, while validation policy is primarily command-based. Multiple confinement layers can apply to one process tree, and the runner learns that a test needs loopback or nested-sandbox behavior only after it fails. The existing related-test compatible-confirmation path classifies a few known signatures, but it is reactive, output-dependent, and does not provide a shared capability contract for all validation stages.
+  - **Decided behavior.** Every Rune-owned validation command runs in one declared validation profile. Profiles specify the minimum permitted capabilities, including pure isolated execution, loopback-only server execution, and a dedicated sandbox-integration profile. External network denial and secret isolation remain mandatory in every profile. A test requiring a capability must be selected into its compatible profile before execution; product assertion failures remain distinct from unavailable-host capability failures.
+  - **Required fix.**
+    1. Define typed validation profiles and attach them to configured commands/tests with deterministic selection rules. Start with `isolated`, `loopback`, and `sandbox-integration`; do not grant broad network or filesystem access as a fallback.
+    2. Make one layer own process-tree confinement. Artifact and validation subprocesses must explicitly bypass inner Codex/Seatbelt sandboxing when an approved outer profile already encloses them; reject ambiguous or nested ownership at launch.
+    3. Configure the loopback profile to allow only local listener/client traffic required by test servers while continuing to deny external network access and Rune secrets.
+    4. Move real `sandbox-exec` assertions into a small, dedicated sandbox-integration profile. Use dependency injection or fixtures for ordinary unit tests rather than nesting Seatbelt inside generic test runs.
+    5. Run deterministic capability probes before dispatch and record the selected profile, probe result, and failure class. An unavailable required profile creates a typed operational hold, not a coder-repair loop.
+    6. Replace signature-only host-conflict inference with structured profile outcomes, retaining the existing compatible-confirmation behavior only as a transition path.
+  - **Acceptance criteria.**
+    - Pure tests run under the most restrictive profile and cannot access Rune secrets or external network.
+    - Loopback tests run successfully under a loopback-only profile and still cannot reach external hosts.
+    - Sandbox-integration tests run only in their dedicated profile; ordinary validation never invokes nested `sandbox-exec` accidentally.
+    - A missing capability is recorded as a typed operational validation failure and never becomes coder feedback.
+    - The same test selection produces deterministic profile choice and outcome across closeout, full validation, repair validation, and merge gates.
+    - Tests prove profile selection, process-tree ownership, loopback allowance/external denial, secret isolation, unavailable-capability holds, transition compatibility, and Cockpit/transcript diagnostics.
 
 - [x] **Rune has no canonical full-suite attestation, so an agent can claim a green suite without proving that the configured suite discovered and executed every test for the reviewed tree.**
   - **What is broken.** Coder and self-review output can report `npm test` as green with a plausible test count, but that text is not a trusted validation result. A command can run from the wrong directory, use an altered configuration, terminate after a partial discovery, or execute a narrower selection while still sounding like a full suite. In project-24, successive role messages made incompatible statements about the full suite. Rune has no single durable record that can resolve the conflict.
