@@ -42,6 +42,29 @@ describe('config', () => {
     );
   });
 
+  /**
+   * None of these is an operator or product setting. Without this guard, a
+   * stale `.env.local`, launchd plist, or shell-profile value could reach a
+   * validation launch decision — and a broker socket plus attestation pair
+   * would let `runValidationCommandArgv` skip `sandbox-exec` for EVERY
+   * profile, not just sandbox-integration.
+   */
+  it.each([
+    'RUNE_VALIDATION_SANDBOX_BROKER_SOCKET',
+    'RUNE_VALIDATION_PROCESS_NONCE',
+    'RUNE_VALIDATION_CONFINEMENT_ATTESTATION',
+  ])('rejects the private launcher handoff variable %s in an operator environment', async (name) => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env[name] = 'inherited-from-somewhere';
+    const { assertOperatorConfig } = await import('./config.js');
+
+    expect(() => assertOperatorConfig()).toThrow(
+      new RegExp(`${name}.*reserved`, 'i'),
+    );
+  });
+
   it('loads the product-chat subsystem without placeholder Telegram credentials', async () => {
     delete process.env['TELEGRAM_BOT_TOKEN'];
     delete process.env['TELEGRAM_USER_ID'];
