@@ -459,3 +459,4 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
     });
   });
 });
+// @module-tag validation-loopback

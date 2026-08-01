@@ -166,6 +166,7 @@ import {
   taskChangesRequireFullValidation,
   runGate as defaultRunGate,
   runFullSuiteValidation as defaultRunFullSuiteValidation,
+  runProfiledVitestSelection,
   runTrustedVitestObserver,
   runValidationCommandArgv as defaultRunValidationCommandArgv,
   runValidationCommands as defaultRunValidationCommands,
@@ -179,6 +180,7 @@ import {
   type FullSuiteAttestation,
   type ValidationAdapter,
 } from '../intent/full-suite-attestation.js';
+import type { ValidationCommandProfile } from '../intent/validation-profiles.js';
 import {
   diagnoseRelatedTestFallback,
   diagnoseRelatedTestResult,
@@ -1173,6 +1175,7 @@ function buildOrchestrationDeps(args: {
   branch: string;
   baseBranch: string;
   validationCommands: string[];
+  validationCommandProfiles: ValidationCommandProfile[];
   validationAdapters: ValidationAdapter[];
   validationCwd?: string;
   closeoutValidationStrategy: CloseoutValidationStrategy;
@@ -1216,6 +1219,8 @@ function buildOrchestrationDeps(args: {
     productsConfigPath: config.PRODUCTS_CONFIG_FILE,
     modelPolicyPath: config.MODEL_POLICY_FILE,
     validationCommands: args.validationCommands,
+    validationCommandProfiles: args.validationCommandProfiles,
+    validationAdapters: args.validationAdapters,
     ...(args.validationCwd !== undefined ? { validationCwd: args.validationCwd } : {}),
     cap: ORCHESTRATED_ROUND_CAP,
     persistExecutionCheckpoint: async (executionCheckpoint) => {
@@ -1394,6 +1399,7 @@ function buildOrchestrationDeps(args: {
         ) {
           const fullResult = await args.runFullSuiteValidation({
             commands: args.validationCommands,
+            commandProfiles: args.validationCommandProfiles,
             adapters: args.validationAdapters,
             worktree: sandbox.worktree,
             cwd: admission.cwd,
@@ -1457,6 +1463,10 @@ function buildOrchestrationDeps(args: {
                 config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
                 undefined,
                 diagnosticDir,
+                {
+                  commandProfiles: args.validationCommandProfiles,
+                  adapters: args.validationAdapters,
+                },
               );
             } else {
               // Paths from Git are worktree-relative, while Vitest runs from the
@@ -1473,6 +1483,10 @@ function buildOrchestrationDeps(args: {
                   config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
                   undefined,
                   diagnosticDir,
+                  {
+                    commandProfiles: args.validationCommandProfiles,
+                    adapters: args.validationAdapters,
+                  },
                 );
               } else {
                 const related = await runRelatedTestCloseout({
@@ -1486,6 +1500,9 @@ function buildOrchestrationDeps(args: {
                   workRunsDir: args.workRunsDir,
                   runId: descriptor.id,
                   runValidationCommandArgv: args.runValidationCommandArgv,
+                  strictProfileSelection: args.validationAdapters.some(
+                    (adapter) => adapter.profileSelection === 'strict-tags-v1',
+                  ),
                   emit: args.emit,
                 });
                 validation = related.validation;
@@ -1500,6 +1517,10 @@ function buildOrchestrationDeps(args: {
               config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
               undefined,
               diagnosticDir,
+              {
+                commandProfiles: args.validationCommandProfiles,
+                adapters: args.validationAdapters,
+              },
             );
           }
         }
@@ -1813,6 +1834,7 @@ interface RelatedTestCloseoutArgs {
   workRunsDir: string;
   runId: string;
   runValidationCommandArgv: typeof defaultRunValidationCommandArgv;
+  strictProfileSelection?: boolean;
   emit?: (event: OrchestrationActivityEvent) => void;
 }
 
@@ -1822,6 +1844,18 @@ async function runRelatedTestCloseout(
   validation: ValidationCommandListResult;
   diagnostic?: RelatedTestDiagnostic;
 }> {
+  if (args.strictProfileSelection === true) {
+    return {
+      validation: await runProfiledVitestSelection({
+        command: 'npx vitest related',
+        argv: args.argv,
+        cwd: args.cwd,
+        timeoutMs: args.timeoutMs,
+        diagnosticDir: args.diagnosticDir,
+        runCommandArgv: args.runValidationCommandArgv,
+      }),
+    };
+  }
   const initialResult = await args.runValidationCommandArgv(
     args.argv,
     args.cwd,
@@ -2532,6 +2566,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let baseBranch = 'main';
       let repoPath = runSandbox.worktree;
       let validationCommands: string[] = [];
+      let validationCommandProfiles: ValidationCommandProfile[] = [];
       let validationAdapters: ValidationAdapter[] = [];
       let validationCwd: string | undefined;
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
@@ -2539,6 +2574,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         baseBranch = productConfig.baseBranch;
         repoPath = productConfig.repoPath;
         validationCommands = productConfig.validationCommands ?? [];
+        validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
         validationAdapters = productConfig.validationAdapters ?? [];
         validationCwd = productConfig.validationCwd;
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
@@ -2592,6 +2628,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch: recovery?.baseBranch ?? baseBranch,
         validationCommands,
+        validationCommandProfiles,
         validationAdapters,
         ...(validationCwd !== undefined ? { validationCwd } : {}),
         closeoutValidationStrategy,
@@ -2793,6 +2830,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   branch,
                   integrationWorktree,
                   validationCommands,
+                  validationCommandProfiles,
                   validationAdapters,
                   ...(validationCwd !== undefined ? { validationCwd } : {}),
                   tasksRemaining: gateTasksRemaining,

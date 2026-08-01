@@ -385,6 +385,68 @@ describe('TelegramSender', () => {
       expect(text.toLowerCase()).not.toContain('merged to main');
     });
 
+    it('a held gate surfaces "capability unavailable" and the profiles tried for a profile-unavailable receipt', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'branch-complete',
+          reason: '2 commit(s), all original tasks checked',
+          workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+          merged: false,
+          gateHeldReason: 'profile-unavailable',
+          gateValidationReceipt: {
+            ...gateReceiptIdentity,
+            version: 2,
+            outcome: 'profile-unavailable',
+            commands: [{
+              command: 'npm test',
+              outcome: 'failed',
+              coverage: 'unsupported',
+            }],
+            profilePlan: {
+              version: 1,
+              definitionFingerprint: 'f'.repeat(64),
+              shards: [
+                { command: 'npm test', argv: ['npm', 'test'], profile: 'isolated' },
+                { command: 'npm test', argv: ['npm', 'test'], profile: 'sandbox-integration' },
+              ],
+            },
+            profileOutcomes: [
+              {
+                profile: 'isolated',
+                outcome: 'passed',
+                probe: {
+                  profile: 'isolated',
+                  definitionFingerprint: '1'.repeat(64),
+                  confinementOwner: 'validation-launcher',
+                  outcome: 'passed',
+                  startedAt: '2026-07-30T12:00:00.000Z',
+                  completedAt: '2026-07-30T12:00:01.000Z',
+                },
+              },
+              {
+                profile: 'sandbox-integration',
+                outcome: 'profile-unavailable',
+                probe: {
+                  profile: 'sandbox-integration',
+                  definitionFingerprint: '2'.repeat(64),
+                  confinementOwner: 'sandbox-broker',
+                  outcome: 'unavailable',
+                  failureClass: 'profile-unavailable',
+                  startedAt: '2026-07-30T12:00:01.000Z',
+                  completedAt: '2026-07-30T12:00:02.000Z',
+                },
+              },
+            ],
+          },
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text.toLowerCase()).toContain('validation capability unavailable (operational hold) (1 command)');
+      expect(text).toContain('profiles isolated/sandbox-integration');
+      expect(text.toLowerCase()).not.toContain('merged to main');
+    });
+
     it('a partial outcome carries the commits + tasks X/Y summary', async () => {
       sender.onMutationEvent(
         workRunEvent('completed', {

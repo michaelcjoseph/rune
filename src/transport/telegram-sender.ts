@@ -28,7 +28,13 @@ function validationReceiptSuffix(data: Record<string, unknown>): string {
     ? data['gateValidationReceipt']
     : undefined;
   if (receipt === undefined) return '';
-  return ` · validation ${receipt.outcome} (${receipt.commands.length} command${receipt.commands.length === 1 ? '' : 's'})`;
+  const profiles = receipt.profilePlan === undefined
+    ? ''
+    : ` · profiles ${[...new Set(receipt.profilePlan.shards.map((shard) => shard.profile))].join('/')}`;
+  const outcome = receipt.outcome === 'profile-unavailable'
+    ? 'capability unavailable (operational hold)'
+    : receipt.outcome;
+  return ` · validation ${outcome} (${receipt.commands.length} command${receipt.commands.length === 1 ? '' : 's'})${profiles}`;
 }
 
 /** Phase 6 C5: structured terminal message for a gen-eval-loop mutation.

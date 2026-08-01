@@ -192,3 +192,4 @@ describe('POST /api/backlog/:product/items/:id/plan (09-expand-cockpit Phase 4)'
     expect(mockCreatePlanningSession).toHaveBeenCalledOnce();
   });
 });
+// @module-tag validation-loopback

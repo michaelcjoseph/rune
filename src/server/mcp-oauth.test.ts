@@ -968,3 +968,4 @@ describe('server/mcp-oauth (§7 MCP single-user OAuth)', () => {
     expect(second!.clientName).toBeUndefined();
   });
 });
+// @module-tag validation-loopback

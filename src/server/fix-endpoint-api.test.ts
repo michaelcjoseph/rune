@@ -578,3 +578,4 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     expect(mockStartFixRun).not.toHaveBeenCalled();
   });
 });
+// @module-tag validation-loopback

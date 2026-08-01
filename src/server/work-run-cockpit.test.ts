@@ -624,3 +624,4 @@ describe('GET /api/work-runs/:id/transcript — transcript stream (§5.3)', () =
     expect(res.status).toBe(404);
   });
 });
+// @module-tag validation-loopback

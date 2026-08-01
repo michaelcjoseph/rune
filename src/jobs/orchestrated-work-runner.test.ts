@@ -92,7 +92,13 @@ const mockRunFullSuiteValidation = vi.hoisted(() =>
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
 const mockRunValidationCommandArgv = vi.hoisted(() =>
-  vi.fn(async (): Promise<ValidationCommandResult> => ({
+  vi.fn(async (
+    _argv?: readonly string[],
+    _cwd?: string,
+    _timeoutMs?: number,
+    _diagnosticDir?: string,
+    _options?: unknown,
+  ): Promise<ValidationCommandResult> => ({
   exitCode: 0,
   timedOut: false,
   outputHead: '',
@@ -133,6 +139,27 @@ vi.mock('./work-run-gate-runtime.js', () => ({
   collectTaskChangedPaths: mockCollectTaskChangedPaths,
   taskChangesRequireFullValidation: mockTaskChangesRequireFullValidation,
   runValidationCommandArgv: mockRunValidationCommandArgv,
+  runProfiledVitestSelection: async (args: {
+    command: string;
+    argv: string[];
+    cwd: string;
+    timeoutMs: number;
+    diagnosticDir?: string;
+  }) => {
+    for (const profile of ['isolated', 'loopback', 'sandbox-integration'] as const) {
+      const result = await mockRunValidationCommandArgv(
+        [...args.argv, `--tags-filter=${profile}`],
+        args.cwd,
+        args.timeoutMs,
+        args.diagnosticDir,
+        { profile },
+      );
+      if (result.timedOut || result.cancelled || result.exitCode !== 0) {
+        return { ok: false, command: args.command, result };
+      }
+    }
+    return { ok: true };
+  },
   runTrustedVitestObserver: mockRunValidationCommandArgv,
   runValidationCommands: mockRunValidationCommands,
   runFullSuiteValidation: mockRunFullSuiteValidation,
@@ -2145,6 +2172,7 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            validationCommandProfiles: [{ command: 'npm test', profile: 'isolated' }],
             closeoutValidationStrategy: 'vitest-related',
           },
         }),
@@ -2289,6 +2317,7 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            validationCommandProfiles: [{ command: 'npm test', profile: 'isolated' }],
           },
         }),
         'utf8',
@@ -2458,6 +2487,10 @@ describe('orchestratedWorkApplier', () => {
           credentialsFile: '',
           egressAllowlist: [],
           validationCommands: ['npm run build', 'npm test'],
+          validationCommandProfiles: [
+            { command: 'npm run build', profile: 'isolated' },
+            { command: 'npm test', profile: 'isolated' },
+          ],
           validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
           closeoutValidationStrategy: 'vitest-related',
         },
@@ -2608,6 +2641,7 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            validationCommandProfiles: [{ command: 'npm test', profile: 'isolated' }],
             validationCwd: 'harness',
             closeoutValidationStrategy: 'vitest-related',
           },
@@ -2871,6 +2905,7 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test'],
+            validationCommandProfiles: [{ command: 'npm test', profile: 'isolated' }],
             closeoutValidationStrategy: 'vitest-related',
           },
         }),
@@ -2942,6 +2977,10 @@ describe('orchestratedWorkApplier', () => {
           120_000,
           undefined,
           join(artifactsDir, runId, 'validation-diagnostics'),
+          {
+            commandProfiles: [{ command: 'npm test', profile: 'isolated' }],
+            adapters: [],
+          },
         );
         expect(mockRunValidationCommandArgv).not.toHaveBeenCalled();
         expect(terminal?.data).not.toHaveProperty('relatedTestDiagnostic');
@@ -3894,6 +3933,10 @@ describe('orchestratedWorkApplier', () => {
             credentialsFile: '',
             egressAllowlist: [],
             validationCommands: ['npm test -- --runInBand'],
+            validationCommandProfiles: [{
+              command: 'npm test -- --runInBand',
+              profile: 'isolated',
+            }],
           },
         }),
         'utf8',
@@ -5625,12 +5668,15 @@ describe('buildOrchestrationDeps — production closures', () => {
       });
 
       expect(mockRunFullSuiteValidation).toHaveBeenCalledOnce();
-      expect(mockRunValidationCommandArgv).toHaveBeenCalledWith(
-        expect.arrayContaining(['vitest', 'related']),
-        expect.any(String),
-        expect.any(Number),
-        expect.any(String),
-      );
+      expect(mockRunValidationCommandArgv).toHaveBeenCalledTimes(3);
+      expect(mockRunValidationCommandArgv.mock.calls.map((call) => call[4])).toEqual([
+        { profile: 'isolated' },
+        { profile: 'loopback' },
+        { profile: 'sandbox-integration' },
+      ]);
+      expect(mockRunValidationCommandArgv.mock.calls.every((call) =>
+        call[0]?.includes('related'),
+      )).toBe(true);
       expect(checks).toMatchObject({
         ok: true,
         validationReceipt: {

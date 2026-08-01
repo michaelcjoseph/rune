@@ -629,3 +629,4 @@ describe('GET /api/mcp/monitoring', () => {
     }
   });
 });
+// @module-tag validation-loopback

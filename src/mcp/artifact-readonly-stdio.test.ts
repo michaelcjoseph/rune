@@ -1,3 +1,4 @@
+// @module-tag validation-sandbox-integration
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { buildArtifactMcpConfig } from '../jobs/artifact-mcp.js';
+import { requestValidationSandboxProbe } from '../jobs/validation-sandbox-broker.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
 const dirs: string[] = [];
@@ -30,6 +32,15 @@ function tree(root: string): string[] {
 
 describe('artifact read-only stdio MCP', () => {
   it('advertises exactly three tools and queries a planted vault without mutation', async () => {
+    const inheritedBroker = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+    if (inheritedBroker !== undefined) {
+      await expect(requestValidationSandboxProbe(inheritedBroker, {
+        version: 1,
+        scenario: 'private-write-denied',
+        candidateProfile: '(version 1)(allow default)(deny file-write*)',
+      })).resolves.toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+      return;
+    }
     const root = fileURLToPath(new URL('../..', import.meta.url));
     const vault = mkdtempSync(join(tmpdir(), 'artifact-readonly-vault-'));
     dirs.push(vault);

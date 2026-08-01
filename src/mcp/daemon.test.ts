@@ -1074,3 +1074,4 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(subsystemDocs).toMatch(/old web(?: server)? store tokens? (?:are )?not migrated/i);
   });
 });
+// @module-tag validation-loopback

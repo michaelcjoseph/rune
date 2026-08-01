@@ -21,6 +21,7 @@ import * as teamTaskWorkflow from './team-task-workflow.js';
 import {
   runTeamTaskWorkflow,
   RoleCancellationError,
+  ValidationProfileUnavailableError,
   type TeamTaskDeps,
   type ReviewerVerdict,
   type ObjectionFinding,
@@ -601,6 +602,35 @@ describe('team-task-workflow — test-intent repair', () => {
     expect(ev.testIntentRepair).toEqual({
       outcome: 'not-repaired',
       reason: 'executor unavailable',
+    });
+  });
+
+  it('preserves WIP as an operational hold when confirm-red loses its profile', async () => {
+    const deps = makeDeps({
+      qaWriteTests: async () => ({ kind: 'tests-written', testIds: ['t1'] }),
+      techLeadReviewTests: async () => ({ approved: false, notes: 'missing case' }),
+      techLeadRepairTests: async () => {
+        throw new ValidationProfileUnavailableError({
+          kind: 'profile-unavailable',
+          command: 'npm test',
+          prerequisite: 'sandbox-integration',
+          exitCode: null,
+          timedOut: false,
+          diagnostics: 'required validation capability became unavailable during confirm-red',
+        });
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'operational',
+      blockedReason: expect.stringContaining('preserving work in progress'),
+      taskValidationFailure: {
+        kind: 'profile-unavailable',
+        prerequisite: 'sandbox-integration',
+      },
     });
   });
 

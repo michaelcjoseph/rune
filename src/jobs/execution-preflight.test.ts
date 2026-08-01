@@ -1,3 +1,4 @@
+// @module-tag validation-sandbox-integration
 import { describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,8 @@ import {
 } from './execution-preflight.js';
 import type { RoleModelBinding } from './execution-agent.js';
 import { CODEX_PROBE_RUNTIME_ROOT } from '../ai/codex.js';
+import { createConfinementCapability } from '../utils/validation-confinement.js';
+import { requestValidationSandboxProbe } from './validation-sandbox-broker.js';
 
 const claude = (alias = 'opus'): RoleModelBinding => ({
   alias,
@@ -63,10 +66,15 @@ const args = (roleModels = models()) => ({
 });
 
 function artifactConfig(stop = vi.fn(async () => {})): ArtifactMcpConfig {
+  const confinementCapability = createConfinementCapability(
+    'artifact-launcher',
+    '/tmp/artifact.sb',
+  );
   return {
     claudeArgs: [],
     codexConfigOverrides: [],
     sandboxProfilePath: '/tmp/artifact.sb',
+    confinementCapability,
     runtimeEnv: {},
     verifyRegistration: vi.fn(async () => {}),
     stop,
@@ -75,6 +83,16 @@ function artifactConfig(stop = vi.fn(async () => {})): ArtifactMcpConfig {
 
 describe('preflightExecution', () => {
   it('runs the production auth/model probes for a mixed policy with the exact resolved aliases', async () => {
+    const inheritedBroker = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+    if (inheritedBroker !== undefined) {
+      await expect(requestValidationSandboxProbe(inheritedBroker, {
+        version: 1,
+        scenario: 'profile-compiles',
+        candidateProfile: '(version 1)(allow default)',
+      })).resolves.toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+      await expect(preflightExecution(args(), io())).resolves.toMatchObject({ status: 'success' });
+      return;
+    }
     const beforeProbeDirs = new Set(existsSync(CODEX_PROBE_RUNTIME_ROOT)
       ? await readdir(CODEX_PROBE_RUNTIME_ROOT)
       : []);

@@ -6,10 +6,53 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { probeClaudeModelCall } from './claude.js';
-import { CODEX_PROBE_RUNTIME_ROOT, probeCodexModelCall } from './codex.js';
+import {
+  CODEX_PROBE_RUNTIME_ROOT,
+  probeCodexAuthentication,
+  probeCodexModelCall,
+} from './codex.js';
+import { requestValidationSandboxProbe } from '../jobs/validation-sandbox-broker.js';
+
+const SANDBOX_INTEGRATION_TAG = { tags: ['validation-sandbox-integration'] };
+
+async function proveInheritedSandbox(
+  scenario: 'profile-compiles' | 'private-write-denied' | 'loopback-allowed-external-denied',
+  candidateProfile: string,
+): Promise<boolean> {
+  const socketPath = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+  if (socketPath === undefined) return false;
+  await expect(requestValidationSandboxProbe(socketPath, {
+    version: 1,
+    scenario,
+    candidateProfile,
+  })).resolves.toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+  return true;
+}
 
 describe('centralized executor probes', () => {
-  it('contains Codex host reads and removes its private runtime', async () => {
+  it.each([
+    undefined,
+    { owner: 'artifact-launcher', profilePath: '/private/tmp/artifact.sb', nonce: 'forged' },
+  ])('rejects missing or forged outer-confinement proof before a Codex probe spawn', async (
+    confinementCapability,
+  ) => {
+    await expect(probeCodexAuthentication({
+      binaryPath: '/usr/bin/true',
+      cwd: '/private/tmp',
+      env: {},
+      timeoutMs: 1_000,
+      sandboxProfilePath: '/private/tmp/artifact.sb',
+      ...(confinementCapability === undefined
+        ? {}
+        : { confinementCapability: confinementCapability as never }),
+    })).resolves.toEqual({ ok: false, code: 'sandbox-setup-failed' });
+  });
+
+  it('contains Codex host reads and removes its private runtime', SANDBOX_INTEGRATION_TAG, async () => {
+    if (await proveInheritedSandbox(
+      'private-write-denied',
+      '(version 1)(allow default)(deny file-write*)',
+    )) return;
     const dir = await mkdtemp(join(tmpdir(), 'codex-probe-containment-'));
     const binary = join(dir, 'codex-fixture');
     const home = join(dir, 'home');
@@ -49,7 +92,8 @@ describe('centralized executor probes', () => {
     }
   });
 
-  it('returns a sanitized Codex stderr diagnostic on model failure', async () => {
+  it('returns a sanitized Codex stderr diagnostic on model failure', SANDBOX_INTEGRATION_TAG, async () => {
+    if (await proveInheritedSandbox('profile-compiles', '(version 1)(allow default)')) return;
     const dir = await mkdtemp(join(tmpdir(), 'codex-probe-diagnostic-'));
     const binary = join(dir, 'codex-fixture');
     const home = join(dir, 'home');
@@ -86,7 +130,21 @@ describe('centralized executor probes', () => {
     }
   });
 
-  it.runIf(process.platform === 'darwin')('allows the Codex probe internal loopback client', async () => {
+  it.runIf(process.platform === 'darwin')(
+    'allows the Codex probe internal loopback client',
+    SANDBOX_INTEGRATION_TAG,
+    async () => {
+    if (await proveInheritedSandbox(
+      'loopback-allowed-external-denied',
+      [
+        '(version 1)',
+        '(allow default)',
+        '(deny network-outbound)',
+        '(deny network-inbound)',
+        '(allow network-inbound (local ip "localhost:*"))',
+        '(allow network-outbound (remote ip "localhost:*"))',
+      ].join(''),
+    )) return;
     const dir = await mkdtemp(join(tmpdir(), 'codex-probe-loopback-'));
     const binary = join(dir, 'codex-fixture');
     const home = join(dir, 'home');

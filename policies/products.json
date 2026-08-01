@@ -46,6 +46,12 @@
       "uv run pytest",
       "uv run ruff check .",
       "uv run assay --help"
+    ],
+    "validationCommandProfiles": [
+      { "command": "uv sync --all-groups", "profile": "isolated" },
+      { "command": "uv run pytest", "profile": "isolated" },
+      { "command": "uv run ruff check .", "profile": "isolated" },
+      { "command": "uv run assay --help", "profile": "isolated" }
     ]
   },
   "rune": {
@@ -73,10 +79,15 @@
       "npm run build",
       "npm test"
     ],
+    "validationCommandProfiles": [
+      { "command": "npm run build", "profile": "isolated" },
+      { "command": "npm test", "profile": "isolated" }
+    ],
     "validationAdapters": [
       {
         "command": "npm test",
-        "runner": "vitest"
+        "runner": "vitest",
+        "profileSelection": "strict-tags-v1"
       }
     ],
     "closeoutValidationStrategy": "vitest-related"
@@ -106,10 +117,15 @@
       "npm run build",
       "npm test"
     ],
+    "validationCommandProfiles": [
+      { "command": "npm run build", "profile": "isolated" },
+      { "command": "npm test", "profile": "isolated" }
+    ],
     "validationAdapters": [
       {
         "command": "npm test",
-        "runner": "vitest"
+        "runner": "vitest",
+        "profileSelection": "strict-tags-v1"
       }
     ],
     "closeoutValidationStrategy": "vitest-related"
@@ -160,6 +176,9 @@
     ],
     "validationCommands": [
       "npm run build"
+    ],
+    "validationCommandProfiles": [
+      { "command": "npm run build", "profile": "isolated" }
     ]
   },
   "brand": {
@@ -186,6 +205,9 @@
     ],
     "validationCommands": [
       "npm run build"
+    ],
+    "validationCommandProfiles": [
+      { "command": "npm run build", "profile": "isolated" }
     ]
   }
 }

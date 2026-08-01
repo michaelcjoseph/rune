@@ -36,6 +36,11 @@ import {
   containsCredentialMaterial,
   type ValidationAdapter,
 } from '../intent/full-suite-attestation.js';
+import {
+  isValidationProfile,
+  validateValidationCommandProfiles,
+  type ValidationCommandProfile,
+} from '../intent/validation-profiles.js';
 import { createLogger } from '../utils/logger.js';
 import {
   assertManagedWorktreeDirectory,
@@ -118,6 +123,9 @@ export interface ProductConfig {
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
    *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
   validationCommands?: string[];
+  /** Exact command-to-minimum-capability assignments. Live configuration must
+   * contain exactly one assignment for every validation command. */
+  validationCommandProfiles?: ValidationCommandProfile[];
   /** Exact configured validation commands that have a trusted structured
    * coverage adapter. Commands without a mapping still must exit zero but
    * cannot claim canonical suite coverage. */
@@ -321,13 +329,20 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
           Array.isArray(value) ||
           typeof (value as Record<string, unknown>)['command'] !== 'string' ||
           (value as Record<string, unknown>)['runner'] !== 'vitest' ||
-          !Object.keys(value).every((key) => key === 'command' || key === 'runner')
+          !Object.keys(value).every((key) =>
+            key === 'command' || key === 'runner' || key === 'profileSelection') ||
+          ((value as Record<string, unknown>)['profileSelection'] !== undefined &&
+            (value as Record<string, unknown>)['profileSelection'] !== 'strict-tags-v1')
         ) {
           throw new Error(
             `readProductsConfig: product '${slug}' has invalid validationAdapters entry in ${path}`,
           );
         }
-        const adapter = value as { command: string; runner: 'vitest' };
+        const adapter = value as {
+          command: string;
+          runner: 'vitest';
+          profileSelection?: 'strict-tags-v1';
+        };
         if (
           !validationCommands.includes(adapter.command) ||
           mappedCommands.has(adapter.command)
@@ -337,8 +352,54 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
           );
         }
         mappedCommands.add(adapter.command);
-        validationAdapters.push({ command: adapter.command, runner: 'vitest' });
+        validationAdapters.push({
+          command: adapter.command,
+          runner: 'vitest',
+          ...(adapter.profileSelection !== undefined
+            ? { profileSelection: adapter.profileSelection }
+            : {}),
+        });
       }
+    }
+    const rawValidationCommandProfiles = entry['validationCommandProfiles'];
+    if (!Array.isArray(rawValidationCommandProfiles)) {
+      if (validationCommands.length > 0) {
+        throw new Error(
+          `readProductsConfig: product '${slug}' is missing validationCommandProfiles in ${path}`,
+        );
+      }
+    }
+    const parsedValidationCommandProfiles: ValidationCommandProfile[] = [];
+    for (const value of Array.isArray(rawValidationCommandProfiles)
+      ? rawValidationCommandProfiles
+      : []) {
+      if (
+        value === null ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        typeof (value as Record<string, unknown>)['command'] !== 'string' ||
+        !isValidationProfile((value as Record<string, unknown>)['profile']) ||
+        !Object.keys(value).every((key) => key === 'command' || key === 'profile')
+      ) {
+        throw new Error(
+          `readProductsConfig: product '${slug}' has invalid validationCommandProfiles entry in ${path}`,
+        );
+      }
+      parsedValidationCommandProfiles.push({
+        command: (value as { command: string }).command,
+        profile: (value as { profile: ValidationCommandProfile['profile'] }).profile,
+      });
+    }
+    let validationCommandProfiles: ValidationCommandProfile[];
+    try {
+      validationCommandProfiles = validateValidationCommandProfiles(
+        validationCommands,
+        parsedValidationCommandProfiles,
+      );
+    } catch (error) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' ${(error as Error).message} in ${path}`,
+      );
     }
     out[slug] = {
       ...(productClass ? { class: productClass } : {}),
@@ -358,6 +419,7 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       // egressAllowlist. An empty list fails the merge gate with
       // `missing-validation-command`, never an unverified merge.
       validationCommands,
+      validationCommandProfiles,
       validationAdapters,
       ...(typeof entry['validationCwd'] === 'string'
         ? { validationCwd: entry['validationCwd'] }

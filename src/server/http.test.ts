@@ -178,3 +178,4 @@ describe('server/http', () => {
     }
   });
 });
+// @module-tag validation-loopback

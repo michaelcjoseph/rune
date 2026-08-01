@@ -82,6 +82,7 @@ describe('fix-run handoff stub-free acceptance', () => {
       credentialsFile: '',
       egressAllowlist: [],
       validationCommands: ['node --version'],
+      validationCommandProfiles: [{ command: 'node --version', profile: 'isolated' }],
     };
     writeFileSync(productsFile, JSON.stringify({ rune: product }));
 

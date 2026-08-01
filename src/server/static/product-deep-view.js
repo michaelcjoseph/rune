@@ -473,7 +473,14 @@ function gateValidationStatus(run) {
   const receipt = run.gateValidationReceipt;
   if (!receipt || !Array.isArray(receipt.commands)) return '';
   const count = receipt.commands.length;
-  return `Merge validation ${receipt.outcome} · ${count} command${count === 1 ? '' : 's'}`;
+  const profiles = Array.isArray(receipt.profilePlan?.shards)
+    ? [...new Set(receipt.profilePlan.shards.map((shard) => shard.profile))].join(' / ')
+    : '';
+  const outcome = receipt.outcome === 'profile-unavailable'
+    ? 'operational hold · capability unavailable'
+    : receipt.outcome;
+  return `Merge validation ${outcome} · ${count} command${count === 1 ? '' : 's'}` +
+    (profiles ? ` · ${profiles}` : '');
 }
 
 function renderRuns(view, liveRuns = {}) {

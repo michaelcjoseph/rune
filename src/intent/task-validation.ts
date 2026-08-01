@@ -6,6 +6,7 @@ export type TaskValidationFailureKind =
   | 'invalid-validation-cwd'
   | 'missing-executable'
   | 'command-failed'
+  | 'profile-unavailable'
   | 'timeout';
 
 /** Raw command output is bounded and scrubbed before this record is created. */

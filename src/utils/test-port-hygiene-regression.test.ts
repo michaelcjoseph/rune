@@ -219,3 +219,4 @@ describe('test-port-hygiene-regression (project 19 / test-plan §5A)', () => {
     ).toEqual([]);
   });
 });
+// @module-tag validation-loopback

@@ -69,6 +69,18 @@ export class ExecutionFailureError extends Error {
   }
 }
 
+/** Operational hold raised when a previously admitted validation capability
+ * becomes unavailable while work-in-progress is being repaired. */
+export class ValidationProfileUnavailableError extends Error {
+  readonly failure: TaskValidationFailure;
+
+  constructor(failure: TaskValidationFailure) {
+    super(failure.diagnostics);
+    this.name = 'ValidationProfileUnavailableError';
+    this.failure = failure;
+  }
+}
+
 /** Objection classes — defects normal usage won't surface until they matter.
  *  An open finding in any class is a hard gate. */
 export type ObjectionClass =
@@ -621,6 +633,27 @@ export async function runTeamTaskWorkflow(
           : {}),
       };
     }
+    if (err instanceof ValidationProfileUnavailableError) {
+      return {
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: roles.list(),
+        objectionOpen: false,
+        handoffNotes,
+        blockedReason: 'validation capability profile became unavailable; preserving work in progress',
+        taskValidationFailure: err.failure,
+        findingsLedger: [...findingsEvidence],
+        loopExitReason: 'operational',
+        ...reviewEvidence,
+        coderSelfReviews: [...coderSelfReviews],
+        ...(judgmentOutcomes.length > 0
+          ? { judgmentOutcomes: [...judgmentOutcomes] }
+          : {}),
+        ...(repairEvidence.testIntentRepair !== undefined
+          ? { testIntentRepair: repairEvidence.testIntentRepair }
+          : {}),
+      };
+    }
     if (err instanceof ExecutionFailureError) {
       return {
         taskId: task.id,
@@ -771,7 +804,10 @@ async function runGated(
           },
         });
       } catch (err) {
-        if (err instanceof RoleCancellationError) throw err;
+        if (
+          err instanceof RoleCancellationError ||
+          err instanceof ValidationProfileUnavailableError
+        ) throw err;
         // The repair is best-effort by contract — an internal throw degrades
         // to the QA bounce, never to a task-fatal `failed`.
         repair = { kind: 'not-repaired', reason: (err as Error).message };

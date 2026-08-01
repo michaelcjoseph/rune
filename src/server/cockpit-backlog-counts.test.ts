@@ -264,3 +264,4 @@ describe('GET /api/cockpit — backlog counts (09-expand-cockpit Phase 2)', () =
     expect(res.status).toBe(401);
   });
 });
+// @module-tag validation-loopback

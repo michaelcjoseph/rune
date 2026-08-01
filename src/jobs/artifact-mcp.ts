@@ -23,6 +23,10 @@ import {
 } from '../ai/isolated-mcp-config.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { getProductConfig } from './sandbox-runtime.js';
+import {
+  createConfinementCapability,
+  type ConfinementCapability,
+} from '../utils/validation-confinement.js';
 
 export const ARTIFACT_MCP_SERVER_NAME = 'rune-kb' as const;
 
@@ -30,6 +34,7 @@ export interface ArtifactMcpConfig {
   claudeArgs: string[];
   codexConfigOverrides: string[];
   sandboxProfilePath: string;
+  confinementCapability: ConfinementCapability;
   /** Provider-neutral runtime environment for the generated outer sandbox. */
   runtimeEnv: Record<string, string>;
   /** Codex-only auth/runtime environment. Omitted for Claude-format artifact sessions. */
@@ -467,6 +472,7 @@ export async function buildArtifactMcpConfig(
       'shell_environment_policy.inherit="none"',
     ],
     sandboxProfilePath: profilePath,
+    confinementCapability: createConfinementCapability('artifact-launcher', profilePath),
     runtimeEnv,
     ...(codexEnv !== undefined ? { codexEnv } : {}),
     verifyRegistration: () => verifyRelayRegistration({

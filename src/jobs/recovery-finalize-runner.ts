@@ -370,6 +370,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             branch,
             integrationWorktree,
             validationCommands: product.validationCommands ?? [],
+            validationCommandProfiles: product.validationCommandProfiles ?? [],
             validationAdapters: product.validationAdapters ?? [],
             ...(product.validationCwd !== undefined
               ? { validationCwd: product.validationCwd }

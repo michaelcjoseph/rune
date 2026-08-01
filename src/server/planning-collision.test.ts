@@ -166,3 +166,4 @@ describe('POST /api/backlog/:product/items/:id/plan — planning collision (09-e
     expect(res.status).toBe(200);
   });
 });
+// @module-tag validation-loopback

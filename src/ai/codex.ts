@@ -50,6 +50,10 @@ import {
 import type { OperationCancellation } from '../cancellation.js';
 import type { OpKind } from '../transport/notification-bus.js';
 import {
+  verifyConfinementCapability,
+  type ConfinementCapability,
+} from '../utils/validation-confinement.js';
+import {
   runBoundedProcess,
   type AiExecutorProbeResult,
   type BoundedProcessResult,
@@ -119,6 +123,9 @@ export interface CodexExecutorProbeOpts {
   /** Existing outer Seatbelt profile, used for an artifact-MCP authentication
    * probe. Ordinary probes get a private sensitive-read-deny profile below. */
   sandboxProfilePath?: string;
+  /** Nominal authority minted alongside sandboxProfilePath. A path or marker
+   * alone never authorizes the externally sandboxed Codex probe. */
+  confinementCapability?: ConfinementCapability;
 }
 
 type CodexProbeProcessResult =
@@ -188,6 +195,12 @@ async function boundedCodexProbe(
 ): Promise<CodexProbeProcessResult> {
   const binary = opts.binaryPath ?? getCodexBin();
   if (opts.sandboxProfilePath !== undefined) {
+    if (!verifyConfinementCapability(opts.confinementCapability, {
+      owner: 'artifact-launcher',
+      profilePath: opts.sandboxProfilePath,
+    })) {
+      return { status: 'probe-failure', code: 'sandbox-setup-failed' };
+    }
     const result = await runBoundedProcess(
       '/usr/bin/sandbox-exec',
       ['-f', opts.sandboxProfilePath, binary, ...args],
@@ -200,6 +213,9 @@ async function boundedCodexProbe(
       },
     );
     return { status: 'process', result };
+  }
+  if (opts.confinementCapability !== undefined) {
+    return { status: 'probe-failure', code: 'sandbox-setup-failed' };
   }
   if (process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec')) {
     return { status: 'probe-failure', code: 'sandbox-unavailable' };
@@ -526,12 +542,15 @@ export type RunCodexOpts = RunCodexBaseOpts & (
       sandboxMode?: CodexSandboxMode;
       externallySandboxed?: false;
       sandboxProfilePath?: never;
+      confinementCapability?: never;
     }
   | {
       /** Emit Codex's explicit external-sandbox bypass flag. */
       externallySandboxed: true;
       /** Required macOS Seatbelt profile that encloses the process tree. */
       sandboxProfilePath: string;
+      /** Nominal proof minted by the Rune launcher that owns this profile. */
+      confinementCapability: ConfinementCapability;
       sandboxMode?: never;
     }
 );
@@ -584,6 +603,14 @@ export async function runCodex(
   }
   if (!opts.externallySandboxed && opts.sandboxProfilePath) {
     throw new Error('RunCodexOpts sandboxProfilePath requires externallySandboxed');
+  }
+  if (
+    opts.externallySandboxed &&
+    !verifyConfinementCapability(opts.confinementCapability, {
+      profilePath: opts.sandboxProfilePath,
+    })
+  ) {
+    throw new Error('RunCodexOpts externallySandboxed requires a verified confinement capability');
   }
   const timeout = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const cwd = opts.cwd ?? PROJECT_ROOT;

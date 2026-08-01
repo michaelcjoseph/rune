@@ -18,6 +18,8 @@ const SAFE_TEST_KEYS = new Set([
   'isolate',
   'environment',
   'passWithNoTests',
+  'tags',
+  'strictTags',
 ]);
 const IGNORED_TEST_KEYS = new Set(['reporters', 'coverage']);
 const trustedInput = __RUNE_TRUSTED_INPUT__;
@@ -114,6 +116,18 @@ function sanitizeTestConfig(root, value) {
         throw new Error(`test.${key} is invalid`);
       }
       safe[key] = candidate;
+    } else if (key === 'tags') {
+      if (!Array.isArray(candidate) || candidate.length !== 2) {
+        throw new Error('test.tags must declare the two validation capability tags');
+      }
+      const names = candidate.map((tag) => tag?.name).sort();
+      if (JSON.stringify(names) !== JSON.stringify([
+        'validation-loopback',
+        'validation-sandbox-integration',
+      ])) {
+        throw new Error('test.tags contains an unsupported capability tag');
+      }
+      safe[key] = candidate.map((tag) => ({ name: tag.name }));
     } else if (key === 'environment') {
       if (!['node', 'jsdom', 'happy-dom', 'edge-runtime'].includes(candidate)) {
         throw new Error(`test.${key} is invalid`);
@@ -168,6 +182,14 @@ async function main() {
   if (!requestedRoot) throw new Error('missing validation cwd');
   const root = realpathSync(requestedRoot);
   const safeConfig = extractSafeConfig(root);
+  if (
+    trustedInput.selector !== undefined &&
+    (
+      typeof trustedInput.selector !== 'string' ||
+      trustedInput.selector.length > 128 ||
+      !/^[a-z!&| -]+$/.test(trustedInput.selector)
+    )
+  ) throw new Error('invalid validation profile selector');
   const reporterUrl =
     `data:text/javascript;base64,${Buffer.from(trustedInput.reporterSource).toString('base64')}`;
   const { default: RuneVitestAttestationReporter } = await import(reporterUrl);
@@ -185,6 +207,9 @@ async function main() {
     run: true,
     watch: false,
     reporters: [reporter],
+    ...(trustedInput.selector === undefined
+      ? {}
+      : { tagsFilter: [trustedInput.selector] }),
   });
   if (!vitest) throw new Error('Vitest observer failed to initialize');
   await vitest.close();

@@ -286,3 +286,4 @@ describe('backlog-write-lock — per-file mutex', () => {
     expect(bSawARunning).toBe(true);
   });
 });
+// @module-tag validation-loopback

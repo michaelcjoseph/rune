@@ -186,3 +186,4 @@ describe('Rune rebrand live acceptance harness', () => {
     expect(output).toMatch(/real Claude CLI|stub|fake/i);
   });
 });
+// @module-tag validation-loopback

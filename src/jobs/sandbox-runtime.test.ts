@@ -127,7 +127,22 @@ function writeProductsJson(
   contents: object = FIXTURE_PRODUCTS,
 ): string {
   const path = join(dir, 'products.json');
-  writeFileSync(path, JSON.stringify(contents));
+  const profiled = Object.fromEntries(Object.entries(contents).map(([slug, raw]) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [slug, raw];
+    const product = raw as Record<string, unknown>;
+    if (
+      !Array.isArray(product['validationCommands']) ||
+      Object.prototype.hasOwnProperty.call(product, 'validationCommandProfiles')
+    ) return [slug, product];
+    return [slug, {
+      ...product,
+      validationCommandProfiles: product['validationCommands'].map((command) => ({
+        command: String(command),
+        profile: 'isolated',
+      })),
+    }];
+  }));
+  writeFileSync(path, JSON.stringify(profiled));
   return path;
 }
 
@@ -452,10 +467,102 @@ describe('readProductsConfig — canonical validation adapters', () => {
     const products = readProductsConfig(configPath);
 
     expect(products['rune']!.validationAdapters).toEqual([
-      { command: 'npm test', runner: 'vitest' },
+      { command: 'npm test', runner: 'vitest', profileSelection: 'strict-tags-v1' },
     ]);
     expect(products['rune-mcp']!.validationAdapters).toEqual([
-      { command: 'npm test', runner: 'vitest' },
+      { command: 'npm test', runner: 'vitest', profileSelection: 'strict-tags-v1' },
+    ]);
+  });
+});
+
+describe('readProductsConfig — validationCommandProfiles', () => {
+  it('requires an explicit profile assignment for every validation command', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm test'],
+        validationCommandProfiles: undefined,
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/missing validationCommandProfiles/i);
+  });
+
+  it('allows an absent validationCommandProfiles array when there are no validation commands', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        validationCommandProfiles: undefined,
+      },
+    });
+    expect(readProductsConfig(configPath)['aura']!.validationCommandProfiles).toEqual([]);
+  });
+
+  it.each([
+    { label: 'unknown profile name', entries: [{ command: 'npm test', profile: 'internet' }] },
+    { label: 'missing profile field', entries: [{ command: 'npm test' }] },
+    { label: 'missing command field', entries: [{ profile: 'isolated' }] },
+    { label: 'non-object entry', entries: ['npm test'] },
+  ])('rejects a validationCommandProfiles entry with $label', ({ entries }) => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm test'],
+        validationCommandProfiles: entries,
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/invalid validationCommandProfiles entry/i);
+  });
+
+  it('rejects an assignment naming a command that is not in validationCommands', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm test'],
+        validationCommandProfiles: [{ command: 'npm run build', profile: 'isolated' }],
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/unknown command/i);
+  });
+
+  it('rejects a duplicate assignment for the same command', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm test'],
+        validationCommandProfiles: [
+          { command: 'npm test', profile: 'isolated' },
+          { command: 'npm test', profile: 'loopback' },
+        ],
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/duplicate assignment/i);
+  });
+
+  it('rejects a validation command left without any profile assignment', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm run build', 'npm test'],
+        validationCommandProfiles: [{ command: 'npm test', profile: 'isolated' }],
+      },
+    });
+    expect(() => readProductsConfig(configPath)).toThrow(/missing assignment/i);
+  });
+
+  it('parses a valid explicit assignment for every command', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      rune: {
+        repoPath: '/fake/workspace/rune',
+        validationCommands: ['npm run build', 'npm test'],
+        validationCommandProfiles: [
+          { command: 'npm run build', profile: 'isolated' },
+          { command: 'npm test', profile: 'loopback' },
+        ],
+      },
+    });
+    expect(readProductsConfig(configPath)['rune']!.validationCommandProfiles).toEqual([
+      { command: 'npm run build', profile: 'isolated' },
+      { command: 'npm test', profile: 'loopback' },
     ]);
   });
 });

@@ -544,3 +544,4 @@ describe('server/mcp-transport (§6 Streamable HTTP transport)', () => {
     );
   });
 });
+// @module-tag validation-loopback

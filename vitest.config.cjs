@@ -5,6 +5,11 @@ module.exports = defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'cli/**/*.test.ts', 'scripts/**/*.test.ts'],
     setupFiles: ['src/test/setup-env.ts'],
+    tags: [
+      { name: 'validation-loopback' },
+      { name: 'validation-sandbox-integration' },
+    ],
+    strictTags: true,
     testTimeout: 10000,
     // 'default' keeps normal output; 'hanging-process' stays silent on clean
     // exits and dumps the open-handle stack (why-is-node-running) the moment a

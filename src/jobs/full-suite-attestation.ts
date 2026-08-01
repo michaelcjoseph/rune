@@ -33,6 +33,7 @@ import {
   type ValidationBatchReceipt,
   type VitestLifecycleManifest,
 } from '../intent/full-suite-attestation.js';
+import type { ValidationProfilePlan } from '../intent/validation-profiles.js';
 import { readBoundedRegularFileNoFollow } from '../utils/bounded-file.js';
 import { parseValidationCommand } from './task-validation.js';
 import type { ValidationCommandResult } from './work-run-gate-runtime.js';
@@ -221,6 +222,7 @@ export function captureValidationFingerprints(
   commands: readonly string[],
   adapters: readonly ValidationAdapter[],
   trustedVitestImplementation: TrustedVitestImplementation,
+  profilePlan?: ValidationProfilePlan,
 ): ValidationFingerprints {
   const configuredArgv = commands.map((command) => {
     const parsed = parseValidationCommand(command);
@@ -236,12 +238,14 @@ export function captureValidationFingerprints(
   return {
     commandFingerprint: sha256(JSON.stringify({
       configuredArgv,
-      adapters: adapters.map(({ command, runner }) => ({
+      adapters: adapters.map(({ command, runner, profileSelection }) => ({
         command,
         runner,
         version: 1,
+        profileSelection,
         implementationFingerprint,
       })),
+      profilePlan,
     })),
     configurationFingerprint: fingerprintFiles(cwd, CONFIG_FINGERPRINT_FILES),
     dependencyFingerprint: fingerprintFiles(cwd, DEPENDENCY_FINGERPRINT_FILES),
@@ -303,7 +307,7 @@ export function buildGateValidationReceipt(input: {
   batch: ValidationBatchReceipt;
 }): GateValidationReceipt | undefined {
   return parseGateValidationReceipt({
-    version: 1,
+    version: input.batch.profilePlan === undefined ? 1 : 2,
     treeOid: input.treeOid,
     fullTaskReviewHash: input.fullTaskReviewHash,
     completedAt: input.completedAt,

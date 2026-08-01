@@ -120,3 +120,4 @@ describe('isAllowedHost', () => {
     expect(isAllowedHost(makeReq({ host: 'Localhost:3847' }))).toBe(true);
   });
 });
+// @module-tag validation-loopback

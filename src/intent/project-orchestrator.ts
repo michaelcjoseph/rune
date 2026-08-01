@@ -460,6 +460,16 @@ async function runProjectOrchestrationImpl(
             reason: 'closeout checks failed',
             closeoutFailure: checks.failure,
           };
+      if (
+        closeout.kind === 'blocked' &&
+        closeout.closeoutFailure?.validationFailure?.kind === 'profile-unavailable'
+      ) {
+        return buildOperationalHold(
+          deps,
+          `validation capability unavailable for ${task.id}`,
+          taskRecords,
+        );
+      }
       if (closeout.kind === 'ok' || closeout.closeoutFailure === undefined) break;
       if (attempt === 1 + CLOSEOUT_REPAIR_CAP) break; // repair budget exhausted
       // Bounded coder repair: a failed check persists nothing (the check runs

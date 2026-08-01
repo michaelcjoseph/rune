@@ -756,3 +756,4 @@ describe('CockpitProject.taskProgress shape (cockpit design tweaks)', () => {
     expect(project.taskProgress ?? null).toBeNull();
   });
 });
+// @module-tag validation-loopback

@@ -59,9 +59,13 @@ import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import config, { PROJECT_ROOT } from '../config.js';
 import { resolveValidationCwd } from './task-validation.js';
 import {
-  hasValidationCompatibleModeMarker,
+  verifyConfinementCapability,
   VALIDATION_COMPATIBLE_MODE_ENV,
   VALIDATION_COMPATIBLE_MODE_VALUE,
+  VALIDATION_CONFINEMENT_ATTESTATION_ENV,
+  VALIDATION_PROCESS_NONCE_ENV,
+  VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
+  type ConfinementCapability,
 } from '../utils/validation-confinement.js';
 import {
   relatedTestInvocationSelectionFits,
@@ -91,8 +95,22 @@ import {
   type ValidationAdapter,
   type VitestLifecycleManifest,
   type TrustedVitestImplementation,
+  type ValidationProfileProbeEvidence,
 } from './full-suite-attestation.js';
 import { parseValidationCommand } from './task-validation.js';
+import {
+  requestValidationSandboxProbe,
+  startValidationSandboxBroker,
+  type ValidationSandboxBroker,
+} from './validation-sandbox-broker.js';
+import {
+  VALIDATION_PROFILES,
+  planValidationProfiles,
+  validationSelectorFor,
+  type ValidationCommandProfile,
+  type ValidationProfile,
+  type ValidationProfilePlan,
+} from '../intent/validation-profiles.js';
 export type { FullSuiteValidationResult } from './full-suite-attestation.js';
 
 const log = createLogger('work-run-gate-runtime');
@@ -118,6 +136,7 @@ export interface GateRuntimeOpts {
   /** Product `validationCommands` from policies/products.json. Empty/absent →
    *  fail-closed `missing-validation-command`. */
   validationCommands: string[];
+  validationCommandProfiles?: ValidationCommandProfile[];
   /** Exact command-to-runner mappings used for structured suite coverage. */
   validationAdapters?: ValidationAdapter[];
   /** Optional repository-relative command directory, revalidated inside the
@@ -157,22 +176,25 @@ const VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS = 1_000;
  * `timedOut` — the same wedge work-runner.ts guards with REAP_FORCE_DONE_MS.
  */
 const VALIDATION_STDIO_DRAIN_MS = 10_000;
-const VALIDATION_SANDBOX_PROFILE = [
-  '(version 1)',
-  '(allow default)',
-  '(deny network-outbound)',
-  '(deny network-inbound)',
-  '(allow network-inbound (local ip "localhost:*"))',
-  '(allow network-outbound (remote ip "localhost:*"))',
-].join('');
+function validationNetworkRules(profile: ValidationProfile): string[] {
+  const base = ['(deny network-outbound)', '(deny network-inbound)'];
+  if (profile !== 'loopback') return base;
+  return [
+    ...base,
+    '(allow network-inbound (local ip "localhost:*"))',
+    '(allow network-outbound (remote ip "localhost:*"))',
+  ];
+}
 
 function seatbeltString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 function validationSandboxProfile(
+  profile: ValidationProfile,
   deniedWriteRoots: readonly string[] = [],
   allowedWriteRoots: readonly string[] = [],
+  sandboxBrokerSocket?: string,
 ): string {
   const roots = new Set<string>();
   for (const root of deniedWriteRoots) {
@@ -192,9 +214,13 @@ function validationSandboxProfile(
       allowedRoots.add(resolve(root));
     }
   }
-  if (roots.size === 0 && allowedRoots.size === 0) return VALIDATION_SANDBOX_PROFILE;
   return [
-    VALIDATION_SANDBOX_PROFILE,
+    '(version 1)',
+    '(allow default)',
+    ...validationNetworkRules(profile),
+    ...(profile === 'sandbox-integration' && sandboxBrokerSocket !== undefined
+      ? [`(allow network-outbound (remote unix-socket (path "${seatbeltString(sandboxBrokerSocket)}")))`]
+      : []),
     ...[...roots].flatMap((root) => [
       `(deny file-write* (literal "${seatbeltString(root)}"))`,
       `(deny file-write* (subpath "${seatbeltString(root)}"))`,
@@ -210,6 +236,8 @@ function buildValidationEnv(
   cwd: string,
   reportOptions = '',
   initialDepth = '1',
+  sandboxBrokerSocket?: string,
+  sandboxBrokerAttestation?: string,
 ): NodeJS.ProcessEnv {
   // Shell basics + launchd-safe PATH via the same allowlist filter the
   // sandboxed-agent env uses — one key list, no drift between the two.
@@ -221,6 +249,12 @@ function buildValidationEnv(
     env.RUNE_VALIDATION_REPORT_DEPTH = initialDepth;
   }
   env.RUNE_VITEST_CACHE_DIR = vitestCacheDirFor(cwd);
+  if (sandboxBrokerSocket !== undefined) {
+    env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] = sandboxBrokerSocket;
+  }
+  if (sandboxBrokerAttestation !== undefined) {
+    env[VALIDATION_CONFINEMENT_ATTESTATION_ENV] = sandboxBrokerAttestation;
+  }
   return env;
 }
 
@@ -247,9 +281,20 @@ export interface ValidationCommandResult {
   vitestManifest?: VitestLifecycleManifest;
   /** Trusted launcher cancellation state; false/absent for ordinary exits. */
   cancelled?: boolean;
+  /** Admission/probe failure that must be routed as an operational hold. */
+  failureClass?: 'profile-unavailable';
+  profile?: ValidationProfile;
 }
 
 export interface ValidationCommandArgvOptions {
+  /** Deterministic capability profile selected before launch. */
+  profile?: ValidationProfile;
+  /** Only sandbox-integration may receive the Rune-owned fixed broker socket. */
+  sandboxBrokerSocket?: string;
+  /** In-memory capability proving the caller started that exact broker. */
+  sandboxBrokerCapability?: ConfinementCapability;
+  /** Broker-issued nonce handed to the child so it can prove its enclosure. */
+  sandboxBrokerAttestation?: string;
   /** The command remains inside the launcher's outer Seatbelt and passes the
    * private marker to Rune-owned nested helpers. */
   compatibleFallback?: boolean;
@@ -259,6 +304,7 @@ export interface ValidationCommandArgvOptions {
     capability: string;
     /** Captured before product execution and delivered over an anonymous pipe. */
     trustedImplementation?: TrustedVitestImplementation;
+    profileSelector?: string;
   };
   /** Rune-owned source delivered through stdin instead of a mutable pathname. */
   trustedStdinSource?: string;
@@ -368,14 +414,58 @@ function persistTimeoutDiagnostics(opts: {
  * command that forks (e.g. `npm` → `node`) can't outlive its budget. Registered
  * with the active-process registry so a graceful Rune shutdown reaps it too.
  */
-export function runValidationCommandArgv(
+export async function runValidationCommandArgv(
   argv: readonly string[],
   cwd: string,
   timeoutMs: number,
   diagnosticDir?: string,
   options: ValidationCommandArgvOptions = {},
 ): Promise<ValidationCommandResult> {
-  return new Promise<ValidationCommandResult>((resolve) => {
+  const unavailable = (reason: string): ValidationCommandResult => ({
+    exitCode: null,
+    timedOut: false,
+    cancelled: false,
+    outputHead: '',
+    outputTail: reason,
+    failureClass: 'profile-unavailable',
+    profile: options.profile ?? 'sandbox-integration',
+  });
+  // An in-process broker grant must be the launcher-created capability object
+  // bound to this exact socket — a caller-supplied path alone is not proof.
+  if (
+    options.sandboxBrokerSocket !== undefined &&
+    !verifyConfinementCapability(options.sandboxBrokerCapability, {
+      owner: 'sandbox-broker',
+      profilePath: options.sandboxBrokerSocket,
+    })
+  ) {
+    return unavailable('sandbox-integration broker grant is not a launcher capability');
+  }
+  const inheritedBrokerSocket = options.sandboxBrokerSocket === undefined
+    ? process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV]
+    : undefined;
+  let inheritedOuterConfinement = false;
+  if (inheritedBrokerSocket !== undefined) {
+    // Bypassing the inner Seatbelt requires the LIVE broker that encloses this
+    // process to confirm the nonce it minted, for the exact profile it owns.
+    // Both environment variables together are only a claim; the broker's
+    // answer is the proof, so a stale or forged pair authorizes nothing.
+    const attestation = process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
+    if (attestation === undefined || attestation === '') {
+      return unavailable('inherited validation confinement is missing its launcher capability');
+    }
+    const proof = await requestValidationSandboxProbe(inheritedBrokerSocket, {
+      version: 1,
+      scenario: 'confinement-attestation',
+      nonce: attestation,
+      profile: 'sandbox-integration',
+    });
+    if (!proof.ok) {
+      return unavailable('inherited validation confinement could not be verified');
+    }
+    inheritedOuterConfinement = true;
+  }
+  return await new Promise<ValidationCommandResult>((resolve) => {
     const [bin, ...args] = argv;
     if (!bin) {
       // An empty command can't pass — treat as a non-zero (red) result.
@@ -416,20 +506,22 @@ export function runValidationCommandArgv(
     // command is itself the runner and strips the options before its workers.
     const initialReportDepth = /^(?:npm|npx)(?:\.cmd)?$/.test(basename(bin)) ? '0' : '1';
     // `compatibleFallback` marks the NEW child but does not weaken its launch:
-    // the fallback itself still receives the normal outer Seatbelt. Only a
-    // Rune-owned helper running inside that marked child may reuse the already
-    // inherited confinement.
-    // Marker presence alone is not proof. This reuse is safe because this
-    // launcher is the only production caller and marked descendants were
-    // launched beneath its normal outer Seatbelt.
-    const reuseInheritedConfinement = hasValidationCompatibleModeMarker();
-    const spawnBin = process.platform === 'darwin' && !reuseInheritedConfinement
+    // the fallback itself still receives the normal outer Seatbelt. The legacy
+    // marker is diagnostic only — a broker-verified attestation
+    // (`inheritedOuterConfinement`) is the sole authorization for skipping the
+    // inner sandbox.
+    const spawnBin = process.platform === 'darwin' && !inheritedOuterConfinement
       ? '/usr/bin/sandbox-exec'
       : bin;
-    const spawnArgs = process.platform === 'darwin' && !reuseInheritedConfinement
+    const spawnArgs = process.platform === 'darwin' && !inheritedOuterConfinement
       ? [
           '-p',
-          validationSandboxProfile(options.deniedWriteRoots, options.allowedWriteRoots),
+          validationSandboxProfile(
+            options.profile ?? 'loopback',
+            options.deniedWriteRoots,
+            options.allowedWriteRoots,
+            options.sandboxBrokerSocket,
+          ),
           bin,
           ...commandArgs,
         ]
@@ -438,10 +530,21 @@ export function runValidationCommandArgv(
       options.cacheCwd ?? cwd,
       reportOptions,
       initialReportDepth,
+      options.sandboxBrokerSocket ?? inheritedBrokerSocket,
+      options.sandboxBrokerAttestation ??
+        (inheritedBrokerSocket !== undefined
+          ? process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV]
+          : undefined),
     );
-    const validationProcessNonce = createVitestAttestationCapability();
-    env.RUNE_VALIDATION_PROCESS_NONCE = validationProcessNonce;
-    if (options.compatibleFallback === true || reuseInheritedConfinement) {
+    // An inherited helper remains part of the top-level launcher's process
+    // tree. Keep its anonymous nonce so the owner can find even a setsid(2)
+    // escape after the complete profile shard exits; the nested helper cannot
+    // inspect the host process table from inside Seatbelt.
+    const validationProcessNonce = inheritedOuterConfinement
+      ? process.env[VALIDATION_PROCESS_NONCE_ENV] ?? createVitestAttestationCapability()
+      : createVitestAttestationCapability();
+    env[VALIDATION_PROCESS_NONCE_ENV] = validationProcessNonce;
+    if (options.compatibleFallback === true) {
       env[VALIDATION_COMPATIBLE_MODE_ENV] = VALIDATION_COMPATIBLE_MODE_VALUE;
     }
     const child = spawn(spawnBin, spawnArgs, {
@@ -488,7 +591,7 @@ export function runValidationCommandArgv(
     let timeoutReapComplete = true;
     let normalReapPending = false;
     let reapConfirmed = true;
-    let escapedDescendantsChecked = false;
+    let escapedDescendantsChecked = inheritedOuterConfinement;
     let escapedDescendantReapPending = false;
     let deferredFinish: { code: number | null } | undefined;
     const killGroup = (signal: NodeJS.Signals): void => {
@@ -672,6 +775,7 @@ export function runValidationCommandArgv(
         } : {}),
         ...(vitestManifest !== undefined ? { vitestManifest } : {}),
         cancelled,
+        ...(options.profile !== undefined ? { profile: options.profile } : {}),
       });
     };
     // A green/non-timeout leader is not enough: product tests may leave
@@ -733,6 +837,7 @@ export type ValidationCommandListResult =
 export interface FullSuiteValidationOpts {
   commands: readonly string[];
   adapters: readonly ValidationAdapter[];
+  commandProfiles?: readonly ValidationCommandProfile[];
   /** Worktree root whose canonical staged tree is attested. */
   worktree: string;
   /** Already boundary-validated command cwd. */
@@ -771,6 +876,13 @@ export interface FullSuiteValidationIO {
     diagnosticDir: string | undefined,
     options: ValidationCommandArgvOptions,
   ) => Promise<ValidationCommandResult>;
+  /** Production capability admission. Omitted test seams are already trusted. */
+  probeProfile?: (
+    profile: ValidationProfile,
+    cwd: string,
+    timeoutMs: number,
+  ) => Promise<ValidationProfileProbeEvidence>;
+  startSandboxBroker?: typeof startValidationSandboxBroker;
 }
 
 const RUNE_CODE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -824,6 +936,9 @@ export function runTrustedVitestObserver(
     capability: attestation.capability,
     reporterSource: attestation.trustedImplementation.reporterSource,
     extractorSource: attestation.trustedImplementation.extractorSource,
+    ...(attestation.profileSelector !== undefined
+      ? { selector: attestation.profileSelector }
+      : {}),
   };
   const trustedStdinSource =
     `const __RUNE_TRUSTED_INPUT__ = Object.freeze(${JSON.stringify(trustedInput)});\n` +
@@ -968,6 +1083,153 @@ function defaultFullSuiteValidationIO(): FullSuiteValidationIO {
     runCommand: (_command, argv, cwd, timeoutMs, diagnosticDir, options) =>
       runValidationCommandArgv(argv, cwd, timeoutMs, diagnosticDir, options),
     runTrustedVitestObserver,
+    probeProfile: probeValidationProfile,
+    startSandboxBroker: startValidationSandboxBroker,
+  };
+}
+
+const PROFILE_PROBE_SOURCE: Record<ValidationProfile, string> = {
+  isolated: `
+    const net = require('node:net');
+    const server = net.createServer();
+    server.once('error', () => process.exit(0));
+    server.listen(0, '127.0.0.1', () => { server.close(); process.exit(41); });
+    setTimeout(() => process.exit(42), 1000).unref();
+  `,
+  loopback: `
+    const net = require('node:net');
+    const server = net.createServer((socket) => socket.end('ok'));
+    server.once('error', () => process.exit(43));
+    server.listen(0, '127.0.0.1', () => {
+      const local = net.connect(server.address().port, '127.0.0.1');
+      local.once('data', () => {
+        local.destroy(); server.close();
+        const external = net.connect(53, '1.1.1.1');
+        external.once('connect', () => process.exit(44));
+        external.once('error', () => process.exit(0));
+        setTimeout(() => { external.destroy(); process.exit(0); }, 250).unref();
+      });
+      local.once('error', () => process.exit(45));
+    });
+    setTimeout(() => process.exit(46), 1500).unref();
+  `,
+  'sandbox-integration': `process.exit(process.platform === 'darwin' ? 0 : 47);`,
+};
+
+/** Grant fields a shard needs to prove it owns the broker it was handed. */
+function brokerGrant(broker: ValidationSandboxBroker | undefined): {
+  sandboxBrokerSocket?: string;
+  sandboxBrokerCapability?: ConfinementCapability;
+  sandboxBrokerAttestation?: string;
+} {
+  return broker === undefined ? {} : {
+    sandboxBrokerSocket: broker.socketPath,
+    sandboxBrokerCapability: broker.capability,
+    sandboxBrokerAttestation: broker.attestationNonce,
+  };
+}
+
+/**
+ * Run `body` with the Rune-owned broker `profile` requires, if any. One broker
+ * instance serves both the capability probe and the shard execution, and is
+ * always stopped on the way out. `onUnavailable` owns the caller's own failure
+ * shape, so each call site keeps its error formatting local.
+ */
+async function withValidationSandboxBroker<T>(
+  profile: ValidationProfile | undefined,
+  startBroker: () => Promise<ValidationSandboxBroker>,
+  body: (broker: ValidationSandboxBroker | undefined) => Promise<T>,
+  onUnavailable: () => T,
+): Promise<T> {
+  if (profile !== 'sandbox-integration') return await body(undefined);
+  let broker: ValidationSandboxBroker | undefined;
+  try {
+    try {
+      broker = await startBroker();
+    } catch {
+      return onUnavailable();
+    }
+    return await body(broker);
+  } finally {
+    await broker?.stop().catch(() => {});
+  }
+}
+
+/** Prove the selected host capability before product-controlled dispatch.
+ * An `enclosing` broker is reused rather than started and stopped again. */
+export async function probeValidationProfile(
+  profile: ValidationProfile,
+  cwd: string,
+  timeoutMs: number,
+  enclosing?: ValidationSandboxBroker,
+): Promise<ValidationProfileProbeEvidence> {
+  const startedAt = new Date().toISOString();
+  const definitionFingerprint = sha256(JSON.stringify({
+    profile,
+    definition: validationSandboxProfile(profile),
+  }));
+  if (process.platform !== 'darwin') {
+    return {
+      profile,
+      definitionFingerprint,
+      confinementOwner: profile === 'sandbox-integration' ? 'sandbox-broker' : 'validation-launcher',
+      outcome: 'unavailable',
+      failureClass: 'profile-unavailable',
+      startedAt,
+      completedAt: new Date().toISOString(),
+    };
+  }
+  if (profile === 'sandbox-integration') {
+    let owned: ValidationSandboxBroker | undefined;
+    try {
+      const broker = enclosing ?? (owned = await startValidationSandboxBroker());
+      const response = await requestValidationSandboxProbe(broker.socketPath, {
+        version: 1,
+        scenario: 'profile-compiles',
+        candidateProfile: '(version 1)(allow default)',
+      });
+      return {
+        profile,
+        definitionFingerprint,
+        confinementOwner: 'sandbox-broker',
+        outcome: response.ok ? 'passed' : 'unavailable',
+        ...(response.ok ? {} : { failureClass: 'profile-unavailable' as const }),
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    } catch {
+      return {
+        profile,
+        definitionFingerprint,
+        confinementOwner: 'sandbox-broker',
+        outcome: 'unavailable',
+        failureClass: 'profile-unavailable',
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    } finally {
+      await owned?.stop().catch(() => {});
+    }
+  }
+  const result = await runValidationCommandArgv(
+    [process.execPath, '-e', PROFILE_PROBE_SOURCE[profile]],
+    cwd,
+    Math.min(timeoutMs, 3_000),
+    undefined,
+    { profile },
+  );
+  return {
+    profile,
+    definitionFingerprint,
+    confinementOwner: 'validation-launcher',
+    outcome: result.exitCode === 0 && !result.timedOut && !result.cancelled
+      ? 'passed'
+      : 'unavailable',
+    ...(result.exitCode === 0 && !result.timedOut && !result.cancelled
+      ? {}
+      : { failureClass: 'profile-unavailable' as const }),
+    startedAt,
+    completedAt: new Date().toISOString(),
   };
 }
 
@@ -1032,6 +1294,8 @@ interface FullSuiteCommandExecution {
   completedAt: string;
   adapter: ValidationAdapter | undefined;
   eligible: boolean;
+  profile: ValidationProfile;
+  selector?: string;
 }
 
 async function executeFullSuiteCommand(args: {
@@ -1039,6 +1303,8 @@ async function executeFullSuiteCommand(args: {
   argv: string[];
   adapter: ValidationAdapter | undefined;
   eligible: boolean;
+  profile: ValidationProfile;
+  selector?: string;
   opts: FullSuiteValidationOpts;
   io: FullSuiteValidationIO;
   trustedImplementation: TrustedVitestImplementation;
@@ -1048,6 +1314,14 @@ async function executeFullSuiteCommand(args: {
   let capability: string | undefined;
   let reviewedTree: { dir: string; cwd: string } | undefined;
   let observerFailure: string | undefined;
+  let sandboxBroker: Awaited<ReturnType<typeof startValidationSandboxBroker>> | undefined;
+  if (args.profile === 'sandbox-integration' && args.io.startSandboxBroker !== undefined) {
+    try {
+      sandboxBroker = await args.io.startSandboxBroker();
+    } catch {
+      observerFailure = 'sandbox-integration broker setup failed';
+    }
+  }
   if (args.eligible) {
     try {
       manifestDir = args.io.createVitestManifestDir?.() ??
@@ -1083,8 +1357,13 @@ async function executeFullSuiteCommand(args: {
               outputPath,
               capability,
               trustedImplementation: args.trustedImplementation,
+              ...(args.selector !== undefined
+                ? { profileSelector: args.selector }
+                : {}),
             },
             ...(args.opts.cancelled !== undefined ? { cancelled: args.opts.cancelled } : {}),
+            profile: args.profile,
+            ...brokerGrant(sandboxBroker),
           },
         );
       } catch {
@@ -1102,6 +1381,8 @@ async function executeFullSuiteCommand(args: {
           deniedWriteRoots: [PROJECT_ROOT],
           allowedWriteRoots: [args.opts.worktree],
           ...(args.opts.cancelled !== undefined ? { cancelled: args.opts.cancelled } : {}),
+          profile: args.profile,
+          ...brokerGrant(sandboxBroker),
         },
       );
     } catch {
@@ -1161,6 +1442,7 @@ async function executeFullSuiteCommand(args: {
         // The observer has exited; cleanup is best-effort.
       }
     }
+    await sandboxBroker?.stop().catch(() => {});
   }
   const completedMs = Date.now();
   return {
@@ -1171,6 +1453,8 @@ async function executeFullSuiteCommand(args: {
     completedAt: new Date(completedMs).toISOString(),
     adapter: args.adapter,
     eligible: args.eligible,
+    profile: args.profile,
+    ...(args.selector !== undefined ? { selector: args.selector } : {}),
   };
 }
 
@@ -1184,6 +1468,22 @@ export async function runFullSuiteValidation(
   io: FullSuiteValidationIO = defaultFullSuiteValidationIO(),
 ): Promise<FullSuiteValidationResult> {
   const adapters = new Map(opts.adapters.map((adapter) => [adapter.command, adapter]));
+  let profilePlan: ValidationProfilePlan;
+  try {
+    profilePlan = planValidationProfiles({
+      commands: opts.commands,
+      commandProfiles: (opts.commandProfiles?.length ?? 0) > 0
+        ? opts.commandProfiles!
+        : opts.commands.map((command) => ({
+        command,
+        profile: 'isolated' as const,
+      })),
+      adapters: opts.adapters,
+      parseCommand: parseValidationCommand,
+    });
+  } catch {
+    return validationIdentityFailure('validation profile plan was invalid');
+  }
   const reporterPath = io.trustedVitestReporterPath ?? VITEST_REPORTER_PATH;
   const resolvedValidationCwd = resolveValidationCwd(opts.worktree, opts.validationCwd);
   if (!resolvedValidationCwd.ok) {
@@ -1213,6 +1513,7 @@ export async function runFullSuiteValidation(
       opts.commands,
       opts.adapters,
       trustedImplementation,
+      profilePlan,
     );
   } catch {
     return validationIdentityFailure('validation tree or fingerprint capture failed');
@@ -1223,13 +1524,56 @@ export async function runFullSuiteValidation(
   const prelim: FullSuiteCommandExecution[] = [];
   let firstFailure: typeof prelim[number] | undefined;
 
-  for (const command of opts.commands) {
+  const profileProbes = new Map<ValidationProfile, ValidationProfileProbeEvidence>();
+  for (const shard of profilePlan.shards) {
+    const command = shard.command;
+    let probe = profileProbes.get(shard.profile);
+    if (probe === undefined) {
+      probe = io.probeProfile === undefined
+        ? {
+            profile: shard.profile,
+            definitionFingerprint: profilePlan.definitionFingerprint,
+            confinementOwner: shard.profile === 'sandbox-integration'
+              ? 'sandbox-broker'
+              : 'validation-launcher',
+            outcome: 'passed',
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+          }
+        : await io.probeProfile(shard.profile, opts.cwd, opts.timeoutMs);
+      profileProbes.set(shard.profile, probe);
+    }
+    if (probe.outcome !== 'passed') {
+      const now = new Date().toISOString();
+      const item: FullSuiteCommandExecution = {
+        command,
+        argv: shard.argv,
+        result: {
+          exitCode: null,
+          timedOut: false,
+          cancelled: false,
+          outputHead: '',
+          outputTail: `validation profile unavailable: ${shard.profile}`,
+          failureClass: 'profile-unavailable',
+          profile: shard.profile,
+        },
+        startedAt: now,
+        completedAt: now,
+        adapter: adapters.get(command),
+        eligible: false,
+        profile: shard.profile,
+        ...(shard.selector !== undefined ? { selector: shard.selector } : {}),
+      };
+      prelim.push(item);
+      firstFailure = item;
+      if (!opts.continueOnFailure) break;
+      continue;
+    }
     if (opts.cancelled?.() === true) {
-      const parsed = parseValidationCommand(command);
       const now = new Date().toISOString();
       const item = {
         command,
-        argv: parsed.ok ? parsed.argv : [],
+        argv: shard.argv,
         result: {
           exitCode: null,
           timedOut: false,
@@ -1241,6 +1585,8 @@ export async function runFullSuiteValidation(
         completedAt: now,
         adapter: adapters.get(command),
         eligible: false,
+        profile: shard.profile,
+        ...(shard.selector !== undefined ? { selector: shard.selector } : {}),
       };
       prelim.push(item);
       firstFailure = item;
@@ -1263,6 +1609,7 @@ export async function runFullSuiteValidation(
         completedAt: new Date().toISOString(),
         adapter: undefined,
         eligible: false,
+        profile: shard.profile,
       };
       prelim.push(item);
       firstFailure ??= item;
@@ -1273,9 +1620,11 @@ export async function runFullSuiteValidation(
     const eligible = adapter?.runner === 'vitest' && isFullVitestInvocation(parsed.argv, opts.cwd);
     const item = await executeFullSuiteCommand({
       command,
-      argv: parsed.argv,
+      argv: shard.argv,
       adapter,
       eligible,
+      profile: shard.profile,
+      ...(shard.selector !== undefined ? { selector: shard.selector } : {}),
       opts,
       io,
       trustedImplementation,
@@ -1301,6 +1650,7 @@ export async function runFullSuiteValidation(
       opts.commands,
       opts.adapters,
       afterTrustedImplementation,
+      profilePlan,
     );
   } catch {
     afterTree = 'invalid';
@@ -1319,7 +1669,7 @@ export async function runFullSuiteValidation(
     JSON.stringify(afterFingerprints) !== JSON.stringify(beforeFingerprints);
   const attestations: FullSuiteAttestation[] = [];
   const receipts: CompactValidationReceipt[] = [];
-  const completeMappedManifests = new Map<string, VitestLifecycleManifest>();
+  const completeMappedManifests = new Map<string, VitestLifecycleManifest[]>();
   const batchCommands: ValidationBatchReceipt['commands'] = [];
   let coverageFailure: {
     command: string;
@@ -1345,7 +1695,9 @@ export async function runFullSuiteValidation(
       : lifecycleCoverageComplete ? 'complete'
       : 'invalid';
     if (coverage === 'complete' && manifest !== undefined) {
-      completeMappedManifests.set(item.command, manifest);
+      const existing = completeMappedManifests.get(item.command) ?? [];
+      existing.push(manifest);
+      completeMappedManifests.set(item.command, existing);
     }
     if (
       item.adapter !== undefined &&
@@ -1383,16 +1735,37 @@ export async function runFullSuiteValidation(
   }
 
   const validationReceipt: ValidationBatchReceipt = {
-    outcome: batchOutcome(batchCommands, drifted),
+    outcome: prelim.some((item) => item.result.failureClass === 'profile-unavailable')
+      ? 'profile-unavailable'
+      : batchOutcome(batchCommands, drifted),
     commands: batchCommands,
+    profilePlan,
+    profileOutcomes: prelim.map((item) => {
+      const manifest = parseVitestManifest(item.result.vitestManifest);
+      const probe = profileProbes.get(item.profile)!;
+      return {
+        profile: item.profile,
+        ...(item.selector !== undefined ? { selector: item.selector } : {}),
+        outcome: item.result.failureClass === 'profile-unavailable'
+          ? 'profile-unavailable' as const
+          : commandOutcome(item.result),
+        probe,
+        ...(manifest !== undefined
+          ? { discovered: manifest.discovered, completed: manifest.completed }
+          : {}),
+      };
+    }),
   };
   const mappedCommands = opts.adapters.map((adapter) => adapter.command);
   const mappedCoverageComplete =
     mappedCommands.length > 0 &&
-    mappedCommands.every((command) => completeMappedManifests.has(command));
+    mappedCommands.every((command) => {
+      const expected = adapters.get(command)?.profileSelection === 'strict-tags-v1' ? 3 : 1;
+      return completeMappedManifests.get(command)?.length === expected;
+    });
   const aggregateManifest = mappedCoverageComplete
     ? aggregateVitestManifests(
-        mappedCommands.map((command) => completeMappedManifests.get(command)!),
+        mappedCommands.flatMap((command) => completeMappedManifests.get(command)!),
       )
     : undefined;
   const coverageComplete = aggregateManifest !== undefined;
@@ -1413,13 +1786,13 @@ export async function runFullSuiteValidation(
     failed === undefined &&
     !drifted &&
     aggregateManifest !== undefined &&
-    prelim.length === opts.commands.length
+    prelim.length === profilePlan.shards.length
   ) {
     const configuredArgv = prelim.map((item) => item.argv);
     const first = prelim[0]!;
     const last = prelim.at(-1)!;
     const candidate: FullSuiteAttestation = {
-      version: 1,
+      version: 2,
       treeOid: beforeTree,
       fullTaskReviewHash: opts.fullTaskReviewHash,
       validationCwd: opts.validationCwd,
@@ -1439,6 +1812,8 @@ export async function runFullSuiteValidation(
         cancelled: false,
       },
       coverage: { status: 'complete', manifest: aggregateManifest },
+      profilePlan,
+      profileOutcomes: validationReceipt.profileOutcomes ?? [],
     };
     const validated = validateFullSuiteAttestation(candidate, {
       treeOid: beforeTree,
@@ -1446,6 +1821,7 @@ export async function runFullSuiteValidation(
       validationCwd: opts.validationCwd,
       configuredArgv,
       ...beforeFingerprints,
+      profilePlan,
     });
     if (validated.ok) {
       attestations.push(validated.attestation);
@@ -1456,10 +1832,10 @@ export async function runFullSuiteValidation(
     failed === undefined &&
     !drifted &&
     mappedCommands.length === 0 &&
-    prelim.length === opts.commands.length
+    prelim.length === profilePlan.shards.length
   ) {
     receipts.push({
-      version: 1,
+      version: 2,
       command: prelim
         .map((item) => sanitizeValidationCommandIdentifier(item.argv))
         .join(' + ')
@@ -1469,6 +1845,8 @@ export async function runFullSuiteValidation(
       outcome: 'passed',
       coverage: 'unsupported',
       completedAt: prelim.at(-1)?.completedAt ?? new Date().toISOString(),
+      profilePlan,
+      profileOutcomes: validationReceipt.profileOutcomes,
     });
   }
   const completedAt = prelim.at(-1)?.completedAt ?? new Date().toISOString();
@@ -1554,12 +1932,161 @@ export async function runValidationCommands(
   timeoutMs: number,
   runValidationCommand: GateRuntimeIO['runValidationCommand'] = defaultRunValidationCommand,
   diagnosticDir?: string,
+  profileContract?: {
+    commandProfiles: readonly ValidationCommandProfile[];
+    adapters?: readonly ValidationAdapter[];
+  },
 ): Promise<ValidationCommandListResult> {
-  for (const command of commands) {
-    const result = await runValidationCommand(command, cwd, timeoutMs, diagnosticDir);
-    if (result.timedOut || result.exitCode !== 0) {
-      return { ok: false, command, result };
+  let shards: Array<{
+    command: string;
+    argv: string[];
+    profile: ValidationProfile | undefined;
+    selector?: string;
+  }>;
+  if (profileContract !== undefined) {
+    try {
+      shards = planValidationProfiles({
+        commands,
+        commandProfiles: profileContract.commandProfiles,
+        adapters: profileContract.adapters ?? [],
+        parseCommand: parseValidationCommand,
+      }).shards;
+    } catch {
+      return {
+        ok: false,
+        command: 'validation profile plan',
+        result: {
+          exitCode: null,
+          timedOut: false,
+          outputTail: 'validation profile plan was invalid',
+          failureClass: 'profile-unavailable',
+        },
+      };
     }
+  } else {
+    shards = commands.map((command) => {
+      const parsed = parseValidationCommand(command);
+      return { command, argv: parsed.ok ? parsed.argv : [], profile: undefined };
+    });
+  }
+  const usesRealLauncher = runValidationCommand === defaultRunValidationCommand;
+  const probed = new Set<ValidationProfile>();
+  for (const shard of shards) {
+    const unavailable = (reason: string): ValidationCommandListResult => ({
+      ok: false,
+      command: shard.command,
+      argv: shard.argv,
+      result: {
+        exitCode: null,
+        timedOut: false,
+        outputTail: reason,
+        failureClass: 'profile-unavailable',
+        ...(shard.profile !== undefined ? { profile: shard.profile } : {}),
+      },
+    });
+    const failure = await withValidationSandboxBroker(
+      usesRealLauncher ? shard.profile : undefined,
+      startValidationSandboxBroker,
+      async (broker): Promise<ValidationCommandListResult | undefined> => {
+        if (shard.profile !== undefined && !probed.has(shard.profile)) {
+          const probe = await probeValidationProfile(shard.profile, cwd, timeoutMs, broker);
+          if (probe.outcome !== 'passed') {
+            return unavailable(`validation profile unavailable: ${shard.profile}`);
+          }
+          probed.add(shard.profile);
+        }
+        const result = usesRealLauncher && shard.profile !== undefined
+          ? await runValidationCommandArgv(shard.argv, cwd, timeoutMs, diagnosticDir, {
+              profile: shard.profile,
+              ...brokerGrant(broker),
+            })
+          : await runValidationCommand(shard.command, cwd, timeoutMs, diagnosticDir);
+        if (result.timedOut || result.exitCode !== 0) {
+          return { ok: false, command: shard.command, argv: shard.argv, result };
+        }
+        return undefined;
+      },
+      () => unavailable('validation sandbox-integration broker is unavailable'),
+    );
+    if (failure !== undefined) return failure;
+  }
+  return { ok: true };
+}
+
+/** Execute one Vitest file/source selection across every strict capability
+ * profile. The source argv is preserved for every shard; only the deterministic
+ * tag selector differs. */
+export async function runProfiledVitestSelection(args: {
+  command: string;
+  argv: readonly string[];
+  cwd: string;
+  timeoutMs: number;
+  diagnosticDir?: string;
+  cancelled?: () => boolean;
+  runCommandArgv?: typeof runValidationCommandArgv;
+  probeProfile?: typeof probeValidationProfile;
+  startSandboxBroker?: typeof startValidationSandboxBroker;
+}): Promise<ValidationCommandListResult> {
+  const runCommandArgv = args.runCommandArgv ?? runValidationCommandArgv;
+  const probeProfile = args.probeProfile ?? probeValidationProfile;
+  const startBroker = args.startSandboxBroker ?? startValidationSandboxBroker;
+  for (const profile of VALIDATION_PROFILES) {
+    const selector = validationSelectorFor(profile);
+    const shardArgv = [...args.argv, `--tags-filter=${selector}`];
+    const unavailable = (reason: string): ValidationCommandListResult => ({
+      ok: false,
+      command: args.command,
+      argv: shardArgv,
+      result: {
+        exitCode: null,
+        timedOut: false,
+        cancelled: false,
+        outputTail: reason,
+        failureClass: 'profile-unavailable',
+        profile,
+      },
+    });
+    const failure = await withValidationSandboxBroker(
+      profile,
+      startBroker,
+      async (broker): Promise<ValidationCommandListResult | undefined> => {
+        const probe = await probeProfile(profile, args.cwd, args.timeoutMs, broker);
+        if (probe.outcome !== 'passed') {
+          return unavailable(`validation profile unavailable: ${profile}`);
+        }
+        if (args.cancelled?.() === true) {
+          return {
+            ok: false,
+            command: args.command,
+            argv: shardArgv,
+            result: {
+              exitCode: null,
+              timedOut: false,
+              cancelled: true,
+              outputTail: 'validation cancelled before command launch',
+              profile,
+            },
+          };
+        }
+        const result = await runCommandArgv(
+          shardArgv,
+          args.cwd,
+          args.timeoutMs,
+          args.diagnosticDir,
+          {
+            profile,
+            ...(args.cancelled !== undefined ? { cancelled: args.cancelled } : {}),
+            ...brokerGrant(broker),
+          },
+        );
+        if (result.timedOut || result.cancelled || result.exitCode !== 0) {
+          return { ok: false, command: args.command, argv: shardArgv, result };
+        }
+        return undefined;
+      },
+      () => unavailable('validation sandbox-integration broker is unavailable'),
+    );
+    if (failure !== undefined) return failure;
   }
   return { ok: true };
 }
@@ -1610,6 +2137,7 @@ export async function runGate(
     let testsGreen = true;
     let validationTimedOut = false;
     let validationCancelled = false;
+    let profileUnavailable = false;
     let validationReceipt: GateValidationReceipt | undefined;
 
     // Conflict probe: merge the feature branch into the detached integration
@@ -1659,6 +2187,9 @@ export async function runGate(
           const expectedTreeOid = await captureValidationTree(runGit, opts.integrationWorktree);
           const validation = await runFullSuiteValidation({
             commands: opts.validationCommands,
+            ...((opts.validationCommandProfiles?.length ?? 0) > 0
+              ? { commandProfiles: opts.validationCommandProfiles }
+              : {}),
             adapters: opts.validationAdapters ?? [],
             worktree: opts.integrationWorktree,
             cwd: validationCwd.cwd,
@@ -1687,6 +2218,8 @@ export async function runGate(
               validation.validationReceipt.outcome === 'timed-out';
             validationCancelled =
               validation.validationReceipt.outcome === 'cancelled';
+            profileUnavailable =
+              validation.validationReceipt.outcome === 'profile-unavailable';
             testsGreen = false;
           }
         }
@@ -1701,6 +2234,7 @@ export async function runGate(
       testsGreen,
       validationTimedOut,
       validationCancelled,
+      profileUnavailable,
       mergeConflict,
     };
     const verdict = evaluateGate(facts);

@@ -38,6 +38,7 @@ export type GateFailReason =
   | 'concurrent-run'
   | 'missing-validation-command'
   | 'validation-timeout'
+  | 'profile-unavailable'
   | 'validation-cancelled';
 
 /** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
@@ -61,6 +62,8 @@ export interface GateFacts {
   validationTimedOut: boolean;
   /** A user/system cancellation was observed while validation was running. */
   validationCancelled: boolean;
+  /** Required host validation capability failed deterministic admission. */
+  profileUnavailable?: boolean;
   /** Merging the branch onto the base conflicts / the base relationship is unsound. */
   mergeConflict: boolean;
 }
@@ -98,6 +101,7 @@ export function evaluateGate(facts: GateFacts): GateResult {
   // Uncommitted changes in the integration worktree.
   if (!facts.treeClean) return { ok: false, reason: 'dirty-tree' };
   if (facts.validationCancelled) return { ok: false, reason: 'validation-cancelled' };
+  if (facts.profileUnavailable) return { ok: false, reason: 'profile-unavailable' };
   // A validation command ran past its budget (a timeout is a red gate, not a wedge).
   if (facts.validationTimedOut) return { ok: false, reason: 'validation-timeout' };
   // A validation command exited non-zero.

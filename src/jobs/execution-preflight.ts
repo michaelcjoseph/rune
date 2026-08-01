@@ -28,6 +28,7 @@ import type {
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
+import type { ConfinementCapability } from '../utils/validation-confinement.js';
 import { buildArtifactMcpConfig, type ArtifactMcpConfig } from './artifact-mcp.js';
 import { buildSandboxEnv } from './credential-injector.js';
 import type { RoleModelBinding } from './execution-agent.js';
@@ -68,6 +69,7 @@ export interface ExecutionPreflightIO {
     binary: string,
     env: NodeJS.ProcessEnv,
     sandboxProfilePath?: string,
+    confinementCapability?: ConfinementCapability,
   ) => Promise<ProbeResult>;
   probeModel: (
     binding: RoleModelBinding,
@@ -105,13 +107,20 @@ function makeDefaultIo(timeoutMs: number): ExecutionPreflightIO {
       }
     },
     buildEnv: buildSandboxEnv,
-    checkAuthentication: async (format, binary, env, sandboxProfilePath) => {
+    checkAuthentication: async (
+      format,
+      binary,
+      env,
+      sandboxProfilePath,
+      confinementCapability,
+    ) => {
       const opts = {
         binaryPath: binary,
         cwd: tmpdir(),
         env,
         timeoutMs,
         ...(sandboxProfilePath !== undefined ? { sandboxProfilePath } : {}),
+        ...(confinementCapability !== undefined ? { confinementCapability } : {}),
       };
       return format === 'claude'
         ? probeClaudeAuthentication(opts)
@@ -214,6 +223,7 @@ export async function preflightExecution(
           binaries.get(group.format)!,
           artifactEnv,
           config!.sandboxProfilePath,
+          config!.confinementCapability,
         ),
         'artifact executor authentication probe failed unexpectedly',
       );

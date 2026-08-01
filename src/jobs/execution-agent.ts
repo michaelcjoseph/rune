@@ -43,6 +43,7 @@ import {
   unregisterOp,
 } from '../transport/in-flight.js';
 import type { OperationCancellation } from '../cancellation.js';
+import { verifyConfinementCapability } from '../utils/validation-confinement.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { buildSandboxEnv, DEFAULT_BASE_ENV_KEYS } from './credential-injector.js';
 import {
@@ -341,6 +342,15 @@ export async function runExecutionAgent(
               executor: opts.model.format,
             })
           : null;
+        if (
+          artifactMcp !== null &&
+          !verifyConfinementCapability(artifactMcp.confinementCapability, {
+            owner: 'artifact-launcher',
+            profilePath: artifactMcp.sandboxProfilePath,
+          })
+        ) {
+          throw new Error('artifact launcher returned an unverified confinement capability');
+        }
       } catch (err) {
         return finishAttempt(
           attempt,
@@ -869,6 +879,7 @@ async function defaultSpawnAgent(args: {
           model: args.model.alias,
           externallySandboxed: true as const,
           sandboxProfilePath: args.artifactMcp.sandboxProfilePath,
+          confinementCapability: args.artifactMcp.confinementCapability,
           timeoutMs: args.timeoutMs,
           opLabel: `team:${args.role}`,
           opKind: 'agent' as const,

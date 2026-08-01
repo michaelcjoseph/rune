@@ -26,6 +26,7 @@ import { runGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { GateFailReason, GateValidationReceipt } from './work-run-gate.js';
 import type { ValidationAdapter } from '../intent/full-suite-attestation.js';
+import type { ValidationCommandProfile } from '../intent/validation-profiles.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { rebuildRegistry } from './registry-rebuild.js';
@@ -673,6 +674,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         let baseBranch = 'main';
         let repoPath = '';
         let validationCommands: string[] = [];
+        let validationCommandProfiles: ValidationCommandProfile[] = [];
         let validationAdapters: ValidationAdapter[] = [];
         let validationCwd: string | undefined;
         try {
@@ -680,6 +682,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           baseBranch = productConfig.baseBranch;
           repoPath = productConfig.repoPath;
           validationCommands = productConfig.validationCommands ?? [];
+          validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
           validationAdapters = productConfig.validationAdapters ?? [];
           validationCwd = productConfig.validationCwd;
         } catch (err) {
@@ -899,6 +902,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 branch,
                 integrationWorktree,
                 validationCommands,
+                validationCommandProfiles,
                 validationAdapters,
                 ...(validationCwd !== undefined ? { validationCwd } : {}),
                 tasksRemaining: gateTasksRemaining,

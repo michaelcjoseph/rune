@@ -40,6 +40,7 @@ import {
 import type { RoleModelBinding } from './team-task-deps.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { cancelOp, listOps } from '../transport/in-flight.js';
+import { createConfinementCapability } from '../utils/validation-confinement.js';
 
 const {
   mockSpawn,
@@ -143,6 +144,19 @@ const confirmedSelfReview = [
   '{"outcome":"confirmed","notes":"Canonical implementation and tests are consistent."}',
   '```',
 ].join('\n');
+
+function stubArtifactMcp(stop: () => Promise<void>) {
+  const sandboxProfilePath = '/tmp/test-artifact.sb';
+  return {
+    claudeArgs: [],
+    codexConfigOverrides: [],
+    sandboxProfilePath,
+    confinementCapability: createConfinementCapability('artifact-launcher', sandboxProfilePath),
+    runtimeEnv: { TMPDIR: '/tmp/test-artifact-runtime' },
+    verifyRegistration: async () => {},
+    stop,
+  };
+}
 
 function makeOpts(overrides: Partial<ExecutionAgentOpts> = {}): ExecutionAgentOpts {
   return {
@@ -787,6 +801,7 @@ describe('runExecutionAgent — artifact MCP boundary', () => {
       'shell_environment_policy.inherit="none"',
     ],
     sandboxProfilePath: '/tmp/artifact.sb',
+    confinementCapability: createConfinementCapability('artifact-launcher', '/tmp/artifact.sb'),
     runtimeEnv: { TMPDIR: '/tmp/rune-artifact-runtime' },
     codexEnv: { HOME: '/tmp/rune-artifact-runtime', CODEX_HOME: '/tmp/rune-artifact-runtime/codex-home' },
     verifyRegistration: vi.fn(async () => {}),
@@ -1093,8 +1108,8 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
       .mockResolvedValueOnce({ output: 'recovered', error: null });
     const stops = [vi.fn(async () => {}), vi.fn(async () => {})];
     const buildArtifactMcp = vi.fn()
-      .mockResolvedValueOnce({ stop: stops[0] })
-      .mockResolvedValueOnce({ stop: stops[1] });
+      .mockResolvedValueOnce(stubArtifactMcp(stops[0]!))
+      .mockResolvedValueOnce(stubArtifactMcp(stops[1]!));
     const delays: number[] = [];
 
     const result = await runExecutionAgent(makeOpts({ role: 'coder' }), {
@@ -1214,7 +1229,7 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
         failureStage: 'provider',
         retryable: true,
       })),
-      buildArtifactMcp: async () => ({ stop }) as never,
+      buildArtifactMcp: async () => stubArtifactMcp(stop),
     });
 
     expect(result).toMatchObject({

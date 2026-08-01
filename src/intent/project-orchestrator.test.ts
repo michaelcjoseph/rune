@@ -2592,6 +2592,71 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(JSON.stringify(result)).not.toContain('/Users/');
   });
 
+  it('holds operationally (not parked) on the FIRST attempt when closeout validation reports profile-unavailable, skipping the repair loop', async () => {
+    const worktreePath = '/tmp/rune-worktrees/aura/14-profile-unavailable';
+    const command = 'npm test';
+    const taskValidationFailure = {
+      kind: 'profile-unavailable' as const,
+      command,
+      prerequisite: 'sandbox-integration',
+      exitCode: null,
+      timedOut: false,
+      diagnostics: 'required validation capability is unavailable',
+    };
+    const commitWip = vi.fn(async () => ({
+      kind: 'committed' as const,
+      sha: 'wip-profile-unavailable-1234',
+    }));
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-commit',
+      subject: 'must not commit',
+    }));
+    let checksCalls = 0;
+    const runTaskWorkflow = vi.fn(async (task: SelectedTask) => {
+      return readyEvidence(task);
+    });
+    const h = makeHarness({
+      worktreePath,
+      runTaskWorkflow,
+      runCloseoutChecks: async () => {
+        checksCalls += 1;
+        return {
+          ok: false,
+          failure: {
+            command,
+            exitCode: null,
+            timedOut: false,
+            outputTail: taskValidationFailure.diagnostics,
+            validationFailure: taskValidationFailure,
+          },
+        } as const;
+      },
+      commitWip,
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+    }, '# Tasks\n- [ ] Build the streak core\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expectOperationalHold(result, {
+      reason: /validation capability unavailable/i,
+      worktreePath,
+    });
+    // No coder repair round is spent chasing an unavailable host capability —
+    // closeout checks run exactly once, not the full repair budget.
+    expect(checksCalls).toBe(1);
+    expect(runTaskWorkflow).toHaveBeenCalledOnce();
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+    // Unlike an ordinary validation failure, this is an operational hold —
+    // never a `blocked`/`parked` terminal, even though a worktreePath is set.
+    expect((result as unknown as Record<string, unknown>)['kind']).not.toBe('blocked');
+  });
+
   it('blocks a validation-mutated canonical review surface before any closeout transform and exposes hashes, never raw diff', async () => {
     const rawMutatedDiff = 'diff --git a/src/secret.ts b/src/secret.ts\n+RAW-MUTATED-DIFF';
     const reviewSurfaceFailure = {

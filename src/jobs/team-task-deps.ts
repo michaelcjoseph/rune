@@ -54,6 +54,7 @@ import {
   mapObjectionSeverityToOutcome,
   ExecutionFailureError,
   RoleCancellationError,
+  ValidationProfileUnavailableError,
   runTeamTaskWorkflow,
   SELF_REVIEW_NOTE_MAX_CHARS,
   type ObjectionClass,
@@ -81,7 +82,15 @@ import {
   captureCanonicalReviewState,
   defaultRunCanonicalGit,
 } from './canonical-git.js';
-import { runValidationCommands } from './work-run-gate-runtime.js';
+import {
+  probeValidationProfile,
+  runValidationCommands,
+} from './work-run-gate-runtime.js';
+import type { ValidationAdapter } from '../intent/full-suite-attestation.js';
+import {
+  planValidationProfiles,
+  type ValidationCommandProfile,
+} from '../intent/validation-profiles.js';
 import {
   runExecutionAgent,
   type ExecutionAgentIO,
@@ -118,6 +127,7 @@ import {
 } from './execution-preflight.js';
 import {
   resolveValidationCwd,
+  parseValidationCommand,
   validateTaskValidationAdmission,
 } from './task-validation.js';
 import type { TaskValidationFailure } from '../intent/task-validation.js';
@@ -962,6 +972,8 @@ export interface BuildTeamTaskDepsArgs {
    *  so fixture callers compile; absent/empty ⇒ no validation section in the
    *  coder body (prior behavior). */
   validationCommands?: string[];
+  validationCommandProfiles?: ValidationCommandProfile[];
+  validationAdapters?: ValidationAdapter[];
   /** Already boundary-validated directory used by mechanical command runners. */
   validationCommandCwd?: string;
   /** Worktree-relative label rendered in the coder prompt. */
@@ -1658,6 +1670,14 @@ export function buildProductionTeamTaskDeps(
             validationCommands,
             commandCwd,
             config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+            undefined,
+            undefined,
+            (args.validationCommandProfiles?.length ?? 0) > 0
+              ? {
+                  commandProfiles: args.validationCommandProfiles!,
+                  adapters: args.validationAdapters ?? [],
+                }
+              : undefined,
           );
           if (validation.ok) {
             await revertEntries(preTree, surviving);
@@ -1668,6 +1688,17 @@ export function buildProductionTeamTaskDeps(
           if (validation.result.timedOut) {
             await revertEntries(preTree, surviving);
             return notRepaired(`confirm-red run timed out on: ${validation.command}`);
+          }
+          if (validation.result.failureClass === 'profile-unavailable') {
+            await revertEntries(preTree, surviving);
+            throw new ValidationProfileUnavailableError({
+              kind: 'profile-unavailable',
+              command: validation.command,
+              prerequisite: validation.result.profile ?? 'validation profile',
+              exitCode: null,
+              timedOut: false,
+              diagnostics: 'required validation capability became unavailable during confirm-red',
+            });
           }
           redCheck = {
             kind: 'red',
@@ -1693,8 +1724,11 @@ export function buildProductionTeamTaskDeps(
         ];
         return { kind: 'repaired', testIds, redCheck };
       } catch (err) {
-        if (err instanceof ExecutionFailureError) throw err;
-        if (err instanceof RoleCancellationError) throw err;
+        if (
+          err instanceof ExecutionFailureError ||
+          err instanceof RoleCancellationError ||
+          err instanceof ValidationProfileUnavailableError
+        ) throw err;
         return notRepaired(`tech-lead repair failed: ${(err as Error).message}`);
       }
     },
@@ -2313,6 +2347,8 @@ export interface TaskWorkflowRunnerArgs {
    *  the coder drives the full suite green before handback. Production passes
    *  the list `buildOrchestrationDeps` already resolved for closeout. */
   validationCommands?: string[];
+  validationCommandProfiles?: ValidationCommandProfile[];
+  validationAdapters?: ValidationAdapter[];
   /** Optional worktree-relative command directory from products.json. */
   validationCwd?: string;
   /** Inner per-task round cap; defaults to {@link DEFAULT_ROUND_CAP}. */
@@ -2369,6 +2405,8 @@ function formatTaskValidationBlockedReason(failure: TaskValidationFailure): stri
       return `needs-validation: invalid validation directory \`${failure.validationCwd ?? '.'}\``;
     case 'missing-executable':
       return `needs-validation: required executable \`${failure.executable ?? 'unknown'}\` is unavailable for \`${failure.command}\``;
+    case 'profile-unavailable':
+      return `needs-validation: validation capability profile is unavailable for \`${failure.command}\``;
     case 'command-failed':
     case 'timeout':
       return `needs-validation: \`${failure.command}\` ${failure.timedOut ? 'timed out' : `exited ${failure.exitCode ?? 'unknown'}`}`;
@@ -2500,6 +2538,47 @@ export function createProductionTaskWorkflowRunner(
         validationAdmission.failure,
       );
     }
+    if ((args.validationCommandProfiles?.length ?? 0) > 0) {
+      let plan;
+      try {
+        plan = planValidationProfiles({
+          commands: args.validationCommands ?? [],
+          commandProfiles: args.validationCommandProfiles ?? [],
+          adapters: args.validationAdapters ?? [],
+          parseCommand: parseValidationCommand,
+        });
+      } catch {
+        const failure: TaskValidationFailure = {
+          kind: 'profile-unavailable',
+          command: 'validation profile plan',
+          prerequisite: 'validationCommandProfiles',
+          exitCode: null,
+          timedOut: false,
+          diagnostics: 'validation profile plan is invalid',
+        };
+        await args.persistTaskValidationFailure?.(failure);
+        return blockedEvidence(task, formatTaskValidationBlockedReason(failure), undefined, failure);
+      }
+      for (const profile of [...new Set(plan.shards.map((shard) => shard.profile))]) {
+        const probe = await probeValidationProfile(
+          profile,
+          validationAdmission.cwd,
+          config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+        );
+        if (probe.outcome !== 'passed') {
+          const failure: TaskValidationFailure = {
+            kind: 'profile-unavailable',
+            command: `validation profile ${profile}`,
+            prerequisite: profile,
+            exitCode: null,
+            timedOut: false,
+            diagnostics: 'required validation capability is unavailable',
+          };
+          await args.persistTaskValidationFailure?.(failure);
+          return blockedEvidence(task, formatTaskValidationBlockedReason(failure), undefined, failure);
+        }
+      }
+    }
 
     let policy: ModelPolicy | null;
     try {
@@ -2561,6 +2640,12 @@ export function createProductionTaskWorkflowRunner(
         taskBaseTree: ctx.taskBase.treeOid,
         ...(args.validationCommands !== undefined
           ? { validationCommands: args.validationCommands }
+          : {}),
+        ...(args.validationCommandProfiles !== undefined
+          ? { validationCommandProfiles: args.validationCommandProfiles }
+          : {}),
+        ...(args.validationAdapters !== undefined
+          ? { validationAdapters: args.validationAdapters }
           : {}),
         validationCommandCwd: validationAdmission.cwd,
         validationCwdLabel: args.validationCwd ?? '.',

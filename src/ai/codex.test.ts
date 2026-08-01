@@ -541,9 +541,14 @@ describe('ai/codex', () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
 
       const { runCodex } = await import('./codex.js');
+      const { createConfinementCapability } = await import('../utils/validation-confinement.js');
       await runCodex('my prompt', {
         externallySandboxed: true,
         sandboxProfilePath: '/private/tmp/artifact.sb',
+        confinementCapability: createConfinementCapability(
+          'artifact-launcher',
+          '/private/tmp/artifact.sb',
+        ),
       });
 
       const [command, args] = spawnMock.mock.calls[0]! as [string, string[]];
@@ -560,9 +565,14 @@ describe('ai/codex', () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
 
       const { runCodex } = await import('./codex.js');
+      const { createConfinementCapability } = await import('../utils/validation-confinement.js');
       await runCodex('my prompt', {
         externallySandboxed: true,
         sandboxProfilePath: '/private/tmp/artifact.sb',
+        confinementCapability: createConfinementCapability(
+          'artifact-launcher',
+          '/private/tmp/artifact.sb',
+        ),
       });
 
       const [, args] = spawnMock.mock.calls[0]! as [string, string[]];
@@ -604,6 +614,24 @@ describe('ai/codex', () => {
       } as unknown as Parameters<typeof runCodex>[1];
       await expect(runCodex('my prompt', invalid))
         .rejects.toThrow(/externallySandboxed requires sandboxProfilePath/i);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a structurally forged confinement capability before spawning', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { runCodex } = await import('./codex.js');
+
+      const invalid = {
+        externallySandboxed: true,
+        sandboxProfilePath: '/private/tmp/artifact.sb',
+        confinementCapability: {
+          owner: 'artifact-launcher',
+          profilePath: '/private/tmp/artifact.sb',
+          nonce: 'spoofed-marker',
+        },
+      } as unknown as Parameters<typeof runCodex>[1];
+      await expect(runCodex('my prompt', invalid))
+        .rejects.toThrow(/verified confinement capability/i);
       expect(spawnMock).not.toHaveBeenCalled();
     });
 

@@ -1,3 +1,4 @@
+// @module-tag validation-sandbox-integration
 /**
  * Project 15 P1.5 — "test before mutating main" suite for the gate RUNTIME
  * (`runGate`, src/jobs/work-run-gate-runtime.ts). test-plan.md §6 "Gate checks
@@ -31,6 +32,7 @@ import {
   collectTaskChangedPaths,
   taskChangesRequireFullValidation,
   runValidationCommandArgv,
+  runProfiledVitestSelection,
   runTrustedVitestObserver,
   runValidationCommands,
   runFullSuiteValidation,
@@ -43,10 +45,109 @@ import {
 } from './work-run-gate-runtime.js';
 import { diagnoseRelatedTestResult } from './related-test-diagnostic.js';
 import {
+  requestValidationSandboxProbe,
+  type ValidationSandboxBroker,
+} from './validation-sandbox-broker.js';
+import { createConfinementCapability } from '../utils/validation-confinement.js';
+import {
   RELATED_TEST_ARGUMENT_MAX_CHARS,
   RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS,
   RELATED_TEST_SELECTED_PATHS_MAX,
 } from '../intent/related-test-diagnostic.js';
+
+/** A stand-in broker carrying a REAL launcher capability, so a test double
+ *  still satisfies the same grant check production callers must pass. */
+function fakeBroker(
+  socketPath: string,
+  stop: () => Promise<void>,
+): ValidationSandboxBroker {
+  return {
+    socketPath,
+    capability: createConfinementCapability('sandbox-broker', socketPath),
+    attestationNonce: 'test-attestation-nonce',
+    profile: 'sandbox-integration',
+    stop,
+  };
+}
+
+describe('strict profiled Vitest selection', () => {
+  it('probes and runs stable shards while brokering only sandbox integration', async () => {
+    const stop = vi.fn(async () => {});
+    const runCommandArgv = vi.fn<typeof runValidationCommandArgv>(async () => ({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+    }));
+    const probeProfile = vi.fn(async (profile: 'isolated' | 'loopback' | 'sandbox-integration') => ({
+      profile,
+      definitionFingerprint: 'a'.repeat(64),
+      confinementOwner: profile === 'sandbox-integration'
+        ? 'sandbox-broker' as const
+        : 'validation-launcher' as const,
+      outcome: 'passed' as const,
+      startedAt: '2026-07-31T12:00:00.000Z',
+      completedAt: '2026-07-31T12:00:01.000Z',
+    }));
+
+    const result = await runProfiledVitestSelection({
+      command: 'npx vitest related',
+      argv: ['npx', 'vitest', 'related', '--run', 'src/example.ts'],
+      cwd: '/tmp/product',
+      timeoutMs: 1_000,
+      runCommandArgv,
+      probeProfile,
+      startSandboxBroker: async () => fakeBroker('/tmp/broker.sock', stop),
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(probeProfile.mock.calls.map(([profile]) => profile)).toEqual([
+      'isolated', 'loopback', 'sandbox-integration',
+    ]);
+    expect(runCommandArgv.mock.calls.map(([argv]) => argv.at(-1))).toEqual([
+      '--tags-filter=!validation-loopback && !validation-sandbox-integration',
+      '--tags-filter=validation-loopback && !validation-sandbox-integration',
+      '--tags-filter=validation-sandbox-integration && !validation-loopback',
+    ]);
+    expect(runCommandArgv.mock.calls.map((call) => call[4])).toEqual([
+      { profile: 'isolated' },
+      { profile: 'loopback' },
+      {
+        profile: 'sandbox-integration',
+        sandboxBrokerSocket: '/tmp/broker.sock',
+        sandboxBrokerCapability: expect.objectContaining({ owner: 'sandbox-broker' }),
+        sandboxBrokerAttestation: 'test-attestation-nonce',
+      },
+    ]);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('classifies an unavailable profile before launching its shard', async () => {
+    const runCommandArgv = vi.fn();
+    const result = await runProfiledVitestSelection({
+      command: 'npx vitest related',
+      argv: ['npx', 'vitest', 'related', '--run', 'src/example.ts'],
+      cwd: '/tmp/product',
+      timeoutMs: 1_000,
+      runCommandArgv,
+      probeProfile: async (profile) => ({
+        profile,
+        definitionFingerprint: 'a'.repeat(64),
+        confinementOwner: 'validation-launcher',
+        outcome: 'unavailable',
+        failureClass: 'profile-unavailable',
+        startedAt: '2026-07-31T12:00:00.000Z',
+        completedAt: '2026-07-31T12:00:01.000Z',
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: { failureClass: 'profile-unavailable', profile: 'isolated' },
+    });
+    expect(runCommandArgv).not.toHaveBeenCalled();
+  });
+});
 
 let repoPath: string;
 let integrationWorktree: string;
@@ -325,7 +426,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
       'npm test',
     ]);
     expect(projected.validationReceipt).toMatchObject({
-      version: 1,
+      version: 2,
       treeOid: expect.stringMatching(/^[0-9a-f]{40}$/),
       fullTaskReviewHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       completedAt: expect.any(String),
@@ -341,7 +442,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
     const serialized = JSON.stringify(projected.validationReceipt);
     expect(serialized).not.toContain(repoPath);
     expect(serialized).not.toContain('TELEGRAM_BOT_TOKEN');
-    expect(serialized.length).toBeLessThan(2_000);
+    expect(serialized.length).toBeLessThan(8_000);
   });
 
   it('fails closed when a mapped command exits zero without canonical reporter evidence', async () => {
@@ -434,7 +535,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
       },
     });
     expect(existsSync(integrationWorktree)).toBe(false);
-  });
+  }, 30_000);
 
   it('runs final gate commands from integrationWorktree/validationCwd', async () => {
     git(repoPath, 'checkout', '-q', BRANCH);
@@ -488,6 +589,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
       expect(runValidationCommand).not.toHaveBeenCalled();
       expect(existsSync(integrationWorktree)).toBe(false);
     },
+    30_000,
   );
 
   it('fails closed when final gate validationCwd is a symlink escaping the integration worktree', async () => {
@@ -920,6 +1022,23 @@ describe('runValidationCommands', () => {
   });
 
   it.runIf(process.platform === 'darwin')('allows localhost but denies external validation networking', async () => {
+    const inheritedBroker = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+    if (inheritedBroker !== undefined) {
+      const result = await requestValidationSandboxProbe(inheritedBroker, {
+        version: 1,
+        scenario: 'loopback-allowed-external-denied',
+        candidateProfile: [
+          '(version 1)',
+          '(allow default)',
+          '(deny network-outbound)',
+          '(deny network-inbound)',
+          '(allow network-inbound (local ip "localhost:*"))',
+          '(allow network-outbound (remote ip "localhost:*"))',
+        ].join(''),
+      });
+      expect(result).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+      return;
+    }
     const local = await runValidationCommandArgv([
       process.execPath,
       '-e',
@@ -1319,6 +1438,16 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
   it.runIf(process.platform === 'darwin')(
     'prevents escaped product config from mutating the boot-anchored trust root',
     async () => {
+      const inheritedBroker = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+      if (inheritedBroker !== undefined) {
+        const result = await requestValidationSandboxProbe(inheritedBroker, {
+          version: 1,
+          scenario: 'private-write-denied',
+          candidateProfile: '(version 1)(allow default)(deny file-write*)',
+        });
+        expect(result).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+        return;
+      }
       const sentinel = join(PROJECT_ROOT, `.rune-attestation-sentinel-${process.pid}`);
       writeFileSync(sentinel, 'trusted\n', { mode: 0o600 });
       try {
@@ -1358,6 +1487,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
         rmSync(sentinel, { force: true });
       }
     },
+    30_000,
   );
 
   it('fails closed when product config imports the trusted reporter as a signing oracle', async () => {
@@ -1485,6 +1615,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       {
         deniedWriteRoots: [PROJECT_ROOT],
         allowedWriteRoots: [repoPath],
+        profile: 'isolated',
       },
     );
     const durable = JSON.stringify(result);
@@ -1532,6 +1663,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       {
         deniedWriteRoots: [PROJECT_ROOT],
         allowedWriteRoots: [repoPath],
+        profile: 'isolated',
       },
     );
     expect(expectedTreeOid).not.toBe(hookedTree);

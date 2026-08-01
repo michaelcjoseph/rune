@@ -8,8 +8,16 @@
 
 import { isAbsolute, normalize } from 'node:path';
 import { isGitObjectId } from './git-object-id.js';
+import type {
+  ValidationProfile,
+  ValidationProfilePlan,
+  ValidationProfileSelection,
+} from './validation-profiles.js';
+import {
+  isValidationProfile,
+} from './validation-profiles.js';
 
-export const FULL_SUITE_ATTESTATION_VERSION = 1;
+export const FULL_SUITE_ATTESTATION_VERSION = 2;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_COMMANDS = 32;
 const MAX_ARGV = 64;
@@ -19,6 +27,26 @@ const MAX_COUNT = 10_000_000;
 export interface ValidationAdapter {
   command: string;
   runner: 'vitest';
+  profileSelection?: ValidationProfileSelection;
+}
+
+export interface ValidationProfileProbeEvidence {
+  profile: ValidationProfile;
+  definitionFingerprint: string;
+  confinementOwner: 'validation-launcher' | 'sandbox-broker';
+  outcome: 'passed' | 'unavailable';
+  failureClass?: 'profile-unavailable';
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ValidationProfileOutcome {
+  profile: ValidationProfile;
+  selector?: string;
+  outcome: 'passed' | 'failed' | 'timed-out' | 'cancelled' | 'profile-unavailable';
+  probe: ValidationProfileProbeEvidence;
+  discovered?: VitestLifecycleManifest['discovered'];
+  completed?: VitestLifecycleManifest['completed'];
 }
 
 export interface VitestLifecycleManifest {
@@ -42,7 +70,7 @@ export interface VitestLifecycleManifest {
 }
 
 export interface FullSuiteAttestation {
-  version: 1;
+  version: 1 | 2;
   treeOid: string;
   fullTaskReviewHash: string;
   /** Worktree-relative label only; never an absolute host path. */
@@ -67,6 +95,8 @@ export interface FullSuiteAttestation {
   coverage:
     | { status: 'complete'; manifest: VitestLifecycleManifest }
     | { status: 'unsupported' };
+  profilePlan?: ValidationProfilePlan;
+  profileOutcomes?: ValidationProfileOutcome[];
 }
 
 export interface FullSuiteAttestationIdentity {
@@ -77,6 +107,7 @@ export interface FullSuiteAttestationIdentity {
   commandFingerprint: string;
   configurationFingerprint: string;
   dependencyFingerprint: string;
+  profilePlan?: ValidationProfilePlan;
 }
 
 export type FullSuiteAttestationValidation =
@@ -84,7 +115,7 @@ export type FullSuiteAttestationValidation =
   | { ok: false; reason: string };
 
 export interface CompactValidationReceipt {
-  version: 1;
+  version: 1 | 2;
   command: string;
   treeOid: string;
   fullTaskReviewHash: string;
@@ -93,6 +124,8 @@ export interface CompactValidationReceipt {
   completedAt: string;
   discovered?: VitestLifecycleManifest['discovered'];
   completed?: VitestLifecycleManifest['completed'];
+  profilePlan?: ValidationProfilePlan;
+  profileOutcomes?: ValidationProfileOutcome[];
 }
 
 export type ValidationReceiptProvenance =
@@ -103,7 +136,10 @@ export type ValidationReceiptProvenance =
 export type ValidationCoverageStatus = 'complete' | 'unsupported' | 'invalid';
 
 export interface ValidationBatchReceipt {
-  outcome: 'passed' | 'failed' | 'timed-out' | 'cancelled' | 'drifted';
+  outcome: 'passed' | 'failed' | 'timed-out' | 'cancelled' | 'drifted' | 'profile-unavailable';
+  /** Present on V2 profiled evidence; absent on readable historical V1 data. */
+  profilePlan?: ValidationProfilePlan;
+  profileOutcomes?: ValidationProfileOutcome[];
   commands: Array<{
     command: string;
     outcome: 'passed' | 'failed' | 'timed-out' | 'cancelled';
@@ -115,7 +151,7 @@ export interface ValidationBatchReceipt {
 
 /** Compact, restart-safe merge-gate proof bound to one integration tree. */
 export interface GateValidationReceipt extends ValidationBatchReceipt {
-  version: 1;
+  version: 1 | 2;
   treeOid: string;
   fullTaskReviewHash: string;
   completedAt: string;
@@ -132,6 +168,8 @@ export interface DurableValidationReceipt {
   coverage: FullSuiteAttestation['coverage']['status'];
   discovered?: VitestLifecycleManifest['discovered'];
   completed?: VitestLifecycleManifest['completed'];
+  profilePlan?: ValidationProfilePlan;
+  profileOutcomes?: ValidationProfileOutcome[];
 }
 
 function parseLifecycleCounts(
@@ -213,14 +251,17 @@ export function vitestLifecycleIsGreen(
 export function parseValidationBatchReceipt(
   value: unknown,
 ): ValidationBatchReceipt | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['outcome', 'commands'])) return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, [
+    'outcome', 'commands', 'profilePlan', 'profileOutcomes',
+  ])) return undefined;
   const outcome = value['outcome'];
   if (
     outcome !== 'passed' &&
     outcome !== 'failed' &&
     outcome !== 'timed-out' &&
     outcome !== 'cancelled' &&
-    outcome !== 'drifted'
+    outcome !== 'drifted' &&
+    outcome !== 'profile-unavailable'
   ) return undefined;
   if (
     !Array.isArray(value['commands']) ||
@@ -272,8 +313,149 @@ export function parseValidationBatchReceipt(
         entry.outcome === 'failed' || entry.coverage === 'invalid')
         ? 'failed'
         : 'passed';
-  if (outcome !== 'drifted' && outcome !== derived) return undefined;
-  return { outcome, commands };
+  const profilePlan = parseValidationProfilePlan(value['profilePlan']);
+  const profileOutcomes = parseValidationProfileOutcomes(
+    value['profileOutcomes'],
+    profilePlan,
+  );
+  if ((value['profilePlan'] === undefined) !== (value['profileOutcomes'] === undefined)) {
+    return undefined;
+  }
+  if (value['profilePlan'] !== undefined && (profilePlan === undefined || profileOutcomes === undefined)) {
+    return undefined;
+  }
+  if (
+    outcome === 'profile-unavailable'
+      ? !profileOutcomes?.some((entry) => entry.outcome === 'profile-unavailable')
+      : outcome !== 'drifted' && outcome !== derived
+  ) return undefined;
+  if (profileOutcomes !== undefined && !shardOutcomesAgree(commands, profileOutcomes)) {
+    return undefined;
+  }
+  return {
+    outcome,
+    commands,
+    ...(profilePlan !== undefined ? { profilePlan, profileOutcomes } : {}),
+  };
+}
+
+function parseValidationProfilePlan(value: unknown): ValidationProfilePlan | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, [
+    'version', 'shards', 'definitionFingerprint',
+  ])) return undefined;
+  if (
+    value['version'] !== 1 ||
+    !SHA256.test(String(value['definitionFingerprint'])) ||
+    !Array.isArray(value['shards']) ||
+    value['shards'].length < 1 ||
+    value['shards'].length > MAX_COMMANDS * 3
+  ) return undefined;
+  const shards: ValidationProfilePlan['shards'] = [];
+  for (const shard of value['shards']) {
+    if (!isRecord(shard) || !hasOnlyKeys(shard, ['command', 'argv', 'profile', 'selector'])) {
+      return undefined;
+    }
+    const parsedArgv = parseArgv([shard['argv']])?.[0];
+    if (
+      !boundedString(shard['command']) ||
+      containsAbsoluteHostPath(shard['command']) ||
+      parsedArgv === undefined ||
+      !isValidationProfile(shard['profile']) ||
+      (shard['selector'] !== undefined && !boundedString(shard['selector'], 128))
+    ) return undefined;
+    shards.push({
+      command: shard['command'],
+      argv: parsedArgv,
+      profile: shard['profile'],
+      ...(typeof shard['selector'] === 'string' ? { selector: shard['selector'] } : {}),
+    });
+  }
+  return {
+    version: 1,
+    shards,
+    definitionFingerprint: value['definitionFingerprint'] as string,
+  };
+}
+
+/**
+ * The launcher emits `commands[i]` and `profileOutcomes[i]` from one per-shard
+ * execution, so the two arrays are index-aligned and equal length. A command
+ * entry may only be a DOWNGRADE of its shard outcome — `'failed'` covers both
+ * the red-lifecycle downgrade (green exit, red trusted manifest) and a
+ * `profile-unavailable` shard. Any other divergence means the arrays were
+ * assembled from different runs or tampered with independently, so a receipt
+ * claiming a passed command over a non-passed shard is never admitted.
+ */
+function shardOutcomesAgree(
+  commands: ValidationBatchReceipt['commands'],
+  profileOutcomes: readonly ValidationProfileOutcome[],
+): boolean {
+  return commands.length === profileOutcomes.length &&
+    commands.every((entry, index) =>
+      entry.outcome === profileOutcomes[index]!.outcome || entry.outcome === 'failed');
+}
+
+function parseValidationProfileOutcomes(
+  value: unknown,
+  plan: ValidationProfilePlan | undefined,
+): ValidationProfileOutcome[] | undefined {
+  if (!Array.isArray(value) || plan === undefined || value.length !== plan.shards.length) {
+    return undefined;
+  }
+  const parsed: ValidationProfileOutcome[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index];
+    const shard = plan.shards[index]!;
+    if (!isRecord(entry) || !hasOnlyKeys(entry, [
+      'profile', 'selector', 'outcome', 'probe', 'discovered', 'completed',
+    ])) return undefined;
+    if (
+      entry['profile'] !== shard.profile ||
+      entry['selector'] !== shard.selector ||
+      !['passed', 'failed', 'timed-out', 'cancelled', 'profile-unavailable'].includes(
+        String(entry['outcome']),
+      )
+    ) return undefined;
+    const probe = entry['probe'];
+    if (!isRecord(probe) || !hasOnlyKeys(probe, [
+      'profile', 'definitionFingerprint', 'confinementOwner', 'outcome',
+      'failureClass', 'startedAt', 'completedAt',
+    ])) return undefined;
+    if (
+      probe['profile'] !== shard.profile ||
+      !SHA256.test(String(probe['definitionFingerprint'])) ||
+      !['validation-launcher', 'sandbox-broker'].includes(String(probe['confinementOwner'])) ||
+      !['passed', 'unavailable'].includes(String(probe['outcome'])) ||
+      (probe['failureClass'] !== undefined && probe['failureClass'] !== 'profile-unavailable') ||
+      !boundedString(probe['startedAt'], 64) ||
+      !boundedString(probe['completedAt'], 64) ||
+      !Number.isFinite(Date.parse(probe['startedAt'])) ||
+      !Number.isFinite(Date.parse(probe['completedAt']))
+    ) return undefined;
+    const counts = entry['discovered'] === undefined && entry['completed'] === undefined
+      ? undefined
+      : parseReceiptCounts(entry['discovered'], entry['completed']);
+    if ((entry['discovered'] === undefined) !== (entry['completed'] === undefined) ||
+      (entry['discovered'] !== undefined && counts === undefined)) return undefined;
+    parsed.push({
+      profile: shard.profile,
+      ...(shard.selector !== undefined ? { selector: shard.selector } : {}),
+      outcome: entry['outcome'] as ValidationProfileOutcome['outcome'],
+      probe: {
+        profile: shard.profile,
+        definitionFingerprint: probe['definitionFingerprint'] as string,
+        confinementOwner: probe['confinementOwner'] as ValidationProfileProbeEvidence['confinementOwner'],
+        outcome: probe['outcome'] as ValidationProfileProbeEvidence['outcome'],
+        ...(probe['failureClass'] === 'profile-unavailable'
+          ? { failureClass: 'profile-unavailable' as const }
+          : {}),
+        startedAt: probe['startedAt'] as string,
+        completedAt: probe['completedAt'] as string,
+      },
+      ...(counts !== undefined ? counts : {}),
+    });
+  }
+  return parsed;
 }
 
 export function parseGateValidationReceipt(
@@ -289,9 +471,11 @@ export function parseGateValidationReceipt(
     'dependencyFingerprint',
     'outcome',
     'commands',
+    'profilePlan',
+    'profileOutcomes',
   ])) return undefined;
   if (
-    value['version'] !== 1 ||
+    (value['version'] !== 1 && value['version'] !== 2) ||
     typeof value['treeOid'] !== 'string' ||
     !isGitObjectId(value['treeOid']) ||
     typeof value['fullTaskReviewHash'] !== 'string' ||
@@ -305,10 +489,16 @@ export function parseGateValidationReceipt(
   const batch = parseValidationBatchReceipt({
     outcome: value['outcome'],
     commands: value['commands'],
+    ...(value['profilePlan'] !== undefined
+      ? {
+          profilePlan: value['profilePlan'],
+          profileOutcomes: value['profileOutcomes'],
+        }
+      : {}),
   });
   if (batch === undefined) return undefined;
   return {
-    version: 1,
+    version: value['version'],
     treeOid: value['treeOid'],
     fullTaskReviewHash: value['fullTaskReviewHash'],
     completedAt: value['completedAt'],
@@ -451,13 +641,15 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
     'durationMs',
     'execution',
     'coverage',
+    'profilePlan',
+    'profileOutcomes',
   ])) return undefined;
   const argv = parseArgv(value['configuredArgv']);
   const adapter = value['adapter'];
   const execution = value['execution'];
   const coverage = value['coverage'];
   if (
-    value['version'] !== FULL_SUITE_ATTESTATION_VERSION ||
+    (value['version'] !== 1 && value['version'] !== FULL_SUITE_ATTESTATION_VERSION) ||
     typeof value['treeOid'] !== 'string' ||
     !isGitObjectId(value['treeOid']) ||
     typeof value['fullTaskReviewHash'] !== 'string' ||
@@ -507,8 +699,27 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
   } else {
     return undefined;
   }
+  const profilePlan = parseValidationProfilePlan(value['profilePlan']);
+  const profileOutcomes = parseValidationProfileOutcomes(value['profileOutcomes'], profilePlan);
+  if (
+    value['version'] === 1 &&
+    (value['profilePlan'] !== undefined || value['profileOutcomes'] !== undefined)
+  ) return undefined;
+  if (
+    value['version'] === 2 &&
+    (profilePlan === undefined || profileOutcomes === undefined)
+  ) return undefined;
+  // Same producer alignment as the batch receipt: `configuredArgv` and
+  // `profileOutcomes` are both one entry per executed shard, and the launcher
+  // only builds a passed attestation once every shard came back passed.
+  if (
+    profileOutcomes !== undefined &&
+    (profileOutcomes.length !== argv.length ||
+      (execution['outcome'] === 'passed' &&
+        profileOutcomes.some((entry) => entry.outcome !== 'passed')))
+  ) return undefined;
   return {
-    version: 1,
+    version: value['version'],
     treeOid: value['treeOid'],
     fullTaskReviewHash: value['fullTaskReviewHash'],
     validationCwd: value['validationCwd'],
@@ -529,6 +740,7 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
       cancelled: execution['cancelled'],
     },
     coverage: parsedCoverage,
+    ...(profilePlan !== undefined ? { profilePlan, profileOutcomes } : {}),
   };
 }
 
@@ -550,6 +762,7 @@ export function parseFullSuiteAttestation(value: unknown): FullSuiteAttestation 
     commandFingerprint: parsed.commandFingerprint,
     configurationFingerprint: parsed.configurationFingerprint,
     dependencyFingerprint: parsed.dependencyFingerprint,
+    ...(parsed.profilePlan !== undefined ? { profilePlan: parsed.profilePlan } : {}),
   });
   return validated.ok ? validated.attestation : undefined;
 }
@@ -572,6 +785,8 @@ export function parseDurableValidationReceipt(
     'coverage',
     'discovered',
     'completed',
+    'profilePlan',
+    'profileOutcomes',
   ])) return undefined;
   if (
     !boundedString(candidate['command']) ||
@@ -582,6 +797,20 @@ export function parseDurableValidationReceipt(
       candidate['outcome'] !== 'failed' &&
       candidate['outcome'] !== 'cancelled') ||
     (candidate['coverage'] !== 'complete' && candidate['coverage'] !== 'unsupported')
+  ) return undefined;
+  const profilePlan = parseValidationProfilePlan(candidate['profilePlan']);
+  const profileOutcomes = parseValidationProfileOutcomes(candidate['profileOutcomes'], profilePlan);
+  if ((candidate['profilePlan'] === undefined) !== (candidate['profileOutcomes'] === undefined)) {
+    return undefined;
+  }
+  if (candidate['profilePlan'] !== undefined && (profilePlan === undefined || profileOutcomes === undefined)) {
+    return undefined;
+  }
+  // A reusable receipt claiming a passed run cannot carry a non-passed shard.
+  if (
+    profileOutcomes !== undefined &&
+    candidate['outcome'] === 'passed' &&
+    profileOutcomes.some((entry) => entry.outcome !== 'passed')
   ) return undefined;
   const discovered = candidate['discovered'];
   const completed = candidate['completed'];
@@ -618,6 +847,7 @@ export function parseDurableValidationReceipt(
           completed: { ...parsedCounts.completed },
         }
       : {}),
+    ...(profilePlan !== undefined ? { profilePlan, profileOutcomes } : {}),
   };
 }
 
@@ -635,6 +865,7 @@ export function validateFullSuiteAttestation(
     attestation.commandFingerprint !== expected.commandFingerprint ||
     attestation.configurationFingerprint !== expected.configurationFingerprint ||
     attestation.dependencyFingerprint !== expected.dependencyFingerprint
+    || !exactJson(attestation.profilePlan, expected.profilePlan)
   ) {
     return { ok: false, reason: 'identity-mismatch' };
   }
@@ -662,7 +893,7 @@ export function compactValidationReceipt(
     ? attestation.coverage.manifest
     : undefined;
   return {
-    version: 1,
+    version: attestation.version,
     command: attestation.configuredArgv
       .map((argv) => sanitizeValidationCommandIdentifier(argv))
       .join(' + ')
@@ -676,6 +907,12 @@ export function compactValidationReceipt(
       ? {
           discovered: { ...manifest.discovered },
           completed: { ...manifest.completed },
+        }
+      : {}),
+    ...(attestation.profilePlan !== undefined
+      ? {
+          profilePlan: attestation.profilePlan,
+          profileOutcomes: attestation.profileOutcomes,
         }
       : {}),
   };
@@ -713,6 +950,12 @@ export function durableValidationReceipt(
       : {}),
     ...(receipt.completed !== undefined
       ? { completed: { ...receipt.completed } }
+      : {}),
+    ...(receipt.profilePlan !== undefined
+      ? {
+          profilePlan: receipt.profilePlan,
+          profileOutcomes: receipt.profileOutcomes,
+        }
       : {}),
   };
 }

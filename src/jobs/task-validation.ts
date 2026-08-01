@@ -132,18 +132,23 @@ export function taskValidationCommandFailure(
     return parsed.ok ? parsed.argv : undefined;
   })();
   const executable = parsedArgv?.[0];
-  const prerequisite = parsedArgv !== undefined && isDependencyInstallCommand(parsedArgv)
-    ? 'dependency-install'
-    : executable === undefined
-      ? 'validationCommands'
-      : 'executable';
+  const profileUnavailable = result.failureClass === 'profile-unavailable';
+  const prerequisite = profileUnavailable
+    ? result.profile ?? 'validation profile'
+    : parsedArgv !== undefined && isDependencyInstallCommand(parsedArgv)
+      ? 'dependency-install'
+      : executable === undefined
+        ? 'validationCommands'
+        : 'executable';
   return {
     ...failure(
-      result.timedOut ? 'timeout' : 'command-failed',
+      profileUnavailable
+        ? 'profile-unavailable'
+        : result.timedOut ? 'timeout' : 'command-failed',
       command,
       prerequisite,
     ),
-    ...(executable !== undefined ? { executable } : {}),
+    ...(!profileUnavailable && executable !== undefined ? { executable } : {}),
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     diagnostics,
