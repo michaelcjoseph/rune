@@ -19,6 +19,12 @@ export interface ValidationCommandProfile {
 export const VALIDATION_LOOPBACK_TAG = 'validation-loopback';
 export const VALIDATION_SANDBOX_INTEGRATION_TAG = 'validation-sandbox-integration';
 
+/** The reserved capability vocabulary, in selector order. */
+export const VALIDATION_CAPABILITY_TAGS = [
+  VALIDATION_LOOPBACK_TAG,
+  VALIDATION_SANDBOX_INTEGRATION_TAG,
+] as const;
+
 export interface ValidationProfileShard {
   command: string;
   argv: string[];
@@ -85,11 +91,23 @@ export function validationSelectorFor(profile: ValidationProfile): string {
   return `${VALIDATION_SANDBOX_INTEGRATION_TAG} && !${VALIDATION_LOOPBACK_TAG}`;
 }
 
+/**
+ * A test carrying both reserved tags matches NONE of the three mutually
+ * exclusive selectors above, so Vitest skips it in every shard while the
+ * lifecycle counts still reconcile — zero coverage under a green attestation.
+ *
+ * This is the canonical rule. Per-test tags are only visible inside the runner,
+ * so enforcement lives in `scripts/vitest-attestation-reporter.mjs`, which
+ * counts each conflicting test as a collection error (making
+ * `vitestLifecycleReconciles` false). `scripts/vitest-attestation-reporter.test.ts`
+ * holds the reporter to exactly this predicate.
+ */
+export function hasConflictingValidationTags(tags: readonly string[]): boolean {
+  return VALIDATION_CAPABILITY_TAGS.every((tag) => tags.includes(tag));
+}
+
 export function assertUnambiguousValidationTags(tags: readonly string[]): void {
-  if (
-    tags.includes(VALIDATION_LOOPBACK_TAG) &&
-    tags.includes(VALIDATION_SANDBOX_INTEGRATION_TAG)
-  ) {
+  if (hasConflictingValidationTags(tags)) {
     throw new Error('validation test carries conflicting capability tags');
   }
 }

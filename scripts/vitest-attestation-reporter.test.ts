@@ -4,7 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // @ts-expect-error JavaScript reporter has no declaration file by design.
-import ReporterImplementation from './vitest-attestation-reporter.mjs';
+import ReporterImplementation, { RESERVED_CAPABILITY_TAGS } from './vitest-attestation-reporter.mjs';
+import {
+  VALIDATION_CAPABILITY_TAGS,
+  hasConflictingValidationTags,
+} from '../src/intent/validation-profiles.js';
+import {
+  parseVitestManifest,
+  vitestLifecycleReconciles,
+} from '../src/intent/full-suite-attestation.js';
 
 type TestState = 'passed' | 'failed' | 'pending' | 'skipped';
 
@@ -21,11 +29,16 @@ type ReporterConstructor = new (options?: {
 
 const Reporter = ReporterImplementation as unknown as ReporterConstructor;
 
-function testCase(state: TestState, mode: 'run' | 'skip' | 'todo' = 'run') {
+function testCase(
+  state: TestState,
+  mode: 'run' | 'skip' | 'todo' = 'run',
+  tags?: readonly string[],
+) {
   return {
     name: '/Users/operator/private/secret test name',
     options: { mode },
     result: () => ({ state }),
+    ...(tags !== undefined ? { tags: [...tags] } : {}),
   };
 }
 
@@ -191,5 +204,84 @@ describe('trusted Vitest attestation reporter lifecycle', () => {
     expect(reporter['capability']).toBeUndefined();
     expect(Object.keys(reporter)).not.toContain('output');
     expect(Object.keys(reporter)).not.toContain('capability');
+  });
+});
+
+/**
+ * A test carrying BOTH reserved capability tags matches none of the three
+ * mutually exclusive profile selectors, so Vitest skips it in every shard while
+ * the counts still reconcile — silent zero coverage under a green attestation.
+ * The reporter is the only component that sees per-test resolved tags, so it
+ * owns enforcement; these tests hold it to the canonical rule in
+ * `src/intent/validation-profiles.ts`.
+ */
+describe('trusted Vitest attestation reporter — reserved capability tags', () => {
+  function manifestFor(tests: ReturnType<typeof testCase>[]): Record<string, unknown> {
+    const module = moduleFixture('/Users/operator/private/tagged.test.ts', tests);
+    const reporter = makeReporter();
+    reporter.onTestModuleCollected(module);
+    reporter.onTestRunEnd([module], [], 'passed');
+    return readManifest();
+  }
+
+  it('duplicates the canonical tag vocabulary without drift', () => {
+    expect(RESERVED_CAPABILITY_TAGS).toEqual([...VALIDATION_CAPABILITY_TAGS]);
+  });
+
+  it('agrees with the canonical conflict predicate on every tag subset', () => {
+    const [loopback, sandbox] = VALIDATION_CAPABILITY_TAGS;
+    const subsets: string[][] = [
+      [],
+      [loopback],
+      [sandbox],
+      [loopback, sandbox],
+      [sandbox, loopback],
+      ['unrelated'],
+      [loopback, 'unrelated'],
+      [loopback, sandbox, 'unrelated'],
+    ];
+    for (const tags of subsets) {
+      const manifest = manifestFor([testCase('passed', 'run', tags)]);
+      expect(manifest['collectionErrors'], `tags: ${JSON.stringify(tags)}`)
+        .toBe(hasConflictingValidationTags(tags) ? 1 : 0);
+    }
+  });
+
+  it('fails the lifecycle closed on a conflicting test whose counts still reconcile', () => {
+    const manifest = manifestFor([
+      testCase('passed', 'run', VALIDATION_CAPABILITY_TAGS),
+      testCase('passed', 'run', [VALIDATION_CAPABILITY_TAGS[0]]),
+    ]);
+    const parsed = parseVitestManifest(manifest);
+
+    expect(parsed).toBeDefined();
+    expect(parsed!.discovered).toEqual({ suites: 1, tests: 2 });
+    expect(parsed!.completed).toMatchObject({ suites: 1, tests: 2, passed: 2, failed: 0 });
+    expect(parsed!.collectionErrors).toBe(1);
+    // Without the collection error this manifest would read as complete green
+    // coverage over a test that ran in no profile at all.
+    expect(vitestLifecycleReconciles(parsed!)).toBe(false);
+  });
+
+  it('leaves an ordinary single-tag run reconciling', () => {
+    const parsed = parseVitestManifest(manifestFor([
+      testCase('passed', 'run', [VALIDATION_CAPABILITY_TAGS[1]]),
+      testCase('passed'),
+    ]));
+
+    expect(parsed).toBeDefined();
+    expect(parsed!.collectionErrors).toBe(0);
+    expect(vitestLifecycleReconciles(parsed!)).toBe(true);
+  });
+
+  it('counts a conflict declared only through inherited task options', () => {
+    const inherited = {
+      name: 'inherited',
+      options: { mode: 'run' as const, tags: [...VALIDATION_CAPABILITY_TAGS] },
+      result: () => ({ state: 'passed' as const }),
+    };
+    const manifest = manifestFor([inherited as unknown as ReturnType<typeof testCase>]);
+
+    expect(manifest['collectionErrors']).toBe(1);
   });
 });

@@ -3,6 +3,34 @@ import { createHmac } from 'node:crypto';
 import { dirname, relative, sep } from 'node:path';
 
 /**
+ * The reserved capability tags, mirroring `VALIDATION_LOOPBACK_TAG` and
+ * `VALIDATION_SANDBOX_INTEGRATION_TAG` in `src/intent/validation-profiles.ts`.
+ * This reporter is loaded into product-controlled Vitest and cannot import
+ * Rune's TypeScript, so the names are duplicated here;
+ * `scripts/vitest-attestation-reporter.test.ts` fails on any drift.
+ */
+export const RESERVED_CAPABILITY_TAGS = [
+  'validation-loopback',
+  'validation-sandbox-integration',
+];
+
+/**
+ * A test carrying BOTH reserved tags matches none of the three mutually
+ * exclusive profile selectors, so Vitest skips it in every shard while the
+ * counts still reconcile — silent zero coverage under a green attestation.
+ * Counting each such test as a collection error makes
+ * `vitestLifecycleReconciles` false, so the shard fails closed instead.
+ */
+function conflictingCapabilityTags(module) {
+  let conflicts = 0;
+  for (const test of module.children.allTests()) {
+    const tags = test.tags ?? test.options?.tags ?? [];
+    if (RESERVED_CAPABILITY_TAGS.every((tag) => tags.includes(tag))) conflicts += 1;
+  }
+  return conflicts;
+}
+
+/**
  * Rune's private Vitest reporter. It records counts only: no test names, file
  * paths, output, errors, environment, or other unbounded runner data.
  */
@@ -37,6 +65,7 @@ export default class RuneVitestAttestationReporter {
     this.#collected.set(module.moduleId, {
       suites: 1 + nestedSuites,
       tests: [...module.children.allTests()].length,
+      conflictingTags: conflictingCapabilityTags(module),
     });
   }
 
@@ -52,7 +81,16 @@ export default class RuneVitestAttestationReporter {
       todo: 0,
       cancelled: 0,
     };
-    let collectionErrors = Array.isArray(unhandledErrors) ? unhandledErrors.length : 0;
+    const conflictingTags = [...this.#collected.values()]
+      .reduce((sum, entry) => sum + (entry.conflictingTags ?? 0), 0);
+    if (conflictingTags > 0) {
+      process.stderr.write(
+        `${conflictingTags} test(s) carry conflicting validation capability tags ` +
+        `(${RESERVED_CAPABILITY_TAGS.join(' + ')}); they run in no profile\n`,
+      );
+    }
+    let collectionErrors =
+      (Array.isArray(unhandledErrors) ? unhandledErrors.length : 0) + conflictingTags;
     for (const module of modules) {
       collectionErrors += module.errors().length;
       const state = module.state();
