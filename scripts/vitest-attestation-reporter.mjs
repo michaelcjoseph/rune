@@ -20,14 +20,21 @@ export const RESERVED_CAPABILITY_TAGS = [
  * counts still reconcile — silent zero coverage under a green attestation.
  * Counting each such test as a collection error makes
  * `vitestLifecycleReconciles` false, so the shard fails closed instead.
+ *
+ * Tag reads are guarded: this reporter is injected into product-controlled
+ * Vitest, and an optional field that a runner version does not expose must
+ * never be able to wedge or fail a run whose counts are otherwise exact. A
+ * runner that cannot report tags simply cannot report a conflict.
  */
-function conflictingCapabilityTags(module) {
-  let conflicts = 0;
-  for (const test of module.children.allTests()) {
-    const tags = test.tags ?? test.options?.tags ?? [];
-    if (RESERVED_CAPABILITY_TAGS.every((tag) => tags.includes(tag))) conflicts += 1;
+function hasConflictingCapabilityTags(test) {
+  let tags;
+  try {
+    tags = test.tags ?? test.options?.tags;
+  } catch {
+    return false;
   }
-  return conflicts;
+  return Array.isArray(tags) &&
+    RESERVED_CAPABILITY_TAGS.every((tag) => tags.includes(tag));
 }
 
 /**
@@ -62,10 +69,18 @@ export default class RuneVitestAttestationReporter {
     const nestedSuites = typeof module.children.allSuites === 'function'
       ? [...module.children.allSuites()].length
       : 0;
+    // One walk of the collection: a second `allTests()` pass over a real
+    // Vitest module is not free, and the counts must stay exact.
+    let tests = 0;
+    let conflictingTags = 0;
+    for (const test of module.children.allTests()) {
+      tests += 1;
+      if (hasConflictingCapabilityTags(test)) conflictingTags += 1;
+    }
     this.#collected.set(module.moduleId, {
       suites: 1 + nestedSuites,
-      tests: [...module.children.allTests()].length,
-      conflictingTags: conflictingCapabilityTags(module),
+      tests,
+      conflictingTags,
     });
   }
 
