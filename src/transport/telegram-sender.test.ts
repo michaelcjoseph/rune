@@ -397,11 +397,14 @@ describe('TelegramSender', () => {
             ...gateReceiptIdentity,
             version: 2,
             outcome: 'profile-unavailable',
-            commands: [{
-              command: 'npm test',
-              outcome: 'failed',
-              coverage: 'unsupported',
-            }],
+            // The launcher emits `commands` and `profileOutcomes` from the same
+            // per-shard execution list, so a two-shard plan yields two command
+            // entries. The isolated shard passed; the unavailable
+            // sandbox-integration shard exits null, which reads as `failed`.
+            commands: [
+              { command: 'npm test', outcome: 'passed', coverage: 'unsupported' },
+              { command: 'npm test', outcome: 'failed', coverage: 'unsupported' },
+            ],
             profilePlan: {
               version: 1,
               definitionFingerprint: 'f'.repeat(64),
@@ -442,7 +445,7 @@ describe('TelegramSender', () => {
       );
       await flush();
       const text = mockSendLongMessage.mock.calls[0]![2] as string;
-      expect(text.toLowerCase()).toContain('validation capability unavailable (operational hold) (1 command)');
+      expect(text.toLowerCase()).toContain('validation capability unavailable (operational hold) (2 commands)');
       expect(text).toContain('profiles isolated/sandbox-integration');
       expect(text.toLowerCase()).not.toContain('merged to main');
     });
