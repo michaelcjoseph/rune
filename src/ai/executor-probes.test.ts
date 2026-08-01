@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,8 +8,10 @@ import { join } from 'node:path';
 import { probeClaudeModelCall } from './claude.js';
 import {
   CODEX_PROBE_RUNTIME_ROOT,
+  codexProbeOwnerRoot,
   probeCodexAuthentication,
   probeCodexModelCall,
+  reapStaleCodexProbeRuntimes,
 } from './codex.js';
 import { requestValidationSandboxProbe } from '../jobs/validation-sandbox-broker.js';
 
@@ -58,8 +60,13 @@ describe('centralized executor probes', () => {
     const home = join(dir, 'home');
     const codexHome = join(dir, 'codex-home');
     const secret = join(home, 'secret');
-    const before = new Set(existsSync(CODEX_PROBE_RUNTIME_ROOT)
-      ? await readdir(CODEX_PROBE_RUNTIME_ROOT)
+    // Scope the containment assertion to THIS process's own allocation root.
+    // The shared repo-owned root is written by every concurrent Vitest worker,
+    // so diffing it made a correct probe fail on someone else's in-flight
+    // runtime — noise that masked the regression this assertion exists to catch.
+    const ownerRoot = codexProbeOwnerRoot();
+    const before = new Set(existsSync(ownerRoot)
+      ? await readdir(ownerRoot)
       : []);
     try {
       await mkdir(home);
@@ -85,7 +92,7 @@ describe('centralized executor probes', () => {
       });
 
       expect(result).toMatchObject({ ok: false, code: 'nonzero-exit' });
-      const after = await readdir(CODEX_PROBE_RUNTIME_ROOT);
+      const after = existsSync(ownerRoot) ? await readdir(ownerRoot) : [];
       expect(after.filter((name) => !before.has(name))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -209,5 +216,69 @@ describe('centralized executor probes', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * `CODEX_PROBE_RUNTIME_ROOT` must stay repo-owned (Codex refuses to place its
+ * app-server helpers in the OS temp dir), so a probe killed before its own
+ * `finally` used to leak its directory permanently into a gitignored path.
+ */
+describe('Codex probe runtime reaping', () => {
+  const created: string[] = [];
+  const HOUR_MS = 60 * 60 * 1_000;
+
+  function ownerDir(pid: number, ageMs: number): string {
+    const dir = codexProbeOwnerRoot(pid);
+    mkdirSync(join(dir, 'probe-abc123'), { recursive: true, mode: 0o700 });
+    created.push(dir);
+    const when = new Date(Date.now() - ageMs);
+    utimesSync(dir, when, when);
+    return dir;
+  }
+
+  afterEach(() => {
+    for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('removes a runtime orphaned by a killed probe', () => {
+    // Far above macOS's pid ceiling, so process.kill(pid, 0) is a clean ESRCH.
+    const orphan = ownerDir(999_999, 2 * HOUR_MS);
+
+    reapStaleCodexProbeRuntimes();
+
+    expect(existsSync(orphan)).toBe(false);
+  });
+
+  it('never removes a live owner, including its own', () => {
+    const self = ownerDir(process.pid, 2 * HOUR_MS);
+    const otherLive = ownerDir(process.ppid, 2 * HOUR_MS);
+
+    reapStaleCodexProbeRuntimes();
+
+    expect(existsSync(self)).toBe(true);
+    expect(existsSync(otherLive)).toBe(true);
+  });
+
+  it('leaves a recent dead-owner runtime alone until it ages out', () => {
+    const recent = ownerDir(999_998, 5 * 60 * 1_000);
+
+    reapStaleCodexProbeRuntimes();
+    expect(existsSync(recent)).toBe(true);
+
+    reapStaleCodexProbeRuntimes(HOUR_MS, Date.now() + 2 * HOUR_MS);
+    expect(existsSync(recent)).toBe(false);
+  });
+
+  it('ignores entries that are not owner scopes', () => {
+    const stray = join(CODEX_PROBE_RUNTIME_ROOT, 'probe-legacyFormat');
+    mkdirSync(stray, { recursive: true, mode: 0o700 });
+    created.push(stray);
+    const when = new Date(Date.now() - 2 * HOUR_MS);
+    utimesSync(stray, when, when);
+
+    reapStaleCodexProbeRuntimes();
+
+    expect(existsSync(stray)).toBe(true);
   });
 });

@@ -25,6 +25,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -64,6 +65,59 @@ const log = createLogger('codex');
 const HOMEBREW_FALLBACK = '/opt/homebrew/bin/codex';
 const PROBE_STDERR_MAX_CHARS = 500;
 export const CODEX_PROBE_RUNTIME_ROOT = join(PROJECT_ROOT, '.rune', 'codex-preflight');
+
+/**
+ * Per-process allocation scope inside the repo-owned root. Concurrent probes in
+ * one checkout — notably parallel Vitest workers — each allocate under their
+ * own owner directory, so no probe can observe another's in-flight runtime.
+ */
+export function codexProbeOwnerRoot(pid: number = process.pid): string {
+  return join(CODEX_PROBE_RUNTIME_ROOT, `owner-${pid}`);
+}
+
+const PROBE_RUNTIME_MAX_AGE_MS = 60 * 60 * 1_000;
+
+/**
+ * Remove runtimes orphaned by a probe that never reached its own cleanup —
+ * SIGKILL, an interrupted test run, a crashed operator process. Bounded by BOTH
+ * age and owner liveness so a running probe's directory is never removed out
+ * from under it. (A recycled pid can defer a reap by one sweep; the age bound
+ * means it is still collected on a later pass.)
+ */
+export function reapStaleCodexProbeRuntimes(
+  maxAgeMs: number = PROBE_RUNTIME_MAX_AGE_MS,
+  now: number = Date.now(),
+): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(CODEX_PROBE_RUNTIME_ROOT);
+  } catch {
+    return; // No root yet, or unreadable — nothing to reap.
+  }
+  for (const entry of entries) {
+    const owner = /^owner-(\d+)$/.exec(entry);
+    if (owner === null) continue;
+    const pid = Number(owner[1]);
+    if (pid === process.pid) continue;
+    const dir = join(CODEX_PROBE_RUNTIME_ROOT, entry);
+    try {
+      if (now - statSync(dir).mtimeMs < maxAgeMs) continue;
+      let ownerAlive: boolean;
+      try {
+        process.kill(pid, 0);
+        ownerAlive = true;
+      } catch (err) {
+        // EPERM means the process exists under another user; only ESRCH proves
+        // the owner is gone.
+        ownerAlive = (err as NodeJS.ErrnoException).code === 'EPERM';
+      }
+      if (ownerAlive) continue;
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Raced with another reaper or the owner's own cleanup; best effort.
+    }
+  }
+}
 
 /** A bounded diagnostic may cross into a run transcript, unlike raw CLI output. */
 function safeProbeStderr(stderr: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -160,7 +214,11 @@ function createCodexProbeRuntime(): string {
   if (!runtimeRoot.startsWith(`${projectRoot}/`)) {
     throw new Error('Codex probe runtime root resolves outside the Rune repository');
   }
-  return mkdtempSync(join(runtimeRoot, 'probe-'));
+  reapStaleCodexProbeRuntimes();
+  const ownerRoot = join(runtimeRoot, `owner-${process.pid}`);
+  mkdirSync(ownerRoot, { recursive: true, mode: 0o700 });
+  chmodSync(ownerRoot, 0o700);
+  return mkdtempSync(join(ownerRoot, 'probe-'));
 }
 
 function buildCodexProbeProfile(

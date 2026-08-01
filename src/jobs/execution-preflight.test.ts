@@ -13,7 +13,7 @@ import {
   type ExecutionPreflightRoleModels,
 } from './execution-preflight.js';
 import type { RoleModelBinding } from './execution-agent.js';
-import { CODEX_PROBE_RUNTIME_ROOT } from '../ai/codex.js';
+import { codexProbeOwnerRoot } from '../ai/codex.js';
 import { createConfinementCapability } from '../utils/validation-confinement.js';
 import { requestValidationSandboxProbe } from './validation-sandbox-broker.js';
 
@@ -93,8 +93,12 @@ describe('preflightExecution', () => {
       await expect(preflightExecution(args(), io())).resolves.toMatchObject({ status: 'success' });
       return;
     }
-    const beforeProbeDirs = new Set(existsSync(CODEX_PROBE_RUNTIME_ROOT)
-      ? await readdir(CODEX_PROBE_RUNTIME_ROOT)
+    // Own-process scope only: the shared repo-owned root is written by every
+    // concurrent Vitest worker, so diffing it failed on another worker's
+    // in-flight runtime rather than on a real containment regression.
+    const ownerRoot = codexProbeOwnerRoot();
+    const beforeProbeDirs = new Set(existsSync(ownerRoot)
+      ? await readdir(ownerRoot)
       : []);
     const dir = await mkdtemp(join(tmpdir(), 'executor-preflight-cli-'));
     const claudeBin = join(dir, 'claude-fixture');
@@ -157,7 +161,7 @@ describe('preflightExecution', () => {
       });
 
       expect(result.status, JSON.stringify(result)).toBe('success');
-      const afterProbeDirs = await readdir(CODEX_PROBE_RUNTIME_ROOT);
+      const afterProbeDirs = existsSync(ownerRoot) ? await readdir(ownerRoot) : [];
       expect(afterProbeDirs.filter((name) => !beforeProbeDirs.has(name))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
