@@ -1881,8 +1881,13 @@ export async function runFullSuiteValidation(
           ...(lifecycleCoverageComplete && !lifecycleGreen ? { exitCode: 1 } : {}),
           outputTail: [
             item.result.outputTail,
+            // The observer's reporter is counts-only by design, so this cannot
+            // name the failing tests. Point at the tool that can: a fixed
+            // string, never product-derived, so nothing new enters durable
+            // evidence.
             lifecycleCoverageComplete && !lifecycleGreen
-              ? 'trusted Vitest lifecycle evidence recorded a red run'
+              ? 'trusted Vitest lifecycle evidence recorded a red run' +
+                '; reproduce with: npm run diagnose:reviewed-tree'
               : 'trusted Vitest lifecycle evidence was missing or incomplete',
           ].filter(Boolean).join('\n'),
         },

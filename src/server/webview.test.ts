@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import http from 'node:http';
 import type { Server, IncomingMessage, ServerResponse, IncomingHttpHeaders } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
@@ -2675,7 +2675,11 @@ describe('server/webview', () => {
     it('returns a path-scrubbed 409 when the active run worktree is missing', async () => {
       mockRequestOrchestratedRunRecovery.mockResolvedValue({
         kind: 'not-resumable',
-        reason: 'ENOENT: /Users/jarvis/workspace/rune/.worktrees/rune/missing; worktree no longer exists',
+        // Derived from `homedir()`: the assertion below is that the host-home
+        // scrub fired, so a literal home path only works on the machine it was
+        // written on.
+        reason: `ENOENT: ${join(homedir(), 'workspace/rune/.worktrees/rune/missing')}` +
+          '; worktree no longer exists',
       });
 
       const res = await makeRequest(port, '/api/work-runs/mut-orch-1/recover', {
@@ -2684,7 +2688,7 @@ describe('server/webview', () => {
       });
 
       expect(res.status).toBe(409);
-      expect(res.body.error).not.toContain('/Users/jarvis');
+      expect(res.body.error).not.toContain(homedir());
       expect(res.body.error).toContain('worktree no longer exists');
     });
 

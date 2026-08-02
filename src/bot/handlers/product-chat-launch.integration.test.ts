@@ -124,8 +124,8 @@ if (sandbox === 'danger-full-access') {
     join(process.cwd(), 'src', 'product-chat-proof.ts'),
     'export const productChatProof = ' + (resume ? '2' : '1') + ';\\n',
   );
-  execFileSync('git', ['add', 'src/product-chat-proof.ts']);
-  execFileSync('git', [
+  execFileSync('git', ['add', 'src/product-chat-proof.ts']); // reviewed-tree-exempt: fixture-binary source; runs inside the test-created repo
+  execFileSync('git', [ // reviewed-tree-exempt: fixture-binary source; runs inside the test-created repo
     '-c', 'user.name=Rune Product Chat',
     '-c', 'user.email=rune-product-chat@example.invalid',
     'commit', '-m', resume ? 'resumed product chat proof' : 'product chat proof',
@@ -174,8 +174,8 @@ writeFileSync(
   join(process.cwd(), 'src', 'claude-product-chat-proof.ts'),
   'export const claudeProductChatProof = ' + (resume ? '2' : '1') + ';\\n',
 );
-execFileSync('git', ['add', 'src/claude-product-chat-proof.ts']);
-execFileSync('git', [
+execFileSync('git', ['add', 'src/claude-product-chat-proof.ts']); // reviewed-tree-exempt: fixture-binary source; runs inside the test-created repo
+execFileSync('git', [ // reviewed-tree-exempt: fixture-binary source; runs inside the test-created repo
   '-c', 'user.name=Rune Product Chat',
   '-c', 'user.email=rune-product-chat@example.invalid',
   'commit', '-m', resume ? 'resumed claude product chat proof' : 'claude product chat proof',

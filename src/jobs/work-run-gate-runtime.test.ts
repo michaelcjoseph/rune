@@ -2332,6 +2332,12 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
         commands: [{ outcome: 'failed', coverage: 'complete', completed: { failed: 1 } }],
       },
     });
+    // The observer's reporter cannot name the failing tests, so the operator
+    // gets a pointer to the tool that can. Without it a red manifest behind a
+    // green command is undiagnosable — which is how 10 tree-only failures went
+    // unidentified while blocking every full-suite receipt.
+    expect(result.ok ? '' : result.result.outputTail)
+      .toContain('npm run diagnose:reviewed-tree');
   });
 
   it('keeps red execution separate from complete green observer coverage', async () => {
