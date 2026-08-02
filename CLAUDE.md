@@ -145,6 +145,7 @@ npm run dispatch-review   # multi-model dispatch troubleshooting
 npm run acceptance:orchestrated  # LIVE orchestrated-work end-to-end proof (real models; exit 0 = pass)
 npm run acceptance:cockpit-real  # LIVE cockpit + real-product acceptance
 RUNE_ACCEPTANCE_LIVE_CODEX_PRODUCT_CHAT=1 npm run acceptance:product-chat-codex  # LIVE Codex product-chat sandbox proof
+npm run verify:closeout-confinement  # run rune's own validationCommands through the real profiled closeout path
 ```
 
 ## Environment Variables
