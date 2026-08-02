@@ -1814,6 +1814,41 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toContain('Merge validation passed · 2 commands');
   });
 
+  it('renders a profile-unavailable merge-gate receipt as an operational hold, not a red suite', async () => {
+    // The operator has to be able to tell a host-capability hold apart from a
+    // real product regression at a glance — misreading one as the other is what
+    // sent valid Project 24 work through three futile repair rounds.
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-profile-unavailable',
+        target: { kind: 'project', slug: '24-execution-profiles' },
+        outcome: 'held',
+        endedAt: '2026-08-01T12:00:00.000Z',
+        gateValidationReceipt: {
+          outcome: 'profile-unavailable',
+          commands: [
+            { command: 'npm test', outcome: 'profile-unavailable', coverage: 'unsupported' },
+          ],
+          profilePlan: {
+            shards: [
+              { profile: 'isolated' },
+              { profile: 'loopback' },
+              { profile: 'sandbox-integration' },
+            ],
+          },
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('run-profile-unavailable');
+    expect(html).toContain('Merge validation operational hold · capability unavailable');
+    // The profiles that were planned are named, so the hold is diagnosable.
+    expect(html).toContain('isolated / loopback / sandbox-integration');
+    // It must never read as an ordinary failed suite.
+    expect(html).not.toContain('Merge validation failed');
+  });
+
   it('renders the final Cockpit label for every related-test diagnostic state', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
     const states = [
