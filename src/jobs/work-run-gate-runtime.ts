@@ -177,6 +177,16 @@ const VALIDATION_DIAGNOSTIC_REPORT_GRACE_MS = 1_000;
  * `timedOut` — the same wedge work-runner.ts guards with REAP_FORCE_DONE_MS.
  */
 const VALIDATION_STDIO_DRAIN_MS = 10_000;
+
+/**
+ * Private descriptor on which the `sandbox-exec` preamble reports that Seatbelt
+ * applied. It exists to keep the `profile-unavailable` classification out of
+ * reach of product-controlled stdout/stderr: the marker is written before the
+ * product command is `exec`ed, so product code can only ever add the marker
+ * (weakening the verdict to `command-failed`), never remove it.
+ */
+const PROFILE_APPLIED_FD = 3;
+
 function validationNetworkRules(profile: ValidationProfile): string[] {
   const base = ['(deny network-outbound)', '(deny network-inbound)'];
   if (profile !== 'loopback') return base;
@@ -455,8 +465,14 @@ export async function runValidationCommandArgv(
     if (attestation === undefined || attestation === '') {
       return unavailable('inherited validation confinement is missing its launcher capability');
     }
+    // The inherited confinement must be the profile THIS call asked for, not
+    // merely some profile. A `sandbox-integration` outer profile grants one
+    // extra exception (reachability to the broker's Unix socket), so accepting
+    // it for an `isolated` or `loopback` request would silently run that shard
+    // under weaker rules than it declared. Requests that name no profile keep
+    // the historical broker profile as their expectation.
     const proven = await verifyInheritedValidationConfinement(
-      'sandbox-integration',
+      options.profile ?? 'sandbox-integration',
       process.env,
     );
     if (!proven) {
@@ -509,10 +525,16 @@ export async function runValidationCommandArgv(
     // marker is diagnostic only — a broker-verified attestation
     // (`inheritedOuterConfinement`) is the sole authorization for skipping the
     // inner sandbox.
-    const spawnBin = process.platform === 'darwin' && !inheritedOuterConfinement
-      ? '/usr/bin/sandbox-exec'
-      : bin;
-    const spawnArgs = process.platform === 'darwin' && !inheritedOuterConfinement
+    const appliesOuterProfile = process.platform === 'darwin' && !inheritedOuterConfinement;
+    // Launcher-owned proof that Seatbelt really applied to THIS launch.
+    // `sandbox-exec` reaches the preamble only after `sandbox_apply` succeeds,
+    // so the marker lands on a private descriptor before any product code runs
+    // and cannot be withheld by it afterwards. Product output on stdout/stderr
+    // therefore can never manufacture a `profile-unavailable` classification —
+    // the only way the marker is missing is a genuine launch failure.
+    const profileAppliedNonce = createVitestAttestationCapability();
+    const spawnBin = appliesOuterProfile ? '/usr/bin/sandbox-exec' : bin;
+    const spawnArgs = appliesOuterProfile
       ? [
           '-p',
           validationSandboxProfile(
@@ -521,6 +543,15 @@ export async function runValidationCommandArgv(
             options.allowedWriteRoots,
             options.sandboxBrokerSocket,
           ),
+          '/bin/sh',
+          '-c',
+          // stderr is silenced BEFORE `>&N` is attempted, so a descriptor that
+          // is somehow closed cannot inject shell noise into captured product
+          // output. `exec` keeps the pid — the process-group reaping below and
+          // the detached-descendant sweep are unaffected by the preamble.
+          `printf %s "$1" 2>/dev/null >&${PROFILE_APPLIED_FD}; shift; exec "$@"`,
+          'rune-validation-launcher',
+          profileAppliedNonce,
           bin,
           ...commandArgs,
         ]
@@ -548,7 +579,14 @@ export async function runValidationCommandArgv(
     }
     const child = spawn(spawnBin, spawnArgs, {
       cwd,
-      stdio: [options.trustedStdinSource === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: [
+        options.trustedStdinSource === undefined ? 'ignore' : 'pipe',
+        'pipe',
+        'pipe',
+        // Opened only when this launch owns an outer profile, so a child that
+        // was never wrapped sees exactly the descriptors it saw before.
+        ...(appliesOuterProfile ? ['pipe' as const] : []),
+      ],
       detached: true,
       // Validation runs product-controlled code. Pass shell/toolchain basics,
       // never Rune or integration secrets; Seatbelt also denies non-localhost
@@ -563,6 +601,23 @@ export async function runValidationCommandArgv(
       child.stdin?.end(options.trustedStdinSource);
     }
     registerActiveProcess(child, process.platform !== 'win32');
+
+    // A launch that applied no outer profile has no `sandbox_apply` step that
+    // could have been rejected, so it starts already "proven".
+    let profileApplied = !appliesOuterProfile;
+    if (appliesOuterProfile) {
+      const markerStream = child.stdio[PROFILE_APPLIED_FD];
+      let markerRaw = '';
+      markerStream?.on('data', (chunk: Buffer | string) => {
+        // Descendants inherit this descriptor. Bound what we read: only the
+        // launcher's own nonce counts, and writing it can only move the verdict
+        // toward `command-failed`, never toward an operational hold.
+        if (markerRaw.length > 4 * profileAppliedNonce.length) return;
+        markerRaw += String(chunk);
+        if (markerRaw.includes(profileAppliedNonce)) profileApplied = true;
+      });
+      markerStream?.on('error', () => {});
+    }
 
     // Merged stdout+stderr head + tail in arrival order, both bounded as they
     // stream so a chatty suite can't grow memory unbounded.
@@ -761,9 +816,15 @@ export async function runValidationCommandArgv(
             options.vitestAttestation.capability,
           );
       if (vitestReportDir) rmSync(vitestReportDir, { recursive: true, force: true });
+      // Only a launch that actually tried to apply a profile — and whose
+      // launcher-owned marker never arrived, proving `sandbox_apply` rejected
+      // it before any product code ran — may be reclassified. An inherited or
+      // unprofiled launch, or one whose profile demonstrably applied, keeps a
+      // nonzero exit as an ordinary `command-failed` for the repair flow.
       const profileLaunchRejected =
-        process.platform === 'darwin' &&
+        appliesOuterProfile &&
         options.profile !== undefined &&
+        !profileApplied &&
         exitCode !== null &&
         exitCode !== 0 &&
         !timedOut &&
@@ -902,11 +963,19 @@ export interface FullSuiteProfileAdmissionIO {
   startSandboxBroker: typeof startValidationSandboxBroker;
 }
 
-/** Production admission is checked as an atomic pair at runtime; explicitly
- * injected test seams may omit both hooks and remain broker-free. */
+/**
+ * Production admission is checked as an atomic pair at runtime. A test seam
+ * that wants to run broker-free must say so with `trustedProfileAdmission`:
+ * silence is treated as a forgotten `productionFullSuiteProfileIO()` spread,
+ * because that omission — not a half-wired pair — is what let closeout and the
+ * merge gate fabricate `passed` probes and run a sandbox-integration shard
+ * unconfined. Opting out is a deliberate, greppable act.
+ */
 export interface FullSuiteValidationIO extends FullSuiteValidationIOBase {
   probeProfile?: FullSuiteProfileAdmissionIO['probeProfile'];
   startSandboxBroker?: FullSuiteProfileAdmissionIO['startSandboxBroker'];
+  /** Explicit test-seam opt-out from production profile admission. */
+  trustedProfileAdmission?: true;
 }
 
 const RUNE_CODE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -1511,6 +1580,13 @@ export async function runFullSuiteValidation(
   if (hasProfileProbe !== hasSandboxBroker) {
     return validationIdentityFailure('validation profile admission wiring was incomplete');
   }
+  if (!hasProfileProbe && io.trustedProfileAdmission !== true) {
+    // Both hooks absent AND no explicit opt-out: this is the original defect's
+    // shape — a production caller that forgot `productionFullSuiteProfileIO()`.
+    // Fail closed here rather than fabricating a `passed` probe for every
+    // profile and running the sandbox-integration shard with no broker.
+    return validationIdentityFailure('validation profile admission was not wired');
+  }
   const reporterPath = io.trustedVitestReporterPath ?? VITEST_REPORTER_PATH;
   const resolvedValidationCwd = resolveValidationCwd(opts.worktree, opts.validationCwd);
   if (!resolvedValidationCwd.ok) {
@@ -1551,7 +1627,13 @@ export async function runFullSuiteValidation(
   const prelim: FullSuiteCommandExecution[] = [];
   let firstFailure: typeof prelim[number] | undefined;
 
+  // Cache reusable per-profile admission across shards, but attribute evidence
+  // per shard: a `sandbox-integration` shard re-probes against its OWN
+  // short-lived broker, so a second such shard would otherwise overwrite the
+  // key and hand the first shard's receipt the wrong probe. `shardProbes` stays
+  // index-aligned with `prelim` (both are pushed once per iteration).
   const profileProbes = new Map<ValidationProfile, ValidationProfileProbeEvidence>();
+  const shardProbes: ValidationProfileProbeEvidence[] = [];
   for (const shard of profilePlan.shards) {
     const command = shard.command;
     const unavailableProbe = (): ValidationProfileProbeEvidence => {
@@ -1590,6 +1672,7 @@ export async function runFullSuiteValidation(
         ...(shard.selector !== undefined ? { selector: shard.selector } : {}),
       };
     };
+    let shardProbe: ValidationProfileProbeEvidence | undefined;
     const runShard = async (
       sandboxBroker: ValidationSandboxBroker | undefined,
     ): Promise<FullSuiteCommandExecution> => {
@@ -1623,6 +1706,7 @@ export async function runFullSuiteValidation(
         }
         profileProbes.set(shard.profile, probe);
       }
+      shardProbe = probe;
       if (probe.outcome !== 'passed') return unavailableExecution();
       if (opts.cancelled?.() === true) {
         const now = new Date().toISOString();
@@ -1684,12 +1768,15 @@ export async function runFullSuiteValidation(
           io.startSandboxBroker!,
           runShard,
           () => {
-            profileProbes.set(shard.profile, unavailableProbe());
+            const probe = unavailableProbe();
+            profileProbes.set(shard.profile, probe);
+            shardProbe = probe;
             return unavailableExecution();
           },
         )
       : await runShard(undefined);
     prelim.push(item);
+    shardProbes.push(shardProbe ?? unavailableProbe());
     if (item.result.timedOut || item.result.cancelled || item.result.exitCode !== 0) {
       firstFailure ??= item;
       if (item.result.cancelled || !opts.continueOnFailure) break;
@@ -1800,9 +1887,9 @@ export async function runFullSuiteValidation(
       : batchOutcome(batchCommands, drifted),
     commands: batchCommands,
     profilePlan,
-    profileOutcomes: prelim.map((item) => {
+    profileOutcomes: prelim.map((item, index) => {
       const manifest = parseVitestManifest(item.result.vitestManifest);
-      const probe = profileProbes.get(item.profile)!;
+      const probe = shardProbes[index]!;
       return {
         profile: item.profile,
         ...(item.selector !== undefined ? { selector: item.selector } : {}),
@@ -2273,7 +2360,10 @@ export async function runGate(
                   runTrustedVitestObserver,
                   ...productionFullSuiteProfileIO(),
                 }
-              : {}),
+              // An injected command runner replaces the launcher outright, so
+              // there is no real profile for admission to prove. Declare that
+              // rather than leaving both hooks silently absent.
+              : { trustedProfileAdmission: true as const }),
           });
           validationReceipt = validation.gateValidationReceipt;
           if (!validation.ok || validationReceipt === undefined) {

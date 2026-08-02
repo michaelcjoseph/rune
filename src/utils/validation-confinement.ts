@@ -37,7 +37,13 @@ export function verifyConfinementCapability(
     (expected.profilePath === undefined || capability.profilePath === expected.profilePath);
 }
 
-/** Legacy transition marker. It is never accepted as confinement proof. */
+/**
+ * Legacy transition marker. Diagnostic only — it is never accepted as
+ * confinement proof, so nothing reads it back. The launcher still stamps it on
+ * a `compatibleFallback` child (`work-run-gate-runtime.ts`) for forensics, and
+ * it stays in `VALIDATION_LAUNCHER_PRIVATE_ENV` so a real operator environment
+ * defining it still fails startup.
+ */
 export const VALIDATION_COMPATIBLE_MODE_ENV =
   'RUNE_INTERNAL_VALIDATION_COMPATIBLE_MODE' as const;
 export const VALIDATION_COMPATIBLE_MODE_VALUE = 'related-fallback-v1' as const;
@@ -65,9 +71,3 @@ export const VALIDATION_LAUNCHER_PRIVATE_ENV = [
   VALIDATION_PROCESS_NONCE_ENV,
   VALIDATION_CONFINEMENT_ATTESTATION_ENV,
 ] as const;
-
-export function hasValidationCompatibleModeMarker(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return env[VALIDATION_COMPATIBLE_MODE_ENV] === VALIDATION_COMPATIBLE_MODE_VALUE;
-}

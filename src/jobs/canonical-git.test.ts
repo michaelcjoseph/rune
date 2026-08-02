@@ -25,7 +25,7 @@ import {
   VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
 } from '../utils/validation-confinement.js';
 import * as validationSandboxBroker from './validation-sandbox-broker.js';
-import { startValidationSandboxBroker } from './validation-sandbox-broker.js';
+import { withValidationBroker } from './validation-broker-test-stub.js';
 
 const roots: string[] = [];
 const originalToken = process.env['TELEGRAM_BOT_TOKEN'];
@@ -86,22 +86,13 @@ describe('canonical Git security boundary', () => {
       ['config', '--local', 'diff.probe.textconv', '/usr/bin/false'],
       { cwd: repo },
     );
-    const inheritedSocket = process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV];
-    const inheritedAttestation = process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
-    const broker = inheritedSocket === undefined
-      ? await startValidationSandboxBroker()
-      : undefined;
-    process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] = inheritedSocket ?? broker!.socketPath;
-    process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV] =
-      inheritedAttestation ?? broker!.attestationNonce;
-
-    try {
+    await withValidationBroker(async ({ socketPath, attestationNonce }) => {
+      process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] = socketPath;
+      process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV] = attestationNonce;
       await expect(
         defaultRunCanonicalGit(['add', '-A'], { cwd: repo }),
       ).rejects.toThrow(/refuses external repository drivers.*diff\.probe\.textconv/i);
-    } finally {
-      await broker?.stop();
-    }
+    });
   });
 
   // The test above configures an external Git driver so `rejectExternalGitDrivers`

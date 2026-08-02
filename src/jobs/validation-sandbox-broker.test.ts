@@ -6,6 +6,7 @@ import {
   startValidationSandboxBroker,
   verifyInheritedValidationConfinement,
 } from './validation-sandbox-broker.js';
+import { withValidationBroker } from './validation-broker-test-stub.js';
 
 describe.runIf(process.platform === 'darwin')('validation sandbox broker', () => {
   it('runs only a fixed top-level Seatbelt probe', async () => {
@@ -100,21 +101,15 @@ describe.runIf(process.platform === 'darwin')('validation sandbox broker', () =>
    * encloses the child to confirm the nonce it minted, for the profile it owns.
   */
   describe('confinement attestation', () => {
+    // Several tests below need the raw inherited pair to assert on staleness
+    // and per-instance uniqueness directly; `withBroker` covers the common
+    // "just give me a live broker" case.
     const inheritedSocket = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
     const inheritedNonce = process.env['RUNE_VALIDATION_CONFINEMENT_ATTESTATION'];
-    const withBroker = async <T>(
+    const withBroker = <T>(
       body: (socketPath: string, nonce: string) => Promise<T>,
-    ): Promise<T> => {
-      if (inheritedSocket !== undefined && inheritedNonce !== undefined) {
-        return await body(inheritedSocket, inheritedNonce);
-      }
-      const broker = await startValidationSandboxBroker();
-      try {
-        return await body(broker.socketPath, broker.attestationNonce);
-      } finally {
-        await broker.stop();
-      }
-    };
+    ): Promise<T> =>
+      withValidationBroker((broker) => body(broker.socketPath, broker.attestationNonce));
 
     it('verifies only a live socket, nonce, and expected profile tuple', async () => {
       await withBroker(async (socketPath, nonce) => {

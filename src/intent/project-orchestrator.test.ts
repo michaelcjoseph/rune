@@ -2657,6 +2657,55 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect((result as unknown as Record<string, unknown>)['kind']).not.toBe('blocked');
   });
 
+  it('keeps a command-failed validation failure in the bounded repair loop instead of holding operationally', async () => {
+    // The exact contrast to the profile-unavailable case above, pinned so a
+    // future broadening of the operational-hold branch cannot quietly divert
+    // real product regressions away from coder repair. Same closeout shape,
+    // same worktree, only `kind` differs.
+    const worktreePath = '/tmp/rune-worktrees/aura/14-command-failed';
+    const command = 'npm test';
+    let checksCalls = 0;
+    let workflowRuns = 0;
+    const h = makeHarness({
+      worktreePath,
+      runTaskWorkflow: async (task: SelectedTask) => {
+        workflowRuns += 1;
+        return readyEvidence(task);
+      },
+      runCloseoutChecks: async () => {
+        checksCalls += 1;
+        return {
+          ok: false,
+          failure: {
+            command,
+            exitCode: 1,
+            timedOut: false,
+            outputTail: 'AssertionError: expected 3 to be 2',
+            validationFailure: {
+              kind: 'command-failed' as const,
+              command,
+              prerequisite: 'executable',
+              executable: 'npm',
+              exitCode: 1,
+              timedOut: false,
+              diagnostics: 'AssertionError: expected 3 to be 2',
+            },
+          },
+        } as const;
+      },
+    }, '# Tasks\n- [ ] Build the streak core\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    // The full bounded budget is spent: initial attempt plus every repair.
+    expect(checksCalls).toBe(1 + CLOSEOUT_REPAIR_CAP);
+    expect(workflowRuns).toBe(1 + CLOSEOUT_REPAIR_CAP);
+    // And it lands on the ordinary blocked/parked terminal, not a capability hold.
+    expect(result.kind).toBe('blocked');
+    expect((result as unknown as Record<string, unknown>)['reason'])
+      .not.toMatch(/capability unavailable/i);
+  });
+
   it('blocks a validation-mutated canonical review surface before any closeout transform and exposes hashes, never raw diff', async () => {
     const rawMutatedDiff = 'diff --git a/src/secret.ts b/src/secret.ts\n+RAW-MUTATED-DIFF';
     const reviewSurfaceFailure = {

@@ -15,12 +15,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { PROJECT_ROOT } from '../config.js';
+
+const execFileAsync = promisify(execFile);
 import {
   defaultRunGit,
   removeVitestCache,
@@ -792,8 +795,63 @@ describe('runValidationCommands', () => {
   });
 
   it.runIf(process.platform === 'darwin')(
-    'classifies the exact profiled sandbox_apply launch rejection as profile-unavailable',
+    'classifies a REAL nested sandbox_apply launch rejection as profile-unavailable',
     async () => {
+      // Reproduce the production failure at the OS level instead of asserting
+      // on a hand-written string: run the launcher from inside an outer
+      // Seatbelt that denies all networking, and ask it for the `loopback`
+      // profile. macOS refuses an inner profile that WIDENS the outer one
+      // (`sandbox_apply: Operation not permitted`), which is exactly what the
+      // Project 24 closeout hit and misfiled as `command-failed`.
+      const driver = join(tmpRoot, 'nested-profile-driver.mjs');
+      writeFileSync(driver, [
+        `const { runValidationCommandArgv } = await import(${JSON.stringify(
+          pathToFileURL(join(PROJECT_ROOT, 'src', 'jobs', 'work-run-gate-runtime.ts')).href,
+        )});`,
+        'const result = await runValidationCommandArgv(',
+        `  [${JSON.stringify(process.execPath)}, '-e', 'process.exit(0)'],`,
+        `  ${JSON.stringify(tmpRoot)},`,
+        '  20_000,',
+        '  undefined,',
+        "  { profile: 'loopback' },",
+        ');',
+        'console.log(`RESULT:${JSON.stringify({',
+        '  exitCode: result.exitCode,',
+        '  failureClass: result.failureClass,',
+        '  profile: result.profile,',
+        '})}`);',
+        '',
+      ].join('\n'), 'utf8');
+
+      const outer = await execFileAsync(
+        '/usr/bin/sandbox-exec',
+        [
+          '-p',
+          '(version 1)(allow default)(deny network-outbound)(deny network-inbound)',
+          process.execPath,
+          '--import',
+          join(PROJECT_ROOT, 'scripts', 'register-ts.mjs'),
+          driver,
+        ],
+        { cwd: PROJECT_ROOT, timeout: 60_000, maxBuffer: 32 * 1024 * 1024 },
+      );
+
+      const reported = /RESULT:(\{.*\})/.exec(outer.stdout);
+      expect(reported?.[1]).toBeDefined();
+      expect(JSON.parse(reported![1]!)).toMatchObject({
+        failureClass: 'profile-unavailable',
+        profile: 'loopback',
+      });
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === 'darwin')(
+    'refuses to let product output forge a profile-unavailable operational hold',
+    async () => {
+      // The launcher's own marker proves Seatbelt applied, so a test printing
+      // the exact OS rejection line stays an ordinary `command-failed` and
+      // keeps consuming the bounded repair flow it is supposed to.
       const result = await runValidationCommandArgv(
         [
           process.execPath,
@@ -809,9 +867,9 @@ describe('runValidationCommands', () => {
       expect(result).toMatchObject({
         exitCode: 1,
         timedOut: false,
-        failureClass: 'profile-unavailable',
         profile: 'sandbox-integration',
       });
+      expect(result.failureClass).toBeUndefined();
     },
   );
 
@@ -1460,6 +1518,10 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       runGit,
       runCommand: vi.fn(async () => result),
       runTrustedVitestObserver: vi.fn(async () => result),
+      // These seams stub the launcher itself, so there is no real profile to
+      // admit. Saying so explicitly is what distinguishes them from a
+      // production call site that forgot `productionFullSuiteProfileIO()`.
+      trustedProfileAdmission: true,
     };
   }
 
@@ -1646,6 +1708,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
 
     const result = await runFullSuiteValidation(opts(expectedTreeOid), {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => ({
         exitCode: 0,
         timedOut: false,
@@ -1792,6 +1855,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     const { expectedTreeOid } = prepareAttestationFixture();
     const io: FullSuiteValidationIO = {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => {
         writeFileSync(join(repoPath, 'generated-after-validation.txt'), 'drift\n');
         return {
@@ -1903,7 +1967,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
 
     const result = await runFullSuiteValidation(
       opts(expectedTreeOid),
-      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver, trustedProfileAdmission: true },
     );
 
     expect(result).toMatchObject({
@@ -1942,6 +2006,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       validationCwd: 'test-cwd',
     }, {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand,
       runTrustedVitestObserver,
     });
@@ -1980,6 +2045,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       continueOnFailure: true,
     }, {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand,
       runTrustedVitestObserver: vi.fn(async () => ({
         exitCode: 0,
@@ -2025,7 +2091,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       ...opts(expectedTreeOid),
       commands: ['npm run build', 'npm test'],
       continueOnFailure: true,
-    }, { runGit: defaultRunGit, runCommand });
+    }, { runGit: defaultRunGit, runCommand, trustedProfileAdmission: true });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
@@ -2089,6 +2155,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     const io: FullSuiteValidationIO = {
       runGit: defaultRunGit,
       trustedVitestReporterPath: reporterPath,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => {
         writeFileSync(reporterPath, 'export default class ChangedReporter {}\\n');
         return {
@@ -2180,7 +2247,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
 
     const result = await runFullSuiteValidation(
       opts(expectedTreeOid),
-      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver, trustedProfileAdmission: true },
     );
 
     expect(runTrustedVitestObserver).toHaveBeenCalledOnce();
@@ -2213,6 +2280,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     };
     const result = await runFullSuiteValidation(opts(expectedTreeOid), {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => ({
         exitCode: 0,
         timedOut: false,
@@ -2240,6 +2308,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     const { expectedTreeOid } = prepareAttestationFixture();
     const result = await runFullSuiteValidation(opts(expectedTreeOid), {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => ({
         exitCode: 1,
         timedOut: false,
@@ -2279,6 +2348,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     });
     const io: FullSuiteValidationIO = {
       runGit: pinnedTreeGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => {
         writeFileSync(join(repoPath, file), contents);
         return {
@@ -2324,6 +2394,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     let tests = 7;
     const io: FullSuiteValidationIO = {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async () => ({
         exitCode: 0,
         timedOut: false,
@@ -2357,6 +2428,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     const { expectedTreeOid } = prepareAttestationFixture();
     const io: FullSuiteValidationIO = {
       runGit: defaultRunGit,
+      trustedProfileAdmission: true,
       runCommand: vi.fn(async (command) => ({
         exitCode: 0,
         timedOut: false,
@@ -2411,7 +2483,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
 
     const result = await runFullSuiteValidation(
       opts(expectedTreeOid),
-      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver },
+      { runGit: defaultRunGit, runCommand, runTrustedVitestObserver, trustedProfileAdmission: true },
     );
 
     expect(result).toMatchObject({

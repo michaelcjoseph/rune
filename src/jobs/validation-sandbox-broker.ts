@@ -1,7 +1,7 @@
 /** Rune-owned broker for fixed, top-level Seatbelt validation probes. */
 
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { createServer, createConnection, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -119,6 +119,18 @@ function validateRequest(value: unknown): ValidationSandboxRequest | undefined {
     HOST_PATH_GRANT.test(record['candidateProfile'])
   ) return undefined;
   return record as unknown as ValidationSandboxProbeRequest;
+}
+
+/**
+ * Constant-time nonce comparison. The socket is already `0600` inside a `0700`
+ * root, so this closes a side channel rather than a hole — but the nonce is the
+ * single secret standing between a confined child and a Seatbelt bypass, and
+ * length-independent comparison costs nothing here.
+ */
+function nonceMatches(candidate: string, expected: string): boolean {
+  const a = Buffer.from(candidate, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function fixedProbe(
@@ -252,7 +264,8 @@ export async function startValidationSandboxBroker(
         if (request.scenario === 'confinement-attestation') {
           // Only this broker's own children hold the nonce, and it authorizes
           // exactly the profile this broker was started for.
-          const proven = request.nonce === attestationNonce && request.profile === profile;
+          const proven = nonceMatches(request.nonce, attestationNonce) &&
+            request.profile === profile;
           return respond({
             ok: proven,
             exitCode: proven ? 0 : null,
