@@ -25,7 +25,10 @@ import {
   VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
 } from '../utils/validation-confinement.js';
 import * as validationSandboxBroker from './validation-sandbox-broker.js';
-import { withValidationBroker } from './validation-broker-test-stub.js';
+import {
+  enclosedByValidationBroker,
+  withValidationBroker,
+} from './validation-broker-test-stub.js';
 
 const roots: string[] = [];
 const originalToken = process.env['TELEGRAM_BOT_TOKEN'];
@@ -101,7 +104,9 @@ describe('canonical Git security boundary', () => {
   // `verifyInheritedValidationConfinement` call is actually wired in. This uses
   // a driver-free repo so the call is genuinely reached, and honors whatever the
   // live broker answers (both "yes, reuse" and "no, apply Rune's own Seatbelt").
-  it.each([true, false])(
+  // The "false" answer makes canonical Git apply its OWN Seatbelt, which macOS
+  // refuses inside an enclosing launcher's profile, so this runs bare only.
+  it.runIf(!enclosedByValidationBroker()).each([true, false])(
     "asks the live broker to verify sandbox-integration confinement before every non-rejected call, and honors a %s answer",
     async (confinementAnswer) => {
       const repo = mkdtempSync(join(tmpdir(), 'canonical-git-confinement-check-'));

@@ -51,10 +51,8 @@ import {
   requestValidationSandboxProbe,
   type ValidationSandboxBroker,
 } from './validation-sandbox-broker.js';
-import {
-  createConfinementCapability,
-  VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
-} from '../utils/validation-confinement.js';
+import { createConfinementCapability } from '../utils/validation-confinement.js';
+import { enclosedByValidationBroker } from './validation-broker-test-stub.js';
 import {
   RELATED_TEST_ARGUMENT_MAX_CHARS,
   RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS,
@@ -482,7 +480,11 @@ describe('runGate — test before mutating main (P1.5)', () => {
     });
   });
 
-  it('uses the production isolated observer for mapped merge-gate coverage', async () => {
+  // Launches its own `sandbox-exec` rather than going through the broker, so
+  // macOS refuses it (exit 71) when an enclosing Rune launcher already owns
+  // this shard's Seatbelt. Bare runs exercise it fully; see
+  // `enclosedByValidationBroker`.
+  it.runIf(!enclosedByValidationBroker())('uses the production isolated observer for mapped merge-gate coverage', async () => {
     git(repoPath, 'checkout', '-q', BRANCH);
     writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
     writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
@@ -630,7 +632,11 @@ describe('runGate — test before mutating main (P1.5)', () => {
   // Before the fix this call site omitted both hooks, so a sandbox-integration
   // shard ran without a broker grant and without confinement admission ever
   // being proven for real.
-  it.runIf(process.platform === 'darwin')(
+  // Launches its own `sandbox-exec` rather than going through the broker, so
+  // macOS refuses it (exit 71) when an enclosing Rune launcher already owns
+  // this shard's Seatbelt. Bare runs exercise it fully; see
+  // `enclosedByValidationBroker`.
+  it.runIf(process.platform === 'darwin' && !enclosedByValidationBroker())(
     "the merge gate's default launcher grants its sandbox-integration shard a live broker",
     async () => {
       // The compact merge-gate receipt refuses to durably record a configured
@@ -801,10 +807,7 @@ describe('runValidationCommands', () => {
   // creating a second OS sandbox is precisely the nested-ownership mistake this
   // bug forbids, so the test that proves it must not commit it. Bare runs
   // (`npx vitest run`) own no outer profile and do the real reproduction.
-  it.runIf(
-    process.platform === 'darwin' &&
-      process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] === undefined,
-  )(
+  it.runIf(process.platform === 'darwin' && !enclosedByValidationBroker())(
     'classifies a REAL nested sandbox_apply launch rejection as profile-unavailable',
     async () => {
       // Reproduce the production failure at the OS level instead of asserting
@@ -883,7 +886,11 @@ describe('runValidationCommands', () => {
     },
   );
 
-  it('keeps an ordinary profiled assertion failure as command-failed evidence', async () => {
+  // Launches its own `sandbox-exec` rather than going through the broker, so
+  // macOS refuses it (exit 71) when an enclosing Rune launcher already owns
+  // this shard's Seatbelt. Bare runs exercise it fully; see
+  // `enclosedByValidationBroker`.
+  it.runIf(!enclosedByValidationBroker())('keeps an ordinary profiled assertion failure as command-failed evidence', async () => {
     const result = await runValidationCommandArgv(
       [process.execPath, '-e', "console.error('AssertionError: expected 1 to be 2');process.exit(1)"],
       tmpRoot,
@@ -1697,7 +1704,11 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     expect(io.runCommand).toHaveBeenCalledOnce();
   });
 
-  it('observes a clean materialization of the reviewed tree, excluding ignored tests', async () => {
+  // Launches its own `sandbox-exec` rather than going through the broker, so
+  // macOS refuses it (exit 71) when an enclosing Rune launcher already owns
+  // this shard's Seatbelt. Bare runs exercise it fully; see
+  // `enclosedByValidationBroker`.
+  it.runIf(!enclosedByValidationBroker())('observes a clean materialization of the reviewed tree, excluding ignored tests', async () => {
     writeFileSync(join(repoPath, '.gitignore'), 'node_modules\nignored.test.js\n');
     writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
       name: 'reviewed-tree-observer-fixture',

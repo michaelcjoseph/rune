@@ -24,6 +24,23 @@ import {
   VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
 } from '../utils/validation-confinement.js';
 
+/**
+ * True when an enclosing Rune launcher already owns this process's Seatbelt —
+ * i.e. Rune's own suite is running inside the profiled closeout/merge-gate
+ * launcher rather than bare `npx vitest run`.
+ *
+ * macOS refuses `sandbox_apply` for a profile nested inside that one (exit 71),
+ * so a test that spawns `sandbox-exec` DIRECTLY cannot run here. The supported
+ * path for a real sandbox assertion under confinement is the broker
+ * (`withValidationBroker`), which owns the single approved top-level Seatbelt
+ * child. Tests that must launch their own sandbox guard on this instead, so a
+ * confined run skips them rather than reporting a false red — the same
+ * distinction the bug this stub serves exists to protect.
+ */
+export function enclosedByValidationBroker(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] !== undefined;
+}
+
 export interface InheritedValidationBroker {
   socketPath: string;
   attestationNonce: string;

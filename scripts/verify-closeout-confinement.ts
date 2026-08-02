@@ -112,6 +112,12 @@ async function main(): Promise<void> {
       expectedTreeOid,
       fullTaskReviewHash: sha256(`closeout-confinement:${expectedTreeOid}`),
       timeoutMs: PASS_TIMEOUT_MS,
+      // Closeout stops at the first red command; the merge gate runs them all.
+      // Default to closeout fidelity, but allow the merge-gate shape so one red
+      // shard cannot mask the state of the shards behind it while diagnosing.
+      ...(process.env['RUNE_CONFINEMENT_CONTINUE'] === '1'
+        ? { continueOnFailure: true }
+        : {}),
     });
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -129,7 +135,15 @@ async function main(): Promise<void> {
       console.error(`FAILED on pass ${pass}: receipt ${receipt.outcome}`);
       for (const command of receipt.commands) {
         if (command.outcome !== 'passed') {
-          console.error(`   ${command.command} → ${command.outcome}`);
+          console.error(
+            `   ${command.command} → ${command.outcome} (coverage=${command.coverage})` +
+              (command.discovered !== undefined
+                ? ` discovered=${JSON.stringify(command.discovered)}`
+                : '') +
+              (command.completed !== undefined
+                ? ` completed=${JSON.stringify(command.completed)}`
+                : ''),
+          );
         }
       }
       // Without the tail, a red pass is undiagnosable and the script is just a
