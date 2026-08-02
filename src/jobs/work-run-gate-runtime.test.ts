@@ -51,7 +51,10 @@ import {
   requestValidationSandboxProbe,
   type ValidationSandboxBroker,
 } from './validation-sandbox-broker.js';
-import { createConfinementCapability } from '../utils/validation-confinement.js';
+import {
+  createConfinementCapability,
+  VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
+} from '../utils/validation-confinement.js';
 import {
   RELATED_TEST_ARGUMENT_MAX_CHARS,
   RELATED_TEST_ARGUMENTS_TOTAL_MAX_CHARS,
@@ -794,7 +797,14 @@ describe('runValidationCommands', () => {
     expect(existsSync(join(tmpRoot, 'SHOULD_NOT_EXIST'))).toBe(false);
   });
 
-  it.runIf(process.platform === 'darwin')(
+  // Skipped when an enclosing Rune broker already owns this shard's Seatbelt:
+  // creating a second OS sandbox is precisely the nested-ownership mistake this
+  // bug forbids, so the test that proves it must not commit it. Bare runs
+  // (`npx vitest run`) own no outer profile and do the real reproduction.
+  it.runIf(
+    process.platform === 'darwin' &&
+      process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] === undefined,
+  )(
     'classifies a REAL nested sandbox_apply launch rejection as profile-unavailable',
     async () => {
       // Reproduce the production failure at the OS level instead of asserting

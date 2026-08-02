@@ -132,6 +132,14 @@ async function main(): Promise<void> {
           console.error(`   ${command.command} → ${command.outcome}`);
         }
       }
+      // Without the tail, a red pass is undiagnosable and the script is just a
+      // slower `npm test`. `failed` already carries the first failing shard.
+      if (!result.ok) {
+        console.error(`\n--- ${result.command} ---`);
+        console.error((result.result.outputHead ?? '').slice(0, 4_000));
+        console.error('   …   ');
+        console.error((result.result.outputTail ?? '').slice(-8_000));
+      }
       process.exit(1);
     }
   }

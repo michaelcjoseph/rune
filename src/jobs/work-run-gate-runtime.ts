@@ -465,20 +465,22 @@ export async function runValidationCommandArgv(
     if (attestation === undefined || attestation === '') {
       return unavailable('inherited validation confinement is missing its launcher capability');
     }
-    // The inherited confinement must be the profile THIS call asked for, not
-    // merely some profile. A `sandbox-integration` outer profile grants one
-    // extra exception (reachability to the broker's Unix socket), so accepting
-    // it for an `isolated` or `loopback` request would silently run that shard
-    // under weaker rules than it declared. Requests that name no profile keep
-    // the historical broker profile as their expectation.
-    const proven = await verifyInheritedValidationConfinement(
+    // Reuse the enclosing Seatbelt ONLY when the live broker confirms it owns
+    // exactly the profile THIS call asked for. A `sandbox-integration` outer
+    // profile grants one extra exception (reachability to the broker's Unix
+    // socket), so accepting it for an `isolated` request would silently run
+    // that command under weaker rules than it declared.
+    //
+    // A mismatch is NOT fatal: it just forfeits the bypass, and the launch
+    // below applies its own profile as usual. That is the safe direction —
+    // narrowing nests fine on macOS, and a widening profile is rejected by
+    // `sandbox_apply` and typed as `profile-unavailable` further down. Failing
+    // closed here instead would deny a narrower nested profile that the OS
+    // would happily have applied.
+    inheritedOuterConfinement = await verifyInheritedValidationConfinement(
       options.profile ?? 'sandbox-integration',
       process.env,
     );
-    if (!proven) {
-      return unavailable('inherited validation confinement could not be verified');
-    }
-    inheritedOuterConfinement = true;
   }
   return await new Promise<ValidationCommandResult>((resolve) => {
     const [bin, ...args] = argv;
@@ -570,7 +572,11 @@ export async function runValidationCommandArgv(
     // tree. Keep its anonymous nonce so the owner can find even a setsid(2)
     // escape after the complete profile shard exits; the nested helper cannot
     // inspect the host process table from inside Seatbelt.
-    const validationProcessNonce = inheritedOuterConfinement
+    // Keyed off being INSIDE an enclosing launcher's tree, not off whether this
+    // call reused its profile: a nested call that applies its own narrower
+    // profile is still that launcher's descendant, and reusing its nonce is
+    // what lets the owner find a setsid(2) escape after the shard exits.
+    const validationProcessNonce = inheritedBrokerSocket !== undefined
       ? process.env[VALIDATION_PROCESS_NONCE_ENV] ?? createVitestAttestationCapability()
       : createVitestAttestationCapability();
     env[VALIDATION_PROCESS_NONCE_ENV] = validationProcessNonce;
@@ -645,7 +651,12 @@ export async function runValidationCommandArgv(
     let timeoutReapComplete = true;
     let normalReapPending = false;
     let reapConfirmed = true;
-    let escapedDescendantsChecked = inheritedOuterConfinement;
+    // The enclosing launcher owns the escaped-descendant sweep for its WHOLE
+    // shard, and a child inside Seatbelt cannot read the host process table
+    // anyway — so skip it for every inherited launch, not only for one that
+    // reused the outer profile. Running it anyway costs two bounded `/bin/ps`
+    // calls per command that can only ever come back unconfirmed.
+    let escapedDescendantsChecked = inheritedBrokerSocket !== undefined;
     let escapedDescendantReapPending = false;
     let deferredFinish: { code: number | null } | undefined;
     const killGroup = (signal: NodeJS.Signals): void => {
