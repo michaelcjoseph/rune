@@ -70,9 +70,20 @@ export const CODEX_PROBE_RUNTIME_ROOT = join(PROJECT_ROOT, '.rune', 'codex-prefl
  * Per-process allocation scope inside the repo-owned root. Concurrent probes in
  * one checkout — notably parallel Vitest workers — each allocate under their
  * own owner directory, so no probe can observe another's in-flight runtime.
+ *
+ * `root` exists so the reaping tests can exercise this logic against a temp
+ * directory. Production never passes it: the real root must stay repo-owned
+ * (Codex refuses to place its app-server helpers in the OS temp dir), and
+ * `createCodexProbeRuntime` still enforces that with its inside-the-repository
+ * check. Without the seam those tests write into `PROJECT_ROOT/.rune`, which is
+ * gitignored and read-only in the trusted observer's materialized tree — so they
+ * passed in the worktree and failed the authoritative manifest.
  */
-export function codexProbeOwnerRoot(pid: number = process.pid): string {
-  return join(CODEX_PROBE_RUNTIME_ROOT, `owner-${pid}`);
+export function codexProbeOwnerRoot(
+  pid: number = process.pid,
+  root: string = CODEX_PROBE_RUNTIME_ROOT,
+): string {
+  return join(root, `owner-${pid}`);
 }
 
 const PROBE_RUNTIME_MAX_AGE_MS = 60 * 60 * 1_000;
@@ -87,10 +98,11 @@ const PROBE_RUNTIME_MAX_AGE_MS = 60 * 60 * 1_000;
 export function reapStaleCodexProbeRuntimes(
   maxAgeMs: number = PROBE_RUNTIME_MAX_AGE_MS,
   now: number = Date.now(),
+  root: string = CODEX_PROBE_RUNTIME_ROOT,
 ): void {
   let entries: string[];
   try {
-    entries = readdirSync(CODEX_PROBE_RUNTIME_ROOT);
+    entries = readdirSync(root);
   } catch {
     return; // No root yet, or unreadable — nothing to reap.
   }
@@ -99,7 +111,7 @@ export function reapStaleCodexProbeRuntimes(
     if (owner === null) continue;
     const pid = Number(owner[1]);
     if (pid === process.pid) continue;
-    const dir = join(CODEX_PROBE_RUNTIME_ROOT, entry);
+    const dir = join(root, entry);
     try {
       if (now - statSync(dir).mtimeMs < maxAgeMs) continue;
       let ownerAlive: boolean;

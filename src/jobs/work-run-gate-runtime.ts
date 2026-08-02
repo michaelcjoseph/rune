@@ -1361,8 +1361,19 @@ function validationIdentityFailure(message: string): FullSuiteValidationResult {
   };
 }
 
-async function materializeReviewedTree(
-  opts: FullSuiteValidationOpts,
+/**
+ * Check the reviewed tree out into a throwaway directory, so the observer runs
+ * the code that was reviewed rather than whatever the worktree holds now.
+ *
+ * Exported for `scripts/diagnose-reviewed-tree.ts`: the observer's reporter is
+ * counts-only by design, so the only way to learn WHICH tests fail in this tree
+ * is to reproduce it. A re-implementation there would drift from production and
+ * report the wrong failures, so the diagnostic calls this exact function. The
+ * parameter is narrowed to the fields actually read, so a caller outside the
+ * full-suite path need not fabricate an entire `FullSuiteValidationOpts`.
+ */
+export async function materializeReviewedTree(
+  opts: Pick<FullSuiteValidationOpts, 'worktree' | 'expectedTreeOid' | 'validationCwd'>,
   runGit: GitRunner,
 ): Promise<{ dir: string; cwd: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'rune-vitest-reviewed-tree-'));

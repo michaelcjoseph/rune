@@ -1219,9 +1219,18 @@ describe('runValidationCommands', () => {
   });
 
   it.runIf(process.platform === 'darwin')(
-    'carves a default-layout validation worktree out of the denied Rune trust root',
+    'carves a default-layout validation worktree out of a denied trust root',
     async () => {
-      const worktreesDir = join(PROJECT_ROOT, '.worktrees');
+      // Mirrors the production layout — `WORKTREE_ROOT` defaults to
+      // `<PROJECT_ROOT>/.worktrees`, so a worktree sits INSIDE the denied trust
+      // root and the nested allow has to beat the outer deny. The roots here are
+      // temp dirs rather than PROJECT_ROOT itself: the trusted observer runs
+      // this suite from a materialized reviewed tree that is read-only, so
+      // writing into the real repo passes in a worktree and fails the
+      // authoritative manifest. That the real default nests under PROJECT_ROOT
+      // is pinned separately, filesystem-free, in `src/config.test.ts`.
+      const trustRoot = mkdtempSync(join(tmpdir(), 'validation-trust-root-'));
+      const worktreesDir = join(trustRoot, '.worktrees');
       mkdirSync(worktreesDir, { recursive: true });
       const worktree = mkdtempSync(join(worktreesDir, 'validation-write-probe-'));
       try {
@@ -1230,14 +1239,14 @@ describe('runValidationCommands', () => {
           '-e',
           "require('node:fs').writeFileSync('build-artifact.txt','ok')",
         ], worktree, 5_000, undefined, {
-          deniedWriteRoots: [PROJECT_ROOT],
+          deniedWriteRoots: [trustRoot],
           allowedWriteRoots: [worktree],
         });
 
         expect(result).toMatchObject({ exitCode: 0, timedOut: false });
         expect(readFileSync(join(worktree, 'build-artifact.txt'), 'utf8')).toBe('ok');
       } finally {
-        rmSync(worktree, { recursive: true, force: true });
+        rmSync(trustRoot, { recursive: true, force: true });
       }
     },
   );

@@ -6,7 +6,10 @@
  * the injected model-call seam; they do not mock the primitive under test.
  */
 
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { PROJECT_ROOT } from '../config.js';
 
 import { runSelfReview } from './self-review.js';
 
@@ -256,7 +259,13 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     const calls: CapturedRoleCall[] = [];
     const modelCall: SelfReviewModelCall = async ({ role, sessionId, systemPrompt, message }) => {
       calls.push({ role, sessionId, systemPrompt, message });
-      throw new Error('transport unavailable at /Users/jarvis/workspace/rune/private.log');
+      // Derived, not hardcoded: the assertion below is about `PROJECT_ROOT`
+      // being scrubbed to `<project>`, and the observer runs this suite from a
+      // materialized tree where `PROJECT_ROOT` is a temp directory. A literal
+      // checkout path would fall through to the `<home>` rule there. The
+      // foreign-path fallback is pinned separately in
+      // `src/utils/sanitize-paths.test.ts`.
+      throw new Error(`transport unavailable at ${join(PROJECT_ROOT, 'private.log')}`);
     };
 
     await expect(

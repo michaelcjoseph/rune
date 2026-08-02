@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { existsSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   reapStaleCodexProbeRuntimes,
 } from './codex.js';
 import { requestValidationSandboxProbe } from '../jobs/validation-sandbox-broker.js';
+import { PROJECT_ROOT } from '../config.js';
 
 const SANDBOX_INTEGRATION_TAG = { tags: ['validation-sandbox-integration'] };
 
@@ -225,27 +226,42 @@ describe('centralized executor probes', () => {
  * `finally` used to leak its directory permanently into a gitignored path.
  */
 describe('Codex probe runtime reaping', () => {
-  const created: string[] = [];
   const HOUR_MS = 60 * 60 * 1_000;
+  // The reaping logic is root-agnostic, so exercise it against a temp root
+  // rather than the live repo. Writing into `PROJECT_ROOT/.rune` works in a
+  // worktree but not in the trusted observer's materialized reviewed tree,
+  // which is read-only — the divergence that kept the full-suite receipt red.
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'codex-probe-reap-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
 
   function ownerDir(pid: number, ageMs: number): string {
-    const dir = codexProbeOwnerRoot(pid);
+    const dir = codexProbeOwnerRoot(pid, root);
     mkdirSync(join(dir, 'probe-abc123'), { recursive: true, mode: 0o700 });
-    created.push(dir);
     const when = new Date(Date.now() - ageMs);
     utimesSync(dir, when, when);
     return dir;
   }
 
-  afterEach(() => {
-    for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
+  it('keeps the production runtime root repo-owned', () => {
+    // The seam above must not become a way for production to drift out of the
+    // repository: Codex refuses to place its app-server helpers in the OS temp
+    // dir, so the real root stays under PROJECT_ROOT.
+    expect(CODEX_PROBE_RUNTIME_ROOT).toBe(join(PROJECT_ROOT, '.rune', 'codex-preflight'));
+    expect(codexProbeOwnerRoot(4242)).toBe(join(CODEX_PROBE_RUNTIME_ROOT, 'owner-4242'));
   });
 
   it('removes a runtime orphaned by a killed probe', () => {
     // Far above macOS's pid ceiling, so process.kill(pid, 0) is a clean ESRCH.
     const orphan = ownerDir(999_999, 2 * HOUR_MS);
 
-    reapStaleCodexProbeRuntimes();
+    reapStaleCodexProbeRuntimes(undefined, undefined, root);
 
     expect(existsSync(orphan)).toBe(false);
   });
@@ -254,7 +270,7 @@ describe('Codex probe runtime reaping', () => {
     const self = ownerDir(process.pid, 2 * HOUR_MS);
     const otherLive = ownerDir(process.ppid, 2 * HOUR_MS);
 
-    reapStaleCodexProbeRuntimes();
+    reapStaleCodexProbeRuntimes(undefined, undefined, root);
 
     expect(existsSync(self)).toBe(true);
     expect(existsSync(otherLive)).toBe(true);
@@ -263,21 +279,20 @@ describe('Codex probe runtime reaping', () => {
   it('leaves a recent dead-owner runtime alone until it ages out', () => {
     const recent = ownerDir(999_998, 5 * 60 * 1_000);
 
-    reapStaleCodexProbeRuntimes();
+    reapStaleCodexProbeRuntimes(undefined, undefined, root);
     expect(existsSync(recent)).toBe(true);
 
-    reapStaleCodexProbeRuntimes(HOUR_MS, Date.now() + 2 * HOUR_MS);
+    reapStaleCodexProbeRuntimes(HOUR_MS, Date.now() + 2 * HOUR_MS, root);
     expect(existsSync(recent)).toBe(false);
   });
 
   it('ignores entries that are not owner scopes', () => {
-    const stray = join(CODEX_PROBE_RUNTIME_ROOT, 'probe-legacyFormat');
+    const stray = join(root, 'probe-legacyFormat');
     mkdirSync(stray, { recursive: true, mode: 0o700 });
-    created.push(stray);
     const when = new Date(Date.now() - 2 * HOUR_MS);
     utimesSync(stray, when, when);
 
-    reapStaleCodexProbeRuntimes();
+    reapStaleCodexProbeRuntimes(undefined, undefined, root);
 
     expect(existsSync(stray)).toBe(true);
   });
