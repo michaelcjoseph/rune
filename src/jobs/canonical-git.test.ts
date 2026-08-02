@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+// @module-tag validation-sandbox-integration
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
   existsSync,
@@ -20,21 +21,29 @@ import {
 } from './canonical-git.js';
 import { defaultRunGit } from './sandbox-runtime.js';
 import {
-  VALIDATION_COMPATIBLE_MODE_ENV,
-  VALIDATION_COMPATIBLE_MODE_VALUE,
+  VALIDATION_CONFINEMENT_ATTESTATION_ENV,
+  VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
 } from '../utils/validation-confinement.js';
+import * as validationSandboxBroker from './validation-sandbox-broker.js';
+import { startValidationSandboxBroker } from './validation-sandbox-broker.js';
 
 const roots: string[] = [];
 const originalToken = process.env['TELEGRAM_BOT_TOKEN'];
-const originalCompatibleMode = process.env[VALIDATION_COMPATIBLE_MODE_ENV];
+const originalBrokerSocket = process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV];
+const originalAttestation = process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
 
 afterEach(() => {
   if (originalToken === undefined) delete process.env['TELEGRAM_BOT_TOKEN'];
   else process.env['TELEGRAM_BOT_TOKEN'] = originalToken;
-  if (originalCompatibleMode === undefined) {
-    delete process.env[VALIDATION_COMPATIBLE_MODE_ENV];
+  if (originalBrokerSocket === undefined) {
+    delete process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV];
   } else {
-    process.env[VALIDATION_COMPATIBLE_MODE_ENV] = originalCompatibleMode;
+    process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] = originalBrokerSocket;
+  }
+  if (originalAttestation === undefined) {
+    delete process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
+  } else {
+    process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV] = originalAttestation;
   }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -68,7 +77,7 @@ describe('canonical Git security boundary', () => {
     },
   );
 
-  it('reuses inherited validation confinement while retaining Git-driver rejection', async () => {
+  it('reuses live broker-attested validation confinement while retaining Git-driver rejection', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'canonical-git-inherited-'));
     roots.push(repo);
     await defaultRunGit(['init', '--initial-branch', 'main'], { cwd: repo });
@@ -77,13 +86,60 @@ describe('canonical Git security boundary', () => {
       ['config', '--local', 'diff.probe.textconv', '/usr/bin/false'],
       { cwd: repo },
     );
-    process.env[VALIDATION_COMPATIBLE_MODE_ENV] =
-      VALIDATION_COMPATIBLE_MODE_VALUE;
+    const inheritedSocket = process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV];
+    const inheritedAttestation = process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
+    const broker = inheritedSocket === undefined
+      ? await startValidationSandboxBroker()
+      : undefined;
+    process.env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV] = inheritedSocket ?? broker!.socketPath;
+    process.env[VALIDATION_CONFINEMENT_ATTESTATION_ENV] =
+      inheritedAttestation ?? broker!.attestationNonce;
 
-    await expect(
-      defaultRunCanonicalGit(['add', '-A'], { cwd: repo }),
-    ).rejects.toThrow(/refuses external repository drivers.*diff\.probe\.textconv/i);
+    try {
+      await expect(
+        defaultRunCanonicalGit(['add', '-A'], { cwd: repo }),
+      ).rejects.toThrow(/refuses external repository drivers.*diff\.probe\.textconv/i);
+    } finally {
+      await broker?.stop();
+    }
   });
+
+  // The test above configures an external Git driver so `rejectExternalGitDrivers`
+  // always throws BEFORE the confinement-reuse decision is ever reached — it
+  // proves driver rejection survives the refactor, but not that the new
+  // `verifyInheritedValidationConfinement` call is actually wired in. This uses
+  // a driver-free repo so the call is genuinely reached, and honors whatever the
+  // live broker answers (both "yes, reuse" and "no, apply Rune's own Seatbelt").
+  it.each([true, false])(
+    "asks the live broker to verify sandbox-integration confinement before every non-rejected call, and honors a %s answer",
+    async (confinementAnswer) => {
+      const repo = mkdtempSync(join(tmpdir(), 'canonical-git-confinement-check-'));
+      roots.push(repo);
+      await defaultRunGit(['init', '--initial-branch', 'main'], { cwd: repo });
+      writeFileSync(join(repo, 'payload.txt'), 'payload\n');
+
+      const spy = vi
+        .spyOn(validationSandboxBroker, 'verifyInheritedValidationConfinement')
+        .mockResolvedValue(confinementAnswer);
+      try {
+        await expect(
+          defaultRunCanonicalGit(['add', '-A'], { cwd: repo }),
+        ).resolves.toBeDefined();
+
+        if (process.platform === 'darwin') {
+          expect(spy).toHaveBeenCalledWith('sandbox-integration');
+        } else {
+          // Confinement reuse is a macOS-only concept; on other platforms the
+          // check must never even run.
+          expect(spy).not.toHaveBeenCalled();
+        }
+      } finally {
+        // `mockRestore()` clears recorded calls, so it must run only after
+        // every assertion against `spy` above has already been made.
+        spy.mockRestore();
+      }
+    },
+  );
 });
 
 describe('clean task-base capture', () => {

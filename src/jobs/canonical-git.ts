@@ -21,7 +21,7 @@ import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets } from './work-run-transcript.js';
-import { hasValidationCompatibleModeMarker } from '../utils/validation-confinement.js';
+import { verifyInheritedValidationConfinement } from './validation-sandbox-broker.js';
 
 const execFileAsync = promisify(execFile);
 const NETWORK_DENY_PROFILE = [
@@ -47,10 +47,12 @@ export const defaultRunCanonicalGit: GitRunner = async (args, opts) => {
     'credential.helper=',
     ...args,
   ];
-  // This helper is invoked either directly by Rune or as a descendant of the
-  // validation launcher. The marker is meaningful only in the latter case,
-  // where the launch contract already applied the outer Seatbelt.
-  const useSeatbelt = process.platform === 'darwin' && !hasValidationCompatibleModeMarker();
+  // A nested helper may reuse the shard's already-applied Seatbelt only when
+  // the live enclosing broker verifies its socket/nonce/profile tuple. The
+  // legacy compatible-mode marker is diagnostic and grants no authority.
+  const inheritedConfinement = process.platform === 'darwin' &&
+    await verifyInheritedValidationConfinement('sandbox-integration');
+  const useSeatbelt = process.platform === 'darwin' && !inheritedConfinement;
   const bin = useSeatbelt ? '/usr/bin/sandbox-exec' : 'git';
   const spawnArgs = useSeatbelt
     ? ['-p', NETWORK_DENY_PROFILE, 'git', ...gitArgs]

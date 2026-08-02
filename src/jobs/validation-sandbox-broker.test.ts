@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   requestValidationSandboxProbe,
   startValidationSandboxBroker,
+  verifyInheritedValidationConfinement,
 } from './validation-sandbox-broker.js';
 
 describe.runIf(process.platform === 'darwin')('validation sandbox broker', () => {
@@ -97,37 +98,95 @@ describe.runIf(process.platform === 'darwin')('validation sandbox broker', () =>
    * A child's cross-process bypass of the inner Seatbelt used to be authorized
    * by two bare environment variables. It now requires the LIVE broker that
    * encloses the child to confirm the nonce it minted, for the profile it owns.
-   */
+  */
   describe('confinement attestation', () => {
-    it('confirms only the nonce it minted, for the profile it owns', async () => {
+    const inheritedSocket = process.env['RUNE_VALIDATION_SANDBOX_BROKER_SOCKET'];
+    const inheritedNonce = process.env['RUNE_VALIDATION_CONFINEMENT_ATTESTATION'];
+    const withBroker = async <T>(
+      body: (socketPath: string, nonce: string) => Promise<T>,
+    ): Promise<T> => {
+      if (inheritedSocket !== undefined && inheritedNonce !== undefined) {
+        return await body(inheritedSocket, inheritedNonce);
+      }
       const broker = await startValidationSandboxBroker();
       try {
-        await expect(requestValidationSandboxProbe(broker.socketPath, {
+        return await body(broker.socketPath, broker.attestationNonce);
+      } finally {
+        await broker.stop();
+      }
+    };
+
+    it('verifies only a live socket, nonce, and expected profile tuple', async () => {
+      await withBroker(async (socketPath, nonce) => {
+        await expect(verifyInheritedValidationConfinement('sandbox-integration', {
+          RUNE_VALIDATION_SANDBOX_BROKER_SOCKET: socketPath,
+          RUNE_VALIDATION_CONFINEMENT_ATTESTATION: nonce,
+        })).resolves.toBe(true);
+        await expect(verifyInheritedValidationConfinement('sandbox-integration', {
+          RUNE_VALIDATION_SANDBOX_BROKER_SOCKET: socketPath,
+          RUNE_VALIDATION_CONFINEMENT_ATTESTATION: 'forged',
+        })).resolves.toBe(false);
+        await expect(verifyInheritedValidationConfinement('isolated', {
+          RUNE_VALIDATION_SANDBOX_BROKER_SOCKET: socketPath,
+          RUNE_VALIDATION_CONFINEMENT_ATTESTATION: nonce,
+        })).resolves.toBe(false);
+      });
+    });
+
+    it('rejects a stale inherited attestation after its broker stops', async () => {
+      let staleSocket: string;
+      let staleNonce: string;
+      if (inheritedSocket !== undefined && inheritedNonce !== undefined) {
+        staleSocket = `${inheritedSocket}.stale`;
+        staleNonce = inheritedNonce;
+      } else {
+        const broker = await startValidationSandboxBroker();
+        staleSocket = broker.socketPath;
+        staleNonce = broker.attestationNonce;
+        await broker.stop();
+      }
+
+      await expect(
+        verifyInheritedValidationConfinement('sandbox-integration', {
+          RUNE_VALIDATION_SANDBOX_BROKER_SOCKET: staleSocket,
+          RUNE_VALIDATION_CONFINEMENT_ATTESTATION: staleNonce,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it('confirms only the nonce it minted, for the profile it owns', async () => {
+      await withBroker(async (socketPath, nonce) => {
+        await expect(requestValidationSandboxProbe(socketPath, {
           version: 1,
           scenario: 'confinement-attestation',
-          nonce: broker.attestationNonce,
+          nonce,
           profile: 'sandbox-integration',
         })).resolves.toMatchObject({ ok: true, exitCode: 0, timedOut: false });
 
-        await expect(requestValidationSandboxProbe(broker.socketPath, {
+        await expect(requestValidationSandboxProbe(socketPath, {
           version: 1,
           scenario: 'confinement-attestation',
           nonce: 'forged-nonce',
           profile: 'sandbox-integration',
         })).resolves.toMatchObject({ ok: false, failure: 'invalid-request' });
 
-        await expect(requestValidationSandboxProbe(broker.socketPath, {
+        await expect(requestValidationSandboxProbe(socketPath, {
           version: 1,
           scenario: 'confinement-attestation',
-          nonce: broker.attestationNonce,
+          nonce,
           profile: 'isolated',
         })).resolves.toMatchObject({ ok: false, failure: 'invalid-request' });
-      } finally {
-        await broker.stop();
-      }
+      });
     });
 
     it('mints a distinct nonce per broker instance', async () => {
+      if (inheritedSocket !== undefined) {
+        // Starting another listener would violate the shard's single-owner
+        // contract. The broker-free focused suite exercises the two-instance
+        // mint below; the profiled shard proves its inherited nonce is present.
+        expect(inheritedNonce).toBeTruthy();
+        return;
+      }
       const first = await startValidationSandboxBroker();
       const second = await startValidationSandboxBroker();
       try {
@@ -146,9 +205,17 @@ describe.runIf(process.platform === 'darwin')('validation sandbox broker', () =>
     });
 
     it('authorizes nothing once the broker is gone', async () => {
-      const broker = await startValidationSandboxBroker();
-      const { socketPath, attestationNonce } = broker;
-      await broker.stop();
+      let socketPath: string;
+      let attestationNonce: string;
+      if (inheritedSocket !== undefined && inheritedNonce !== undefined) {
+        socketPath = `${inheritedSocket}.gone`;
+        attestationNonce = inheritedNonce;
+      } else {
+        const broker = await startValidationSandboxBroker();
+        socketPath = broker.socketPath;
+        attestationNonce = broker.attestationNonce;
+        await broker.stop();
+      }
 
       // Exactly the stale-environment case: both values look right, but the
       // enclosing broker no longer exists to vouch for them.
@@ -161,26 +228,23 @@ describe.runIf(process.platform === 'darwin')('validation sandbox broker', () =>
     });
 
     it('rejects a malformed attestation request', async () => {
-      const broker = await startValidationSandboxBroker();
-      try {
+      await withBroker(async (socketPath, nonce) => {
         for (const request of [
           { version: 1, scenario: 'confinement-attestation', profile: 'sandbox-integration' },
           { version: 1, scenario: 'confinement-attestation', nonce: '', profile: 'sandbox-integration' },
-          { version: 1, scenario: 'confinement-attestation', nonce: broker.attestationNonce, profile: 'made-up' },
+          { version: 1, scenario: 'confinement-attestation', nonce, profile: 'made-up' },
           {
             version: 1,
             scenario: 'confinement-attestation',
-            nonce: broker.attestationNonce,
+            nonce,
             profile: 'sandbox-integration',
             command: '/bin/sh',
           },
         ]) {
-          await expect(requestValidationSandboxProbe(broker.socketPath, request as never))
+          await expect(requestValidationSandboxProbe(socketPath, request as never))
             .resolves.toMatchObject({ ok: false, failure: 'invalid-request' });
         }
-      } finally {
-        await broker.stop();
-      }
+      });
     });
   });
 

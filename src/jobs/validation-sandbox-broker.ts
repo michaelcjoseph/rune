@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import {
   createConfinementCapability,
+  VALIDATION_CONFINEMENT_ATTESTATION_ENV,
+  VALIDATION_SANDBOX_BROKER_SOCKET_ENV,
   type ConfinementCapability,
 } from '../utils/validation-confinement.js';
 import {
@@ -317,4 +319,25 @@ export async function requestValidationSandboxProbe(
       ok: false, exitCode: null, timedOut: false, failure: 'broker-unavailable',
     }));
   });
+}
+
+/**
+ * Verify a nested Rune helper's inherited sandbox-integration confinement
+ * against the live broker that minted its nonce. Environment presence is only
+ * a claim: a missing, forged, stale, or wrong-profile tuple returns false.
+ */
+export async function verifyInheritedValidationConfinement(
+  expectedProfile: ValidationProfile,
+  env: Record<string, string | undefined> = process.env,
+): Promise<boolean> {
+  const socketPath = env[VALIDATION_SANDBOX_BROKER_SOCKET_ENV];
+  const nonce = env[VALIDATION_CONFINEMENT_ATTESTATION_ENV];
+  if (!socketPath || !nonce) return false;
+  const response = await requestValidationSandboxProbe(socketPath, {
+    version: 1,
+    scenario: 'confinement-attestation',
+    nonce,
+    profile: expectedProfile,
+  });
+  return response.ok === true && response.exitCode === 0 && response.timedOut === false;
 }

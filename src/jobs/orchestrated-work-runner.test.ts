@@ -87,7 +87,10 @@ const mockRunValidationCommands = vi.hoisted(() =>
   ): Promise<MockValidationCommandListResult> => ({ ok: true })),
 );
 const mockRunFullSuiteValidation = vi.hoisted(() =>
-  vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
+  vi.fn(async (
+    _opts?: unknown,
+    _io?: unknown,
+  ): Promise<Record<string, unknown>> => ({ ok: true })),
 );
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
@@ -161,6 +164,10 @@ vi.mock('./work-run-gate-runtime.js', () => ({
     return { ok: true };
   },
   runTrustedVitestObserver: mockRunValidationCommandArgv,
+  productionFullSuiteProfileIO: () => ({
+    probeProfile: vi.fn(),
+    startSandboxBroker: vi.fn(),
+  }),
   runValidationCommands: mockRunValidationCommands,
   runFullSuiteValidation: mockRunFullSuiteValidation,
 }));
@@ -2581,6 +2588,10 @@ describe('orchestratedWorkApplier', () => {
 
         expect(terminal?.kind).toBe('completed');
         expect(mockRunFullSuiteValidation).toHaveBeenCalledTimes(1);
+        expect(mockRunFullSuiteValidation.mock.calls[0]?.[1]).toMatchObject({
+          probeProfile: expect.any(Function),
+          startSandboxBroker: expect.any(Function),
+        });
         expect(mockRunValidationCommandArgv).not.toHaveBeenCalled();
         expect(mockRunValidationCommands).not.toHaveBeenCalled();
         expect(mockCollectTaskChangedPaths).not.toHaveBeenCalled();

@@ -130,7 +130,7 @@ describe('strict profiled Vitest selection', () => {
       cwd: '/tmp/product',
       timeoutMs: 1_000,
       runCommandArgv,
-      probeProfile: async (profile) => ({
+      probeProfile: async (profile: 'isolated' | 'loopback' | 'sandbox-integration') => ({
         profile,
         definitionFingerprint: 'a'.repeat(64),
         confinementOwner: 'validation-launcher',
@@ -615,6 +615,58 @@ describe('runGate — test before mutating main (P1.5)', () => {
     expect(runValidationCommand).not.toHaveBeenCalled();
     expect(existsSync(integrationWorktree)).toBe(false);
   });
+
+  // Regression coverage for the "profiled closeout launcher reports a nested
+  // Seatbelt failure as an ordinary command failure" bug: the merge gate's
+  // OWN default validation launcher (no injected `io.runValidationCommand`)
+  // must wire the real `probeProfile`/`startSandboxBroker` pair into
+  // `runFullSuiteValidation`, exactly as the task-closeout call site does.
+  // Before the fix this call site omitted both hooks, so a sandbox-integration
+  // shard ran without a broker grant and without confinement admission ever
+  // being proven for real.
+  it.runIf(process.platform === 'darwin')(
+    "the merge gate's default launcher grants its sandbox-integration shard a live broker",
+    async () => {
+      // The compact merge-gate receipt refuses to durably record a configured
+      // command containing an absolute host path, so (like every real product
+      // `validationCommands` entry) this must be a bare npm script name, not
+      // an absolute interpreter+script argv.
+      writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+        name: 'gate-sandbox-broker-fixture',
+        private: true,
+        scripts: { test: 'node probe.cjs' },
+      }));
+      writeFileSync(
+        join(repoPath, 'probe.cjs'),
+        [
+          'const socket = process.env.RUNE_VALIDATION_SANDBOX_BROKER_SOCKET;',
+          'const nonce = process.env.RUNE_VALIDATION_CONFINEMENT_ATTESTATION;',
+          'process.exit(socket && nonce ? 0 : 1);',
+          '',
+        ].join('\n'),
+      );
+      git(repoPath, 'add', '-A');
+      git(repoPath, 'commit', '-q', '-m', 'add sandbox-broker probe fixture');
+      const command = 'npm test';
+
+      // No `io` argument: this exercises `runGate`'s own default validation
+      // launcher (`defaultGateRuntimeIO`), not a test-injected command runner.
+      // Before the fix, this call site omitted `probeProfile`/`startSandboxBroker`
+      // so the sandbox-integration shard ran with no live broker grant and the
+      // probe script above would see undefined env vars and exit 1.
+      const result = await runGate(gateOpts({
+        validationCommands: [command],
+        validationCommandProfiles: [{ command, profile: 'sandbox-integration' }],
+      }));
+
+      expect(result.ok).toBe(true);
+      expect(result.validationReceipt).toMatchObject({
+        outcome: 'passed',
+        commands: [{ command, outcome: 'passed' }],
+      });
+    },
+    30_000,
+  );
 });
 
 describe('runValidationCommands', () => {
@@ -737,6 +789,43 @@ describe('runValidationCommands', () => {
     expect(result).toMatchObject({ exitCode: 3, timedOut: false });
     expect(result.outputTail).toContain(JSON.stringify(marker));
     expect(existsSync(join(tmpRoot, 'SHOULD_NOT_EXIST'))).toBe(false);
+  });
+
+  it.runIf(process.platform === 'darwin')(
+    'classifies the exact profiled sandbox_apply launch rejection as profile-unavailable',
+    async () => {
+      const result = await runValidationCommandArgv(
+        [
+          process.execPath,
+          '-e',
+          "console.error('sandbox-exec: sandbox_apply: Operation not permitted');process.exit(1)",
+        ],
+        tmpRoot,
+        5_000,
+        undefined,
+        { profile: 'sandbox-integration' },
+      );
+
+      expect(result).toMatchObject({
+        exitCode: 1,
+        timedOut: false,
+        failureClass: 'profile-unavailable',
+        profile: 'sandbox-integration',
+      });
+    },
+  );
+
+  it('keeps an ordinary profiled assertion failure as command-failed evidence', async () => {
+    const result = await runValidationCommandArgv(
+      [process.execPath, '-e', "console.error('AssertionError: expected 1 to be 2');process.exit(1)"],
+      tmpRoot,
+      5_000,
+      undefined,
+      { profile: 'isolated' },
+    );
+
+    expect(result).toMatchObject({ exitCode: 1, timedOut: false, profile: 'isolated' });
+    expect(result.failureClass).toBeUndefined();
   });
 
   it('runs only the related test for a task diff while a full-suite command still runs both pairs', async () => {
@@ -1374,48 +1463,29 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     };
   }
 
-  it('runs the real injected reporter end to end without persisting its host path', async () => {
-    writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
-    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
-      name: 'real-attestation-fixture',
-      private: true,
-      scripts: { test: 'vitest run' },
-    }));
-    writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
-      name: 'real-attestation-fixture',
-      lockfileVersion: 3,
-    }));
-    writeFileSync(
-      join(repoPath, 'vitest.config.cjs'),
-      [
-        "const escapedProcess = require.constructor('return process')();",
-        "if (escapedProcess.env.RUNE_VITEST_ATTESTATION_FILE !== undefined) {",
-        "  throw new Error('attestation output leaked to product config');",
-        "}",
-        "if (escapedProcess.env.RUNE_VITEST_ATTESTATION_CAPABILITY !== undefined) {",
-        "  throw new Error('attestation capability leaked to product config');",
-        "}",
-        'module.exports = {};',
-        '',
-      ].join('\n'),
-    );
-    writeFileSync(
-      join(repoPath, 'attested.test.js'),
-      [
-        "import { expect, it } from 'vitest';",
-        "it('passes without reporter capabilities',()=>{",
-        "  expect(2+2).toBe(4);",
-        "  expect(process.env.RUNE_VITEST_ATTESTATION_FILE).toBeUndefined();",
-        "  expect(process.env.RUNE_VITEST_ATTESTATION_CAPABILITY).toBeUndefined();",
-        "});",
-        '',
-      ].join('\n'),
-    );
-    symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
-    git(repoPath, 'add', '-A');
-    const expectedTreeOid = git(repoPath, 'write-tree');
+  it('keeps private reporter material on the trusted observer call only', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputHead: '',
+      outputTail: '',
+      vitestManifest: {
+        ...completeManifest(1),
+        completed: {
+          suites: 3,
+          tests: 1,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          todo: 0,
+          cancelled: 0,
+        },
+      },
+    });
 
-    const result = await runFullSuiteValidation(opts(expectedTreeOid));
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
     expect(result).toMatchObject({
       ok: true,
       coverageComplete: true,
@@ -1433,6 +1503,9 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(PROJECT_ROOT);
     expect(serialized).not.toContain('vitest-attestation-reporter.mjs');
+    expect(io.runCommand.mock.calls[0]?.[5]).not.toHaveProperty('vitestAttestation');
+    expect((io.runTrustedVitestObserver as ReturnType<typeof vi.fn>).mock.calls[0]?.[3])
+      .toHaveProperty('vitestAttestation.capability');
   });
 
   it.runIf(process.platform === 'darwin')(
@@ -1522,7 +1595,23 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
     git(repoPath, 'add', '-A');
     const expectedTreeOid = git(repoPath, 'write-tree');
 
-    const result = await runFullSuiteValidation(opts(expectedTreeOid));
+    const Reporter = (await import(reporterUrl)).default as new () => object;
+    const importedReporter = new Reporter();
+    expect('output' in importedReporter).toBe(false);
+    expect('capability' in importedReporter).toBe(false);
+
+    // This is a signing-policy case, not another OS-launcher integration test.
+    // The adjacent end-to-end case owns the real nested Vitest launch; inject
+    // the configured-command rejection here so full-shard concurrency cannot
+    // turn the policy assertion into an unrelated nested-run timeout.
+    const io = ioReturning({
+      exitCode: 1,
+      timedOut: false,
+      cancelled: false,
+      outputHead: '',
+      outputTail: 'product config could not acquire trusted reporter signing material',
+    });
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), io);
 
     expect(result).toMatchObject({
       ok: false,
@@ -1533,6 +1622,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       },
     });
     expect(result.attestations).toEqual([]);
+    expect(io.runCommand).toHaveBeenCalledOnce();
   });
 
   it('observes a clean materialization of the reviewed tree, excluding ignored tests', async () => {
@@ -2394,5 +2484,148 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       coverageComplete: true,
       attestations: [{ configuredArgv: [['npm', 'test']] }],
     });
+  });
+
+  it('uses one sandbox broker for both admission and execution of a strict shard', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const stop = vi.fn(async () => {});
+    const broker = fakeBroker('/tmp/full-suite-broker.sock', stop);
+    const startSandboxBroker = vi.fn(async () => broker);
+    const probeProfile = vi.fn(async (
+      profile: 'isolated' | 'loopback' | 'sandbox-integration',
+      _cwd: string,
+      _timeoutMs: number,
+      enclosing?: ValidationSandboxBroker,
+    ) => ({
+      profile,
+      definitionFingerprint: 'a'.repeat(64),
+      confinementOwner: profile === 'sandbox-integration'
+        ? 'sandbox-broker' as const
+        : 'validation-launcher' as const,
+      outcome: 'passed' as const,
+      startedAt: '2026-08-01T12:00:00.000Z',
+      completedAt: '2026-08-01T12:00:01.000Z',
+      ...(enclosing === undefined ? {} : { enclosing }),
+    }));
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commandProfiles: [{ command: 'npm test', profile: 'isolated' }],
+      adapters: [{
+        command: 'npm test',
+        runner: 'vitest',
+        profileSelection: 'strict-tags-v1',
+      }],
+    }, { ...io, probeProfile, startSandboxBroker });
+
+    expect(result.ok).toBe(true);
+    expect(probeProfile.mock.calls.map(([profile]) => profile)).toEqual([
+      'isolated', 'loopback', 'sandbox-integration',
+    ]);
+    expect(probeProfile.mock.calls[2]?.[3]).toBe(broker);
+    expect(startSandboxBroker).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    const sandboxOptions = io.runCommand.mock.calls[2]?.[5];
+    expect(sandboxOptions).toMatchObject({
+      profile: 'sandbox-integration',
+      sandboxBrokerSocket: broker.socketPath,
+      sandboxBrokerCapability: broker.capability,
+      sandboxBrokerAttestation: broker.attestationNonce,
+    });
+  });
+
+  it('fails closed before a sandbox shard when its broker cannot start', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+    const probeProfile = vi.fn(async (profile: 'isolated' | 'loopback' | 'sandbox-integration') => ({
+      profile,
+      definitionFingerprint: 'b'.repeat(64),
+      confinementOwner: 'validation-launcher' as const,
+      outcome: 'passed' as const,
+      startedAt: '2026-08-01T12:00:00.000Z',
+      completedAt: '2026-08-01T12:00:01.000Z',
+    }));
+
+    const result = await runFullSuiteValidation({
+      ...opts(expectedTreeOid),
+      commandProfiles: [{ command: 'npm test', profile: 'isolated' }],
+      adapters: [{
+        command: 'npm test',
+        runner: 'vitest',
+        profileSelection: 'strict-tags-v1',
+      }],
+    }, {
+      ...io,
+      probeProfile,
+      startSandboxBroker: async () => { throw new Error('Seatbelt unavailable'); },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      result: {
+        failureClass: 'profile-unavailable',
+        profile: 'sandbox-integration',
+      },
+      validationReceipt: {
+        outcome: 'profile-unavailable',
+        profileOutcomes: [
+          { profile: 'isolated', outcome: 'passed' },
+          { profile: 'loopback', outcome: 'passed' },
+          {
+            profile: 'sandbox-integration',
+            outcome: 'profile-unavailable',
+            probe: {
+              confinementOwner: 'sandbox-broker',
+              failureClass: 'profile-unavailable',
+            },
+          },
+        ],
+      },
+    });
+    expect(io.runCommand).toHaveBeenCalledTimes(2);
+    expect(probeProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects partially wired production profile admission', async () => {
+    const { expectedTreeOid } = prepareAttestationFixture();
+    const io = ioReturning({
+      exitCode: 0,
+      timedOut: false,
+      cancelled: false,
+      outputTail: '',
+      vitestManifest: completeManifest(),
+    });
+
+    const result = await runFullSuiteValidation(opts(expectedTreeOid), {
+      ...io,
+      probeProfile: async (profile) => ({
+        profile,
+        definitionFingerprint: 'c'.repeat(64),
+        confinementOwner: 'validation-launcher',
+        outcome: 'passed',
+        startedAt: '2026-08-01T12:00:00.000Z',
+        completedAt: '2026-08-01T12:00:01.000Z',
+      }),
+    } as FullSuiteValidationIO);
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: 'canonical validation identity',
+      result: { outputTail: expect.stringContaining('profile admission wiring') },
+    });
+    expect(io.runCommand).not.toHaveBeenCalled();
   });
 });

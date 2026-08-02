@@ -166,6 +166,7 @@ import {
   taskChangesRequireFullValidation,
   runGate as defaultRunGate,
   runFullSuiteValidation as defaultRunFullSuiteValidation,
+  productionFullSuiteProfileIO,
   runProfiledVitestSelection,
   runTrustedVitestObserver,
   runValidationCommandArgv as defaultRunValidationCommandArgv,
@@ -1420,7 +1421,10 @@ function buildOrchestrationDeps(args: {
                 options,
               ),
             ...(args.runValidationCommandArgv === defaultRunValidationCommandArgv
-              ? { runTrustedVitestObserver }
+              ? {
+                  runTrustedVitestObserver,
+                  ...productionFullSuiteProfileIO(),
+                }
               : {}),
           });
           if (!fullResult.ok && !fullSuiteFailureAllowsCloseoutFallback(fullResult)) {

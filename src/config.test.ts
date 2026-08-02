@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
+import { VALIDATION_LAUNCHER_PRIVATE_ENV } from './utils/validation-confinement.js';
 
 describe('config', () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -8,6 +9,11 @@ describe('config', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env = { ...ORIGINAL_ENV };
+    // Profiled validation deliberately gives its child a private nonce (and,
+    // for sandbox-integration, a broker attestation). Operator-config tests
+    // construct fresh operator environments, so remove the launcher's own
+    // handoff before adding the one variable each rejection case exercises.
+    for (const name of VALIDATION_LAUNCHER_PRIVATE_ENV) delete process.env[name];
   });
 
   afterEach(() => {

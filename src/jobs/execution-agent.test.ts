@@ -1,3 +1,4 @@
+// @module-tag validation-sandbox-integration
 /**
  * Phase 8 (live execution binding) — execution-agent diff-capture tests.
  *
