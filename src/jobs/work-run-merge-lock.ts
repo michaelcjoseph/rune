@@ -10,9 +10,9 @@
  * would race the working tree / ref and corrupt each other's merge. A per-project
  * lock would not prevent this — the lock MUST key on the base branch they share.
  *
- * The lock is an in-process async mutex keyed on `<repoId>:<baseBranch>` (the
- * same shape as `withFileLock` in src/intent/backlog-write-lock.ts). It guards
- * only Rune's OWN finalize sequence; the `/work` child is a separate actor.
+ * The lock is an in-process FIFO resource lease keyed on
+ * `<repoId>:<baseBranch>`. It guards only Rune's OWN finalize sequence; the
+ * `/work` child is a separate actor.
  * Because Rune is a single local daemon (the single-writer assumption), an
  * in-process mutex is sufficient — there is no second Rune process contending
  * for the same `main`.
@@ -20,15 +20,6 @@
  * The same single-writer assumption is documented in
  * `src/jobs/supervision-store.ts` (one Rune process per machine is the v1
  * trust model).
- *
- * IMPL NOTE (P1.5): do NOT re-implement the tail-chaining queue — reuse the
- * existing `withFileLock` mutex in `src/intent/backlog-write-lock.ts` (already
- * imported by `src/jobs/scaffold-approval.ts`, so the jobs→intent crossing is
- * in-tree), which already handles lock-table pruning and release-on-throw. Keep
- * the lock domain separate from the backlog file-path keys (delegate with a
- * `merge:`-prefixed key, or a module-local locks Map) so a repository id can
- * never collide with a backlog file path. `withBaseBranchLock` then becomes a
- * thin wrapper: `withFileLock(baseBranchLockKey(repoId, baseBranch), fn)`.
  *
  * The repository identity and contention contract is pinned by
  * `work-run-merge-lock.test.ts` (test-plan §6 "Concurrency + durability").
@@ -38,11 +29,17 @@ import { execFile as execFileCb } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { withFileLock } from '../intent/backlog-write-lock.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  createResourceLeaseScheduler,
+  type LeaseParty,
+  type LeaseSnapshot,
+} from './resource-lease.js';
 
 const execFile = promisify(execFileCb);
 const log = createLogger('work-run-merge-lock');
+const baseBranchLeases = createResourceLeaseScheduler();
+let anonymousLeaseSequence = 0;
 
 type BaseBranchRunHandle = {
   descriptor: {
@@ -155,6 +152,20 @@ export function baseBranchLockKey(repoId: string, baseBranch: string): string {
   return `${repoId}:${baseBranch}`;
 }
 
+export interface BaseBranchLeaseOptions {
+  holder: LeaseParty;
+  signal?: AbortSignal;
+  waitTimeoutMs?: number;
+}
+
+/** Read-only process-local state for the canonical base-branch lease. */
+export function baseBranchLeaseSnapshot(
+  repoId: string,
+  baseBranch: string,
+): LeaseSnapshot | undefined {
+  return baseBranchLeases.snapshot('base-branch', baseBranchLockKey(repoId, baseBranch));
+}
+
 /**
  * Run `fn` exclusively for the `<repoId>:<baseBranch>` lock: it starts only
  * after the previously-queued finalize for the same repository+base branch has
@@ -162,16 +173,30 @@ export function baseBranchLockKey(repoId: string, baseBranch: string): string {
  * when `fn` throws (so one failed finalize never deadlocks the next run on that
  * base branch).
  *
- * Delegates to `withFileLock` (the in-process per-key async mutex in
- * `src/intent/backlog-write-lock.ts`, which already prunes the lock table and
- * releases on throw) rather than re-implementing the tail-chaining queue. The
- * key is `merge:`-prefixed so this lock domain can never collide with
- * `withFileLock`'s backlog file-path keys.
+ * Existing callers may omit lease identity until lifecycle integration supplies
+ * their run cancellation context. The generated identity remains unique and
+ * observable in the meantime.
  */
 export function withBaseBranchLock<T>(
   repoId: string,
   baseBranch: string,
   fn: () => Promise<T> | T,
+  options?: BaseBranchLeaseOptions,
 ): Promise<T> {
-  return withFileLock(`merge:${baseBranchLockKey(repoId, baseBranch)}`, fn);
+  const holder = options?.holder ?? {
+    runId: 'base-branch',
+    operationId: `anonymous-${++anonymousLeaseSequence}`,
+  };
+  return baseBranchLeases.withLease(
+    {
+      type: 'base-branch',
+      key: baseBranchLockKey(repoId, baseBranch),
+      holder,
+      signal: options?.signal ?? new AbortController().signal,
+      ...(options?.waitTimeoutMs !== undefined
+        ? { waitTimeoutMs: options.waitTimeoutMs }
+        : {}),
+    },
+    fn,
+  );
 }
