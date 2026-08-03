@@ -31,6 +31,7 @@ const AGENT_LABELS: Record<string, string> = {
   'sr-grader':             'Grading review answer',
   'observation-diarizer':  'Diarizing observation signals',
   'observation-triage':    'Triaging observation signal',
+  'run-debug':             'Diagnosing work run',
   // Vault-resident agents (loaded from $VAULT_DIR/.claude/agents/)
   'journal-scanner':       'Scanning journals',
   'project-scanner':       'Scanning projects',
