@@ -21,6 +21,12 @@ import {
   type PmAcceptance,
 } from './team-task-workflow.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
+
+/** One durable outcome per role the post-coder judgment batch can dispatch:
+ *  reviewer, tech lead, and designer when the task is sized for it. QA is not a
+ *  member — it authors tests and stops when the coder starts. */
+export const JUDGMENT_OUTCOMES_MAX = 3;
+
 import {
   durableArtifactAttempts,
   durableExecutionFailure,
@@ -141,7 +147,7 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.judgmentOutcomes !== undefined
       ? {
-          judgmentOutcomes: input.judgmentOutcomes.slice(0, 4).map((outcome) => ({
+          judgmentOutcomes: input.judgmentOutcomes.slice(0, JUDGMENT_OUTCOMES_MAX).map((outcome) => ({
             role: outcome.role,
             status: outcome.status,
             ...(outcome.summary !== undefined

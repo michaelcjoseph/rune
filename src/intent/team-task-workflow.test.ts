@@ -107,13 +107,6 @@ type CoderSelfReviewDeps = {
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderSelfReviewResult>;
-  qaRevalidateDiff: (input: {
-    task: SizedTask;
-    qa: QaResult;
-    diff: string;
-    spec: string;
-    context: string;
-  }) => Promise<{ approved: boolean; notes?: string }>;
 };
 
 function makeCoderSelfReviewDeps(
@@ -1939,9 +1932,8 @@ describe('team-task-workflow — worktree coder self-review', () => {
     ]);
   });
 
-  it('re-validates QA test intent against a revised self-reviewed diff before reviewer/tech-lead/designer consume it', async () => {
+  it('gives reviewer/tech-lead/designer the revised self-reviewed diff, not the pre-self-review one', async () => {
     const order: string[] = [];
-    const revalidatedDiffs: string[] = [];
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
@@ -1980,11 +1972,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
             },
           };
         },
-        qaRevalidateDiff: async ({ diff }) => {
-          order.push('qa-revalidate-diff');
-          revalidatedDiffs.push(diff);
-          return { approved: true };
-        },
         reviewer: async ({ diff }) => {
           order.push('reviewer');
           reviewerDiffs.push(diff);
@@ -2007,7 +1994,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
     expect(ev.outcome).toBe('ready-for-closeout');
     expect(qaWriteCalls).toBe(1);
     expect(techLeadTestReviewCalls).toBe(1);
-    expect(revalidatedDiffs).toEqual(['diff after self-review with behavior-preserving guard']);
     expect(reviewerDiffs).toEqual(['diff after self-review with behavior-preserving guard']);
     expect(techLeadDiffs).toEqual(['diff after self-review with behavior-preserving guard']);
     expect(designerDiffs).toEqual(['diff after self-review with behavior-preserving guard']);
@@ -2016,19 +2002,17 @@ describe('team-task-workflow — worktree coder self-review', () => {
       'tl-tests',
       'coder',
       'coder-self-review',
-      'qa-revalidate-diff',
       'reviewer',
       'tech-lead-diff',
       'designer',
     ]);
   });
 
-  it('re-validates QA test intent against the canonical diff even when self-review confirms it unchanged', async () => {
+  it('gives every judgment role the canonical diff when self-review confirms it unchanged', async () => {
     const order: string[] = [];
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
-    let revalidateCalled = false;
 
     const ev = await runTeamTaskWorkflow(
       frontEndTask,
@@ -2060,10 +2044,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
             },
           };
         },
-        qaRevalidateDiff: async () => {
-          revalidateCalled = true;
-          return { approved: true };
-        },
         reviewer: async ({ diff }) => {
           order.push('reviewer');
           reviewerDiffs.push(diff);
@@ -2094,7 +2074,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
       currentReviewTree: '2222222222222222222222222222222222222222',
       changedPaths: ['src/coder.ts'],
     }]);
-    expect(revalidateCalled).toBe(true);
     expect(reviewerDiffs).toEqual(['diff confirmed by self-review']);
     expect(techLeadDiffs).toEqual(['diff confirmed by self-review']);
     expect(designerDiffs).toEqual(['diff confirmed by self-review']);
@@ -2109,14 +2088,14 @@ describe('team-task-workflow — worktree coder self-review', () => {
     ]);
   });
 
-  it('retains canonical tree/hash evidence when QA revalidation rejects fail-closed', async () => {
+  it('retains canonical tree/hash evidence when a judgment role rejects fail-closed', async () => {
     const evidence = await runTeamTaskWorkflow(
       codeTask,
       { ...INPUT, cap: 1 },
       makeDeps({
-        qaRevalidateDiff: async () => ({
-          approved: false,
-          notes: 'QA verdict was malformed and cannot approve the artifact.',
+        techLeadReviewDiff: async () => ({
+          pass: false,
+          notes: 'tech-lead verdict was malformed and cannot approve the artifact.',
         }),
       }),
     );
@@ -2165,7 +2144,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
             changedPaths: ['src/coder.ts'],
           },
         }),
-        qaRevalidateDiff: async () => ({ approved: true }),
         reviewer: async ({ coderHandoffNotes }) => {
           reviewerNotes.push(coderHandoffNotes);
           return cleanVerdict;
@@ -2216,7 +2194,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
             changedPaths: ['src/coder.ts'],
           },
         }),
-        qaRevalidateDiff: async () => ({ approved: true }),
         reviewer: async ({ coderHandoffNotes }) => {
           reviewerNotes.push(coderHandoffNotes);
           return cleanVerdict;
@@ -2267,7 +2244,7 @@ describe('team-task-workflow — worktree coder self-review', () => {
     expect(designerCalled).toBe(false);
   });
 
-  it('gives only the post-self-review canonical state to QA and every downstream review', async () => {
+  it('gives only the post-self-review canonical state to every downstream review', async () => {
     const completeDiff = [
       'diff --git a/src/tracked.ts b/src/tracked.ts',
       '+tracked change',
@@ -2275,7 +2252,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
       'new file mode 100644',
       '+untracked change',
     ].join('\n');
-    const qaDiffs: string[] = [];
     const reviewerDiffs: string[] = [];
     const techLeadDiffs: string[] = [];
     const designerDiffs: string[] = [];
@@ -2293,14 +2269,13 @@ describe('team-task-workflow — worktree coder self-review', () => {
           changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
         },
       }),
-      qaRevalidateDiff: async ({ diff, reviewState, artifactPass }) => {
-        qaDiffs.push(diff);
-        roleStates.push({ role: 'qa', reviewState, artifactPass });
-        return { approved: true };
-      },
-      reviewer: async ({ diff, reviewState }) => {
+      reviewer: async ({ diff, reviewState, judgmentContext }) => {
         reviewerDiffs.push(diff);
-        roleStates.push({ role: 'reviewer', reviewState });
+        roleStates.push({
+          role: 'reviewer',
+          reviewState,
+          artifactPass: judgmentContext?.artifactPass,
+        });
         return cleanVerdict;
       },
       techLeadReviewDiff: async ({ diff, reviewState }) => {
@@ -2325,7 +2300,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
       fullTaskReviewHash: 'complete-hash',
     });
     for (const [role, diffs] of [
-      ['qa', qaDiffs],
       ['reviewer', reviewerDiffs],
       ['tech-lead', techLeadDiffs],
       ['designer', designerDiffs],
@@ -2336,7 +2310,7 @@ describe('team-task-workflow — worktree coder self-review', () => {
     }
     expect(roleStates).toEqual([
       {
-        role: 'qa',
+        role: 'reviewer',
         artifactPass: 'first-pass',
         reviewState: {
           hash: 'complete-hash',
@@ -2345,10 +2319,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
           changedPaths: ['src/tracked.ts', 'src/new-untracked.ts'],
         },
       },
-      expect.objectContaining({
-        role: 'reviewer',
-        reviewState: expect.objectContaining({ hash: 'complete-hash' }),
-      }),
       expect.objectContaining({
         role: 'tech-lead',
         reviewState: expect.objectContaining({ hash: 'complete-hash' }),
@@ -2369,7 +2339,7 @@ describe('team-task-workflow — worktree coder self-review', () => {
       'diff --git a/src/consumer.ts b/src/consumer.ts',
       '+import { durableHelper } from "./helper.js";',
     ].join('\n');
-    const qaArtifacts: Array<{ diff: string; pass?: string }> = [];
+    const judgedArtifacts: Array<{ diff: string; pass?: string }> = [];
     let round = 0;
     const deps = makeDeps({
       coderSelfReview: async () => {
@@ -2392,24 +2362,22 @@ describe('team-task-workflow — worktree coder self-review', () => {
           },
         };
       },
-      qaRevalidateDiff: async ({ diff, artifactPass }) => {
-        qaArtifacts.push({ diff, pass: artifactPass });
-        return { approved: true };
-      },
-      reviewer: async () =>
-        round === 1
+      reviewer: async ({ diff, judgmentContext }) => {
+        judgedArtifacts.push({ diff, pass: judgmentContext?.artifactPass });
+        return round === 1
           ? { outcome: 'fail', findings: [], notes: 'wire the helper into the consumer' }
-          : cleanVerdict,
+          : cleanVerdict;
+      },
       techLeadReviewDiff: async () => ({ pass: true }),
     });
 
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
     expect(evidence.outcome).toBe('ready-for-closeout');
-    expect(qaArtifacts).toHaveLength(2);
-    expect(qaArtifacts[1]).toMatchObject({ pass: 'coder-retry' });
-    expect(qaArtifacts[1]?.diff).toContain('durableHelper');
-    expect(qaArtifacts[1]?.diff).toContain('src/helper.ts');
+    expect(judgedArtifacts).toHaveLength(2);
+    expect(judgedArtifacts[1]).toMatchObject({ pass: 'coder-retry' });
+    expect(judgedArtifacts[1]?.diff).toContain('durableHelper');
+    expect(judgedArtifacts[1]?.diff).toContain('src/helper.ts');
     expect(evidence).toMatchObject({
       taskBaseTree: '1111111111111111111111111111111111111111',
       currentReviewTree: '3333333333333333333333333333333333333333',
@@ -4021,7 +3989,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
       });
     };
     const deps = makeDeps({
-      qaRevalidateDiff: async (input) => waitFor('qa', input),
       reviewer: async (input) => waitFor('reviewer', input),
       techLeadReviewDiff: async (input) => waitFor('tech-lead', input),
       designer: async (input) => waitFor('designer', input),
@@ -4029,7 +3996,7 @@ describe('team-task-workflow — parallel judgment batch', () => {
 
     const pending = runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
     await vi.waitFor(() => {
-      expect(starts).toEqual(['qa', 'reviewer', 'tech-lead', 'designer']);
+      expect(starts).toEqual(['reviewer', 'tech-lead', 'designer']);
     });
     expect(new Set(contexts).size).toBe(1);
     expect(Object.isFrozen(contexts[0])).toBe(true);
@@ -4050,11 +4017,9 @@ describe('team-task-workflow — parallel judgment batch', () => {
     releases.get('designer')?.({ pass: true });
     releases.get('tech-lead')?.({ pass: true });
     releases.get('reviewer')?.(cleanVerdict);
-    releases.get('qa')?.({ approved: true });
     await expect(pending).resolves.toMatchObject({
       outcome: 'ready-for-closeout',
       judgmentOutcomes: [
-        { role: 'qa', status: 'pass' },
         { role: 'reviewer', status: 'pass' },
         { role: 'tech-lead', status: 'pass' },
         { role: 'designer', status: 'pass' },
@@ -4076,9 +4041,9 @@ describe('team-task-workflow — parallel judgment batch', () => {
         round += 1;
         return { diff: `round ${round}`, handoffNotes: [] };
       },
-      qaRevalidateDiff: async (input) => {
+      techLeadReviewDiff: async (input) => {
         if (round === 2) secondRoundContext = input.judgmentContext;
-        return { approved: true };
+        return { pass: true };
       },
       reviewer: async (input) => round === 1
         ? { outcome: 'fail', findings: [finding] }
@@ -4091,7 +4056,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
               notes: 'verified in the second round',
             })),
           },
-      techLeadReviewDiff: async () => ({ pass: true }),
     });
 
     await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
@@ -4107,10 +4071,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
   it('omits designer entirely when sizing does not require it', async () => {
     const starts: string[] = [];
     const deps = makeDeps({
-      qaRevalidateDiff: async () => {
-        starts.push('qa');
-        return { approved: true };
-      },
       reviewer: async () => {
         starts.push('reviewer');
         return cleanVerdict;
@@ -4127,15 +4087,14 @@ describe('team-task-workflow — parallel judgment batch', () => {
 
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
-    expect(starts).toEqual(['qa', 'reviewer', 'tech-lead']);
+    expect(starts).toEqual(['reviewer', 'tech-lead']);
     expect(evidence.judgmentOutcomes?.map(({ role }) => role)).toEqual([
-      'qa',
       'reviewer',
       'tech-lead',
     ]);
   });
 
-  it('combines QA, reviewer, tech-lead, and designer rejections in stable coder-feedback order', async () => {
+  it('combines reviewer, tech-lead, and designer rejections in stable coder-feedback order', async () => {
     let round = 0;
     const coderFeedback: Array<GateRejectionFeedback[] | undefined> = [];
     const deps = makeDeps({
@@ -4144,8 +4103,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
         coderFeedback.push(rejectionFeedback);
         return { diff: `diff round ${round}`, handoffNotes: [] };
       },
-      qaRevalidateDiff: async () =>
-        round === 1 ? { approved: false, notes: 'qa correction' } : { approved: true },
       reviewer: async () =>
         round === 1
           ? { outcome: 'fail', findings: [], notes: 'reviewer correction' }
@@ -4160,14 +4117,19 @@ describe('team-task-workflow — parallel judgment batch', () => {
 
     expect(evidence.outcome).toBe('ready-for-closeout');
     expect(coderFeedback[1]?.map(({ rejectingRole }) => rejectingRole)).toEqual([
-      'qa',
       'reviewer',
       'tech-lead',
       'designer',
     ]);
   });
 
-  it('does not close at the hard budget while QA still rejects the implementation diff', async () => {
+  // Regression for run 815bdec6, which parked on task 2 of 45. QA's boolean was
+  // the ONLY thing standing between that run and closeout: the reviewer's finding
+  // was reversible and sub-threshold and the tech lead passed, so the hard-budget
+  // branch would have closed the task out — except all three of its gate
+  // conditions were `&&`-guarded on QA's approval. With QA's diff gate removed,
+  // the two structured gates decide, and the run keeps moving.
+  it('closes at the hard budget on a reversible sub-threshold finding the structured gates accept', async () => {
     const reviewerFinding: ObjectionFinding = {
       class: 'concurrency',
       severity: 'medium',
@@ -4176,10 +4138,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
       reversible: true,
     };
     const deps = makeDeps({
-      qaRevalidateDiff: async () => ({
-        approved: false,
-        notes: 'implementation no longer satisfies the authored tests',
-      }),
       reviewer: async () => ({
         outcome: 'fail',
         findings: [reviewerFinding],
@@ -4190,26 +4148,40 @@ describe('team-task-workflow — parallel judgment batch', () => {
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
     expect(evidence).toMatchObject({
-      outcome: 'blocked',
+      outcome: 'ready-for-closeout',
       loopExitReason: 'hard-budget',
       judgmentOutcomes: [
-        { role: 'qa', status: 'reject' },
         { role: 'reviewer', status: 'reject' },
         { role: 'tech-lead', status: 'pass' },
       ],
     });
   });
 
+  it('still holds at the hard budget for a non-reversible high finding', async () => {
+    const irreversible: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'high',
+      location: 'src/store.ts:42',
+      rationale: 'a dropped column cannot be recovered by reverting the commit',
+      reversible: false,
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [irreversible] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'hard-budget',
+      blockedReason: expect.stringContaining('non-reversible'),
+    });
+  });
+
   it('preserves the user-targeted role when induced sibling cancellations are internal', async () => {
     const requestedAt = '2026-07-29T12:00:00.000Z';
     const deps = makeDeps({
-      qaRevalidateDiff: async () => {
-        throw new RoleCancellationError('qa', {
-          operationId: 'reviewer-operation',
-          source: 'internal',
-          requestedAt,
-        });
-      },
       reviewer: async () => {
         throw new RoleCancellationError('reviewer', {
           operationId: 'reviewer-operation',
@@ -4243,13 +4215,12 @@ describe('team-task-workflow — parallel judgment batch', () => {
     try {
       const forceCancelJudgmentBatch = vi.fn();
       const finishJudgmentBatch = vi.fn();
-      const never = new Promise<{ approved: boolean }>(() => {});
+      const never = new Promise<{ pass: boolean }>(() => {});
       const deps = makeDeps({
-        qaRevalidateDiff: async () => never,
         reviewer: async () => {
           throw new Error('reviewer provider failed');
         },
-        techLeadReviewDiff: async () => ({ pass: true }),
+        techLeadReviewDiff: async () => never,
         forceCancelJudgmentBatch,
         finishJudgmentBatch,
       });
@@ -4264,9 +4235,8 @@ describe('team-task-workflow — parallel judgment batch', () => {
         outcome: 'failed',
         failureReason: 'reviewer provider failed',
         judgmentOutcomes: [
-          { role: 'qa', status: 'cancelled' },
           { role: 'reviewer', status: 'failed' },
-          { role: 'tech-lead', status: 'pass' },
+          { role: 'tech-lead', status: 'cancelled' },
         ],
       });
       expect(forceCancelJudgmentBatch).toHaveBeenCalledOnce();
@@ -4283,19 +4253,19 @@ describe('team-task-workflow — parallel judgment batch', () => {
       requestedAt: '2026-07-29T12:00:00.000Z',
     };
     let cancelBatchCalls = 0;
-    let cancelQa: (() => void) | undefined;
-    const qaPending = new Promise<{ approved: boolean }>((_resolve, reject) => {
-      cancelQa = () => reject(new RoleCancellationError('qa', internalCancellation));
+    let cancelTechLead: (() => void) | undefined;
+    const techLeadPending = new Promise<{ pass: boolean }>((_resolve, reject) => {
+      cancelTechLead = () =>
+        reject(new RoleCancellationError('tech-lead', internalCancellation));
     });
     const deps = makeDeps({
-      qaRevalidateDiff: async () => qaPending,
       reviewer: async () => {
         throw new Error('reviewer provider failed');
       },
-      techLeadReviewDiff: async () => ({ pass: true }),
+      techLeadReviewDiff: async () => techLeadPending,
       cancelJudgmentBatch: () => {
         cancelBatchCalls += 1;
-        cancelQa?.();
+        cancelTechLead?.();
       },
     });
 
@@ -4305,9 +4275,8 @@ describe('team-task-workflow — parallel judgment batch', () => {
       outcome: 'failed',
       failureReason: 'reviewer provider failed',
       judgmentOutcomes: [
-        { role: 'qa', status: 'cancelled' },
         { role: 'reviewer', status: 'failed' },
-        { role: 'tech-lead', status: 'pass' },
+        { role: 'tech-lead', status: 'cancelled' },
       ],
     });
     expect(cancelBatchCalls).toBeGreaterThan(0);
@@ -4315,24 +4284,24 @@ describe('team-task-workflow — parallel judgment batch', () => {
 
   it('selects the primary operational failure by role order, not completion order', async () => {
     const deps = makeDeps({
-      qaRevalidateDiff: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        throw new Error('qa operational failure');
-      },
+      // The reviewer is FIRST in canonical role order but LAST to settle, so a
+      // completion-ordered implementation would surface the tech lead's failure.
       reviewer: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
         throw new Error('reviewer operational failure');
       },
-      techLeadReviewDiff: async () => ({ pass: true }),
+      techLeadReviewDiff: async () => {
+        throw new Error('tech-lead operational failure');
+      },
     });
 
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
     expect(evidence.outcome).toBe('failed');
-    expect(evidence.failureReason).toBe('qa operational failure');
+    expect(evidence.failureReason).toBe('reviewer operational failure');
     expect(evidence.judgmentOutcomes).toEqual([
-      { role: 'qa', status: 'failed', summary: 'qa operational failure' },
       { role: 'reviewer', status: 'failed', summary: 'reviewer operational failure' },
-      { role: 'tech-lead', status: 'pass' },
+      { role: 'tech-lead', status: 'failed', summary: 'tech-lead operational failure' },
     ]);
   });
 
@@ -4363,10 +4332,6 @@ describe('team-task-workflow — parallel judgment batch', () => {
         frontEndTask,
         { ...INPUT, cap: 1, emit: (event) => events.push(event) },
         makeDeps({
-          qaRevalidateDiff: async () => {
-            await pause('qa');
-            return { approved: false, notes: 'qa finding' };
-          },
           reviewer: async () => {
             await pause('reviewer');
             return { outcome: 'fail', findings: [reviewerFinding] };
@@ -4384,8 +4349,8 @@ describe('team-task-workflow — parallel judgment batch', () => {
       return { evidence, events };
     };
 
-    const forward = await runWithDelays({ qa: 1, reviewer: 2, 'tech-lead': 3, designer: 4 });
-    const reverse = await runWithDelays({ qa: 4, reviewer: 3, 'tech-lead': 2, designer: 1 });
+    const forward = await runWithDelays({ reviewer: 2, 'tech-lead': 3, designer: 4 });
+    const reverse = await runWithDelays({ reviewer: 3, 'tech-lead': 2, designer: 1 });
 
     expect(reverse.evidence).toEqual(forward.evidence);
     expect(reverse.events).toEqual(forward.events);
@@ -4461,7 +4426,6 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'tech-lead', stage: 'test-review' },
       { role: 'coder', stage: 'implementation' },
       { role: 'coder', stage: 'self-review' },
-      { role: 'qa', stage: 'diff-revalidation' },
       { role: 'reviewer', stage: 'review' },
       { role: 'tech-lead', stage: 'diff-review' },
       { role: 'designer', stage: 'design' },
@@ -4549,7 +4513,6 @@ describe('team-task-workflow — execution observability', () => {
       gate: event.data?.['gate'],
     }))).toEqual([
       { role: 'tech-lead', verdict: 'pass', gate: 'test-intent' },
-      { role: 'qa', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
       { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'designer', verdict: 'pass', gate: 'design-review' },

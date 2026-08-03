@@ -3509,6 +3509,10 @@ function workRunJudgmentOutcomes(
     ) {
       return undefined;
     }
+    // `qa` is still ACCEPTED here but not returned: runs recorded before QA's
+    // post-implementation gate was removed carry a qa outcome, and rejecting the
+    // whole row would discard the reviewer/tech-lead evidence beside it.
+    if (role === 'qa') continue;
     const summary = typeof record['summary'] === 'string'
       ? scrubPathsInText(record['summary']).slice(0, 500)
       : undefined;

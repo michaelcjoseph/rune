@@ -327,7 +327,14 @@ export interface ReviewerInput {
   judgmentBatchId?: string;
 }
 
-export type JudgmentRole = 'qa' | 'reviewer' | 'tech-lead' | 'designer';
+/** The roles that judge the coder's diff. QA is deliberately absent: QA authors
+ *  the tests and stops when the coder starts. Its former `diff-revalidation`
+ *  stage read the same artifact the reviewer and tech lead read, returned a bare
+ *  boolean with no room for a file or a failing test name, and ran on the
+ *  coder's own provider family — the one gate that violated the distinct-provider
+ *  review rule. The test-integrity questions it nominally owned are now part of
+ *  the tech lead's diff review, which already reads the test files. */
+export type JudgmentRole = 'reviewer' | 'tech-lead' | 'designer';
 
 /** One immutable canonical snapshot shared by every eligible post-coder
  * judgment in a round. Role-specific legacy fields remain on each input for
@@ -404,17 +411,6 @@ export interface TeamTaskDeps {
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderSelfReviewResult>;
-  qaRevalidateDiff?: (input: {
-    task: SizedTask;
-    qa: QaResult;
-    diff: string;
-    spec: string;
-    context: string;
-    reviewState?: Omit<CanonicalReviewState, 'diff'>;
-    artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
-    judgmentContext?: JudgmentContext;
-    judgmentBatchId?: string;
-  }) => Promise<{ approved: boolean; notes?: string }>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
     task: SizedTask;
@@ -888,7 +884,6 @@ async function runGated(
   let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
-  let lastQaDiffReview: { approved: boolean; notes?: string } | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
   let round = 0;
@@ -1025,7 +1020,6 @@ async function runGated(
     // Publish starts in canonical order before invoking any role. Completion
     // order is deliberately invisible; verdict processing below uses this same
     // order after every child has settled.
-    emitRoleStage(input, 'qa', 'diff-revalidation');
     roles.add('reviewer');
     previousRole = emitRoleTransition(
       input,
@@ -1075,20 +1069,6 @@ async function runGated(
       role: JudgmentRole;
       promise: Promise<unknown>;
     }> = [
-      {
-        role: 'qa',
-        promise: startJudgment(() => revalidateQaDiff(deps, {
-          task,
-          qa,
-          diff: judgmentContext.diff,
-          spec: judgmentContext.spec,
-          context: judgmentContext.projectContext,
-          reviewState: judgmentContext.reviewState,
-          artifactPass: judgmentContext.artifactPass,
-          judgmentContext,
-          judgmentBatchId,
-        })),
-      },
       {
         role: 'reviewer',
         promise: startJudgment(() => deps.reviewer({
@@ -1223,14 +1203,9 @@ async function runGated(
       rejected.find(({ reason }) => !(reason instanceof RoleCancellationError)) ??
       rejected[0];
 
-    const qaSettled = settledByRole.get('qa');
     const reviewerSettled = settledByRole.get('reviewer');
     const techLeadSettled = settledByRole.get('tech-lead');
     const designerSettled = settledByRole.get('designer');
-    const qaDiffReview = qaSettled?.status === 'fulfilled'
-      ? qaSettled.value as Awaited<ReturnType<typeof revalidateQaDiff>>
-      : undefined;
-    lastQaDiffReview = qaDiffReview;
     const rawReviewerVerdict = reviewerSettled?.status === 'fulfilled'
       ? reviewerSettled.value as ReviewerVerdict
       : undefined;
@@ -1254,14 +1229,6 @@ async function runGated(
           summary: boundedJudgmentSummary((result.reason as Error).message),
         } satisfies JudgmentOutcomeEvidence;
       }
-      if (role === 'qa') {
-        const verdict = result.value as { approved: boolean; notes?: string };
-        return {
-          role,
-          status: verdict.approved ? 'pass' : 'reject',
-          ...(verdict.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
-        } satisfies JudgmentOutcomeEvidence;
-      }
       const verdict = role === 'reviewer'
         ? lastReviewer
         : role === 'tech-lead'
@@ -1283,29 +1250,6 @@ async function runGated(
 
     // Consume completed results before surfacing the stable primary operational
     // failure so bounded sibling outcomes and findings remain durable.
-    if (qaDiffReview !== undefined) {
-      emitRoleVerdict(input, {
-        role: 'qa',
-        gate: 'implementation-diff',
-        verdict: qaDiffReview.approved ? 'pass' : 'fail',
-        summary: qaDiffReview.notes?.trim() || (qaDiffReview.approved
-          ? 'QA approved the canonical implementation diff'
-          : 'QA test intent no longer matches the canonical implementation diff'),
-      });
-      if (!qaDiffReview.approved) {
-        const feedback = buildGateRejectionFeedback({
-          rejectingRole: 'qa',
-          counterpartRole: 'coder',
-          artifact: 'implementation-diff',
-          reason: qaDiffReview.notes?.trim() ||
-            'QA test intent no longer matches the canonical implementation diff',
-        });
-        await recordGateRejection(deps, feedback);
-        emitGateRejection(input, feedback);
-        lastRejectionFeedback = feedback;
-        roundFeedback.push(feedback);
-      }
-    }
     let reviewerOperationalFeedback: GateRejectionFeedback | undefined;
     if (lastReviewer !== undefined) {
       mergeFindingsIntoLedger(
@@ -1432,7 +1376,6 @@ async function runGated(
     }
 
     if (
-      qaDiffReview?.approved === true &&
       lastReviewer !== undefined &&
       isReviewerPass(lastReviewer) &&
       isGatePass(lastTechLeadDiff) &&
@@ -1478,7 +1421,6 @@ async function runGated(
       }
       if (
         flatMaxOpenSeverityRounds >= 3 &&
-        qaDiffReview?.approved === true &&
         firstNonReversibleHighSeverityFinding(
           findingsLedger,
           explicitNonReversibleFindingIds,
@@ -1519,7 +1461,6 @@ async function runGated(
   // structured verdicts/feedback, but do not route to PM wrap-up or a human
   // blocked state.
   if (
-    lastQaDiffReview?.approved === true &&
     hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner) &&
     maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
@@ -1668,16 +1609,6 @@ function fail(
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
   };
-}
-
-async function revalidateQaDiff(
-  deps: TeamTaskDeps,
-  input: Parameters<NonNullable<TeamTaskDeps['qaRevalidateDiff']>>[0],
-): Promise<{ approved: boolean; notes?: string }> {
-  if (deps.qaRevalidateDiff === undefined) {
-    return { approved: true };
-  }
-  return deps.qaRevalidateDiff(input);
 }
 
 export const JUDGMENT_CANCEL_GRACE_MS = 1_000;

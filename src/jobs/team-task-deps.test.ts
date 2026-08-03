@@ -1846,11 +1846,11 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     }
   });
 
-  it('labels the QA revalidation artifact with the artifact pass kind and full-task review-state identities', async () => {
-    const qaMessages: string[] = [];
+  it('labels the diff-review artifact with the artifact pass kind and full-task review-state identities', async () => {
+    const techLeadMessages: string[] = [];
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role, message }) => {
-        if (role === 'qa') qaMessages.push(message);
+        if (role === 'tech-lead') techLeadMessages.push(message);
         return GREEN_JUDGMENT_REPLY;
       },
     }));
@@ -1861,43 +1861,41 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       changedPaths: ['src/y.ts'],
     };
 
-    await deps.qaRevalidateDiff?.({
+    await deps.techLeadReviewDiff({
       task: sizedTask,
-      qa: { kind: 'no-code-test-rationale', rationale: 'covered by an existing behavioral test' },
       diff: 'diff --git a/src/y.ts',
       spec: 'spec',
       context: 'ctx',
       reviewState,
-      artifactPass: 'closeout-retry',
+      judgmentContext: { artifactPass: 'closeout-retry' } as never,
     });
 
-    expect(qaMessages).toHaveLength(1);
-    expect(qaMessages[0]).toContain('## Complete task implementation relative to durable task base');
-    expect(qaMessages[0]).toContain('pass: closeout-retry');
-    expect(qaMessages[0]).toContain(`task-base-tree: ${reviewState.baseTree}`);
-    expect(qaMessages[0]).toContain(`current-review-tree: ${reviewState.currentTree}`);
-    expect(qaMessages[0]).toContain(`full-task-review-hash: ${reviewState.hash}`);
+    expect(techLeadMessages).toHaveLength(1);
+    expect(techLeadMessages[0]).toContain('## Complete task implementation relative to durable task base');
+    expect(techLeadMessages[0]).toContain('pass: closeout-retry');
+    expect(techLeadMessages[0]).toContain(`task-base-tree: ${reviewState.baseTree}`);
+    expect(techLeadMessages[0]).toContain(`current-review-tree: ${reviewState.currentTree}`);
+    expect(techLeadMessages[0]).toContain(`full-task-review-hash: ${reviewState.hash}`);
   });
 
-  it('defaults the QA revalidation artifact pass label to "first-pass" when omitted', async () => {
-    const qaMessages: string[] = [];
+  it('omits the artifact pass label when no judgment context carries one', async () => {
+    const techLeadMessages: string[] = [];
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role, message }) => {
-        if (role === 'qa') qaMessages.push(message);
+        if (role === 'tech-lead') techLeadMessages.push(message);
         return GREEN_JUDGMENT_REPLY;
       },
     }));
 
-    await deps.qaRevalidateDiff?.({
+    await deps.techLeadReviewDiff({
       task: sizedTask,
-      qa: { kind: 'no-code-test-rationale', rationale: 'covered by an existing behavioral test' },
       diff: 'diff --git a/src/y.ts',
       spec: 'spec',
       context: 'ctx',
     });
 
-    expect(qaMessages[0]).toContain('pass: first-pass');
-    expect(qaMessages[0]).toContain('task-base-tree: unavailable');
+    expect(techLeadMessages[0]).not.toContain('pass: ');
+    expect(techLeadMessages[0]).toContain('task-base-tree: unavailable');
   });
 
   it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {
@@ -2590,10 +2588,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     });
     expect(persisted.at(-1)?.judgmentBatch).toBeUndefined();
     expect(spawnedJudgments).toEqual(expect.arrayContaining([
-      'qa',
       'reviewer',
       'tech-lead',
     ]));
+    expect(spawnedJudgments).not.toContain('qa');
   });
 });
 

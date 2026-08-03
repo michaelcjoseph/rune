@@ -466,6 +466,17 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   'sandbox cannot run, or a demonstrated flake. Unjustified deletion or',
   'weakening of a test is a fail outcome: name the test and require it restored.',
   '',
+  'Test integrity: you are the only gate on the tests after implementation, so',
+  'answer all three of these against the QA tests you reviewed before the coder',
+  'started. Any finding you raise from them MUST cite the offending test file.',
+  '1. Did this diff delete, weaken, or RETARGET a QA-authored test — including',
+  '   pointing an assertion at a different value, symbol, or code path so it',
+  '   passes against this implementation rather than the agreed contract?',
+  '2. Is there behavior in this diff that no test touches?',
+  '3. Does the implementation satisfy a test\'s SHAPE without its INTENT — for',
+  '   example special-casing the asserted input, or returning a literal that',
+  '   makes the assertion true without implementing the behavior?',
+  '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
   '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}], "notes": "<short reason>", "suggestedChange": "<concrete change for non-finding fail, omit when not needed>"}',
@@ -529,23 +540,6 @@ const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
   '',
   '```coder-self-review',
   '{"outcome":"confirmed","notes":"<brief concrete reason>"}',
-  '```',
-].join('\n');
-
-const QA_DIFF_REVALIDATION_INSTRUCTION = [
-  'You are QA. Re-evaluate the existing test intent against the coder\'s',
-  'self-reviewed complete task implementation before downstream code review starts.',
-  '',
-  'Approve only when the existing tests or no-code-test rationale still pin the',
-  'behavior represented by the full-task diff relative to the durable task base.',
-  'The artifact includes every task-owned change even if an earlier coder round',
-  'or role-created commit advanced HEAD. Therefore, absence from this artifact is',
-  'a genuine missing-implementation signal. If the self-review changed behavior',
-  'outside the agreed test intent, reject with a concrete note.',
-  '',
-  'Respond with EXACTLY ONE fenced ```qa-diff-revalidation block containing JSON:',
-  '```qa-diff-revalidation',
-  '{"approved": true, "notes": "<short reason>"}',
   '```',
 ].join('\n');
 
@@ -2104,58 +2098,6 @@ export function buildProductionTeamTaskDeps(
       }
     },
 
-    qaRevalidateDiff: async ({
-      task,
-      qa,
-      diff,
-      spec,
-      context,
-      reviewState,
-      artifactPass,
-      judgmentContext,
-      judgmentBatchId,
-    }) => {
-      const qaBlock = qa.kind === 'tests-written'
-        ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
-        : `## QA no-code-test rationale\n\n${qa.rationale}`;
-      const body = [
-        `## Task\n\n${task.text}`,
-        '',
-        `## Spec\n\n${spec}`,
-        '',
-        qaBlock,
-        '',
-        formatFullTaskReviewArtifact(diff, reviewState, artifactPass ?? 'first-pass'),
-        '',
-        `## Project context\n\n${scrubPathsInText(context)}`,
-        ...(judgmentContext?.coderHandoffNotes.length
-          ? ['', formatCoderHandoffNotes([...judgmentContext.coderHandoffNotes])]
-          : []),
-        ...(judgmentContext?.findingsLedger.length
-          ? ['', formatFindingsLedger(judgmentContext.findingsLedger)]
-          : []),
-      ].join('\n');
-      return judge(
-        'qa',
-        models.qa,
-        QA_DIFF_REVALIDATION_INSTRUCTION,
-        body,
-        task.id,
-        'qa-diff-revalidation',
-        judgmentBatchId,
-        (reply) => {
-          requireFlagVerdict(reply, 'qa-diff-revalidation', 'approved');
-          const { value, notes } = parseFlagVerdict(
-            reply,
-            'qa-diff-revalidation',
-            'approved',
-          );
-          return { approved: value, ...(notes !== undefined ? { notes } : {}) };
-        },
-        getJudgmentBatchCheckpoint(task, judgmentBatchId),
-      );
-    },
-
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
     // provider identity is baked into `models.reviewer` at construction time
     // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
@@ -2168,6 +2110,7 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
@@ -2182,7 +2125,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         '',
         `## Spec\n\n${spec}`,
         '',
@@ -2216,6 +2159,7 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2223,7 +2167,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
@@ -2254,6 +2198,7 @@ export function buildProductionTeamTaskDeps(
       coderHandoffNotes,
       findingsLedger,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2262,7 +2207,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(testsBlock !== undefined ? ['', `## Tests\n\n${testsBlock}`] : []),
         ...(context !== undefined

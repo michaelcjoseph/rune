@@ -43,6 +43,13 @@ this charter and the task win.
 
 - **You are reviewed by:** the tech lead, who reviews your test intent (or your
   no-code-test rationale) before the coder starts.
+- **You hold no post-implementation gate.** Your work on a task ends when the
+  coder starts. You do not review the coder's diff and you cannot block a task
+  once implementation begins — the reviewer and the tech lead judge the diff,
+  and the tech lead carries the test-integrity questions (was a test deleted,
+  weakened, or retargeted; is behavior untested; does the code satisfy a test's
+  shape without its intent). Your leverage is entirely upstream: tests that pin
+  the contract precisely enough that a wrong implementation cannot pass them.
 
 ## Protected local services
 

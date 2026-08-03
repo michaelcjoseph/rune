@@ -89,16 +89,15 @@ describe('production judgment cancellation conversion', () => {
   it('threads internal batch correlation through a Claude judgment operation', async () => {
     mockAskClaudeWithContext.mockResolvedValue({
       text: [
-        '```qa-diff-revalidation',
-        '{"approved":true,"notes":"matches"}',
+        '```tl-diff-review',
+        '{"outcome":"pass","findings":[],"notes":"matches"}',
         '```',
       ].join('\n'),
       error: null,
     });
 
-    await deps(models({ qa: claudeModel })).qaRevalidateDiff?.({
+    await deps(models()).techLeadReviewDiff({
       task,
-      qa: { kind: 'tests-written', testIds: ['src/demo.test.ts'] },
       diff: 'diff',
       spec: 'spec',
       context: 'context',

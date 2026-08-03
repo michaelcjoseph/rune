@@ -4758,7 +4758,6 @@ describe('orchestratedWorkApplier', () => {
         requestedAt: '2026-07-13T12:34:56.000Z',
       };
       const judgmentOutcomes = [
-        { role: 'qa' as const, status: 'cancelled' as const },
         { role: 'reviewer' as const, status: 'cancelled' as const },
         { role: 'tech-lead' as const, status: 'cancelled' as const },
       ];

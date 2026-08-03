@@ -285,7 +285,6 @@ describe('project-orchestrator — cancellation boundaries', () => {
           handoffNotes: [],
           cancellation,
           judgmentOutcomes: [
-            { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
             { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
             { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
           ],
@@ -299,7 +298,6 @@ describe('project-orchestrator — cancellation boundaries', () => {
         reason,
         cancellation,
         judgmentOutcomes: [
-          { role: 'qa', status: 'cancelled', summary: 'cancelled by sibling' },
           { role: 'reviewer', status: 'cancelled', summary: 'cancelled by user' },
           { role: 'tech-lead', status: 'cancelled', summary: 'cancelled by sibling' },
         ],
@@ -1512,7 +1510,6 @@ describe('project-orchestrator — durable run state', () => {
           return {
             ...readyEvidence(task),
             judgmentOutcomes: [
-              { role: 'qa', status: 'pass' },
               { role: 'reviewer', status: 'pass' },
               { role: 'tech-lead', status: 'pass' },
             ],
@@ -1576,7 +1573,6 @@ describe('project-orchestrator — durable run state', () => {
         currentReviewTree: '3333333333333333333333333333333333333333',
         fullTaskReviewHash: 'full-task-review-hash',
         judgmentOutcomes: [
-          { role: 'qa', status: 'pass' },
           { role: 'reviewer', status: 'pass' },
           { role: 'tech-lead', status: 'pass' },
         ],
