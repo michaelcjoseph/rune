@@ -1,76 +1,5 @@
 ## Active
 
-- [ ] **Terminal WIP preservation has no explicit retry path, leaving a valid preserved branch stranded or tempting Recover to rewrite immutable terminal truth.**
-  - **What is broken.** When terminal cleanup preserves dirty work as WIP, the run correctly retains its failure/cancellation/completion trigger and preservation disposition. The operator has no dedicated way to retry that terminal work. The existing Recover control is designed only for an active interrupted run and its resumable cursor. Reusing it for a terminal WIP would either violate its active-run preconditions or overwrite the original terminal record with a synthetic recovery.
-  - **Root cause.** Rune models active-run recovery and terminal disposition separately, but exposes no operation that starts a new attempt from a terminal run's verified preserved branch/worktree while linking that attempt to the original terminal evidence. Cockpit recovery eligibility is deliberately restricted to active orchestrated mutations, and `requestOrchestratedRunRecovery()` correctly rejects a run that is no longer active.
-  - **Decided eligibility and lifecycle.** Retry applies only to an orchestrated terminal whose immutable trigger is `failure`, or `cancellation` with a system-origin cancellation source (`system`, `quiet-run`, `max-runtime`, `shutdown`, or `recovery`), and whose resolved disposition is `parked` or `preserved` with a valid WIP SHA. User-cancelled terminals and successful terminals are never retryable. A retry is a new mutation/run identity, not a state transition on the terminal mutation. It leases the exact verified preserved branch/worktree rather than creating another worktree on the same branch; the new run reconstructs the task cursor from the existing project state and normal orchestration records, just as a valid resume does. The source terminal’s mutation event, summary, transcript, supervision row, trigger, disposition, and WIP SHA are immutable historical evidence.
-  - **Required fix.** Add a terminal-WIP retry preflight and request flow separate from `preflightOrchestratedRecovery()` and `requestOrchestratedRunRecovery()`. Preflight must prove product ownership; source terminal/summarized trigger and disposition agreement; a valid WIP SHA that is the expected branch tip; a clean worktree exactly at that SHA; exact Git worktree registration; branch/base-branch consistency; readable in-repo project artifacts; reconstructible task state; and no active/retrying run already leasing that source worktree or branch. Atomically create the fresh mutation descriptor, including a typed source-terminal reference and trigger/disposition snapshot, before dispatch; duplicate detection must consult durable active/supervision evidence as well as in-memory leases so it survives a restart. Dispatch through a distinct retry-redispatch path that explicitly reuses the verified existing branch/worktree, rather than the source run’s recovery-handoff state. Never reactivate, rewrite, delete, or relabel the source terminal. Release the retry lease on every terminal path; failure to establish or release durable lifecycle evidence must fail closed and preserve the worktree.
-  - **Data and surface contract.** Persist the source terminal run ID and a bounded snapshot of its trigger/disposition on the new attempt so restart reconciliation and Cockpit diagnostics can prove lineage without consulting mutable UI state. Expose a separately named `Retry WIP` control only on eligible terminal-run detail/Operations views. Keep `Recover` limited to active, preflight-recoverable runs. An ineligible terminal must show a path-scrubbed reason, not a control that fails after click; a duplicate click resolves to the already-created retry or a conflict, never a second concurrent attempt.
-  - **Acceptance criteria.**
-    - An eligible terminal WIP can start a fresh retry attempt that uses the preserved work without mutating the source terminal truth.
-    - Recover remains available only for active interrupted runs; terminal-WIP retry is a separately named control and endpoint/command.
-    - Only failure and system-cancelled WIP terminals qualify; user-cancelled and success terminals never expose `Retry WIP`.
-    - The new attempt records its source terminal/run identity and trigger/disposition snapshot, while Cockpit inspection shows the original trigger, WIP disposition, and retry relationship together.
-    - Missing, unregistered, dirty-uncertain, branch-drifted, non-tip or mismatched WIP SHA, ownership-invalid, or already-leased preserved state fails closed before any model dispatch and explains why retry is unavailable without exposing host paths.
-    - A retry reconstructs task state from durable project records and does not duplicate closed tasks or silently absorb uncommitted work.
-    - Tests cover eligible retry, immutable source terminal evidence, active Recover isolation, every eligibility class, lease/idempotency behavior, restart/reconciliation, cancellation, and cleanup failure preserving the source worktree.
-
-- [ ] **Planning tasks lose dependencies, role gates, and manual-runbook relationships between planning and runtime dispatch.**
-  - **What is broken.** The planning model can describe roles and `manual-live-gate` tasks, but it has no structured dependency or runbook relationship. The rendered `tasks.md` is treated as the runtime source, and `src/jobs/team-task-deps.ts` reconstructs selected tasks with conservative fixed defaults. A runbook task can therefore be separated from its manual gate by task order alone, and role metadata can disappear before workflow dispatch.
-  - **User impact.** A plan can promise a security review, a manual runbook prerequisite, or a task dependency that Rune never enforces. The operator receives no durable handoff for manual work, and an automated workflow can attempt work whose prerequisite was not completed.
-  - **Root cause.**
-    - `SizedTask` has no first-class `dependsOn`, `manualGate`, `runbookTaskId`, or evidence-contract fields.
-    - `planning-artifact.ts` renders human-readable task prose, but critical runtime behavior is not preserved as structured metadata.
-    - `team-task-deps.ts` rebuilds selected tasks from Markdown and currently recognizes only the manual-live marker, assigning fixed roles for ordinary tasks.
-    - Task ordering is used as a proxy for dependency ordering.
-  - **Required fix.**
-    1. Extend the planned-task schema with stable IDs, `dependsOn`, and an optional manual-gate contract containing `runbookTaskId`, operator, environment, required evidence, and rollback-document path.
-    2. Require every `manual-live-gate` task to reference an earlier automatable runbook task. Reject invalid plans before scaffolding.
-    3. Preserve this metadata through planner output, artifact serialization, scaffolded project files, task selection, durable run state, and workflow dispatch.
-    4. Prevent dispatch of a manual gate until its runbook task has landed. Surface the unmet prerequisite and required evidence in Cockpit.
-    5. Render the relationship clearly in `tasks.md` and `test-plan.md`, but do not rely on Markdown markers or list order as the authoritative contract.
-  - **Acceptance criteria.**
-    - A plan containing a manual-live gate without a runbook task fails validation before it reaches a work run.
-    - A manual gate cannot dispatch until its referenced runbook task is complete.
-    - The Cockpit shows the gate’s unmet runbook prerequisite, operator, expected evidence, and rollback document.
-    - Planner → artifact → tasks → selected task → workflow preserves task IDs, dependencies, and manual-gate fields without parsing prose.
-    - Tests cover valid pairs, missing runbooks, duplicate IDs, cyclic dependencies, incomplete prerequisites, restart recovery, and human-readable Markdown rendering.
-- [ ] **Security-review requirements in plans are informational instead of an enforceable product-team workflow gate.**
-  - **What is broken.** Rune has no `security` product-team role in `RoleName`, no `agents/security/` charter, no model-policy binding, and no workflow stage that runs a security review. A task can name “security” in its Roles line or carry a `_(security review)_` marker without the runtime invoking a security reviewer.
-  - **User impact.** Security-sensitive work can be planned and presented as security-reviewed while receiving only the ordinary reviewer pass.
-  - **Root cause.**
-    - `src/roles/loader.ts` has a closed six-role union without `security`.
-    - `SizedTask` has `designerNeeded` but no structured `securityNeeded`.
-    - `planning-artifact.ts` and `team-task-deps.ts` do not preserve a security flag through task selection.
-    - `team-task-deps.ts` does not resolve or invoke a security role.
-  - **Required fix.**
-    1. Add `security` as a product-team role with `agents/security/SOUL.md`, append-only memory, baseline examples, loader coverage, and a model-policy entry.
-    2. Add a first-class `securityNeeded` field to `SizedTask`; preserve it across planner prompts, parsing, artifacts, task files, selected tasks, and workflow state.
-    3. Add a security-review stage for flagged tasks after implementation and before task closeout. It must emit structured objection-class findings and block on unresolved security findings.
-    4. Keep unflagged tasks free of the extra review stage.
-    5. Treat any human-readable `_(security review)_` marker as a rendering detail, not the only runtime signal.
-  - **Acceptance criteria.**
-    - A flagged task invokes the security role and waits for its structured verdict before closeout.
-    - An unflagged task does not invoke the security role.
-    - A security objection blocks closeout with a durable, actionable finding.
-    - Security flags survive planner output, Markdown rendering, selected-task reconstruction, restart recovery, and workflow dispatch.
-    - Tests cover loader/model-policy resolution, flag round-trips, workflow ordering, blocking findings, non-invocation for unflagged tasks, and malformed/unknown flag handling.
-- [ ] **The planning process does not systematically interrogate existing mechanisms, runner coverage, manual ownership, or platform feasibility before producing a dispatchable plan.**
-  - **What is broken.** PM, tech-lead, and critique prompts require a coherent plan, but they do not force an inventory of existing policies/configuration/deferrals, all runtime integration paths, manual operator decisions, or platform-capability risks. The result can be a polished plan that duplicates existing mechanisms, misses a legacy runner, creates impossible environment-gated work, or leaves a manual task with no operator handoff.
-  - **User impact.** Critical planning gaps are found only after detailed external review or during execution, when work has already been dispatched.
-  - **Required fix.**
-    1. Extend PM assessment prompts with conditional interview questions for manual work: release coverage, operator, target environment, evidence, rollback, and whether the gate blocks release.
-    2. Extend tech-lead prompts with an explicit implementation audit: existing mechanism and deferral inventory, producer/consumer map, legacy plus orchestrated runner coverage, task metadata survivability, external-repository boundaries, and host-prerequisite/capability-probe requirements.
-    3. Extend the neutral planning critique to reject plans that lack those answers or lack a concrete task/ADR/probe for each unresolved risk.
-    4. Add deterministic plan-validation checks where possible, including: manual gates require runbooks; named roles must exist; required manual-only checks are rejected; selector inputs have an owning creation surface; and affected runner paths are named.
-    5. Update planning-role tests with representative failures and repairs.
-  - **Acceptance criteria.**
-    - A plan involving manual work produces either resolved operator/evidence/rollback decisions or an explicit interview-needed result.
-    - A plan adding policy/configuration must name the existing mechanism it extends or include a justified replacement/deferral.
-    - A plan affecting work execution names every supported runner path or explicitly scopes out unsupported paths.
-    - A platform-enforcement claim without a proved capability produces a fail-closed probe task rather than an unsupported guarantee.
-    - A selector depending on task tags includes an owning task and user surface for creating/persisting those tags.
-    - Prompt and parser tests prove the PM, tech lead, and critique reject or repair representative incomplete plans.
 - [ ] **Successful operator notifications leave no log record, so "did Rune actually tell me?" is unanswerable after the fact.**
   - **What is broken.** `TelegramSender` logs only failures (`src/transport/telegram-sender.ts:361`, `:377`, `:388`). A successful send writes nothing. When run `815bdec6` committed its first closeout (`466794c`) and the operator saw no Telegram alert, confirming or refuting delivery required hand-tracing five modules (emit site, publication ledger, drain loop, bus, sender) and still ended inconclusive.
   - **Root cause.** Outbound delivery is fire-and-forget (`void this.send(...).catch(...)`). `notification-publications.jsonl` records the intent to publish, not the delivery. Nothing records that the Telegram API accepted the message.
@@ -157,6 +86,77 @@
     - Unanimity dispatches no adjudicator.
     - Adjudicator failure or a missing policy entry blocks, and the reason is recorded.
     - Tests cover splits, unanimity, policy resolution, fresh-context isolation, repeat escalation, and fail-closed fallback.
+
+- [ ] **Terminal WIP preservation has no explicit retry path, leaving a valid preserved branch stranded or tempting Recover to rewrite immutable terminal truth.**
+  - **What is broken.** When terminal cleanup preserves dirty work as WIP, the run correctly retains its failure/cancellation/completion trigger and preservation disposition. The operator has no dedicated way to retry that terminal work. The existing Recover control is designed only for an active interrupted run and its resumable cursor. Reusing it for a terminal WIP would either violate its active-run preconditions or overwrite the original terminal record with a synthetic recovery.
+  - **Root cause.** Rune models active-run recovery and terminal disposition separately, but exposes no operation that starts a new attempt from a terminal run's verified preserved branch/worktree while linking that attempt to the original terminal evidence. Cockpit recovery eligibility is deliberately restricted to active orchestrated mutations, and `requestOrchestratedRunRecovery()` correctly rejects a run that is no longer active.
+  - **Decided eligibility and lifecycle.** Retry applies only to an orchestrated terminal whose immutable trigger is `failure`, or `cancellation` with a system-origin cancellation source (`system`, `quiet-run`, `max-runtime`, `shutdown`, or `recovery`), and whose resolved disposition is `parked` or `preserved` with a valid WIP SHA. User-cancelled terminals and successful terminals are never retryable. A retry is a new mutation/run identity, not a state transition on the terminal mutation. It leases the exact verified preserved branch/worktree rather than creating another worktree on the same branch; the new run reconstructs the task cursor from the existing project state and normal orchestration records, just as a valid resume does. The source terminal’s mutation event, summary, transcript, supervision row, trigger, disposition, and WIP SHA are immutable historical evidence.
+  - **Required fix.** Add a terminal-WIP retry preflight and request flow separate from `preflightOrchestratedRecovery()` and `requestOrchestratedRunRecovery()`. Preflight must prove product ownership; source terminal/summarized trigger and disposition agreement; a valid WIP SHA that is the expected branch tip; a clean worktree exactly at that SHA; exact Git worktree registration; branch/base-branch consistency; readable in-repo project artifacts; reconstructible task state; and no active/retrying run already leasing that source worktree or branch. Atomically create the fresh mutation descriptor, including a typed source-terminal reference and trigger/disposition snapshot, before dispatch; duplicate detection must consult durable active/supervision evidence as well as in-memory leases so it survives a restart. Dispatch through a distinct retry-redispatch path that explicitly reuses the verified existing branch/worktree, rather than the source run’s recovery-handoff state. Never reactivate, rewrite, delete, or relabel the source terminal. Release the retry lease on every terminal path; failure to establish or release durable lifecycle evidence must fail closed and preserve the worktree.
+  - **Data and surface contract.** Persist the source terminal run ID and a bounded snapshot of its trigger/disposition on the new attempt so restart reconciliation and Cockpit diagnostics can prove lineage without consulting mutable UI state. Expose a separately named `Retry WIP` control only on eligible terminal-run detail/Operations views. Keep `Recover` limited to active, preflight-recoverable runs. An ineligible terminal must show a path-scrubbed reason, not a control that fails after click; a duplicate click resolves to the already-created retry or a conflict, never a second concurrent attempt.
+  - **Acceptance criteria.**
+    - An eligible terminal WIP can start a fresh retry attempt that uses the preserved work without mutating the source terminal truth.
+    - Recover remains available only for active interrupted runs; terminal-WIP retry is a separately named control and endpoint/command.
+    - Only failure and system-cancelled WIP terminals qualify; user-cancelled and success terminals never expose `Retry WIP`.
+    - The new attempt records its source terminal/run identity and trigger/disposition snapshot, while Cockpit inspection shows the original trigger, WIP disposition, and retry relationship together.
+    - Missing, unregistered, dirty-uncertain, branch-drifted, non-tip or mismatched WIP SHA, ownership-invalid, or already-leased preserved state fails closed before any model dispatch and explains why retry is unavailable without exposing host paths.
+    - A retry reconstructs task state from durable project records and does not duplicate closed tasks or silently absorb uncommitted work.
+    - Tests cover eligible retry, immutable source terminal evidence, active Recover isolation, every eligibility class, lease/idempotency behavior, restart/reconciliation, cancellation, and cleanup failure preserving the source worktree.
+- [ ] **Planning tasks lose dependencies, role gates, and manual-runbook relationships between planning and runtime dispatch.**
+  - **What is broken.** The planning model can describe roles and `manual-live-gate` tasks, but it has no structured dependency or runbook relationship. The rendered `tasks.md` is treated as the runtime source, and `src/jobs/team-task-deps.ts` reconstructs selected tasks with conservative fixed defaults. A runbook task can therefore be separated from its manual gate by task order alone, and role metadata can disappear before workflow dispatch.
+  - **User impact.** A plan can promise a security review, a manual runbook prerequisite, or a task dependency that Rune never enforces. The operator receives no durable handoff for manual work, and an automated workflow can attempt work whose prerequisite was not completed.
+  - **Root cause.**
+    - `SizedTask` has no first-class `dependsOn`, `manualGate`, `runbookTaskId`, or evidence-contract fields.
+    - `planning-artifact.ts` renders human-readable task prose, but critical runtime behavior is not preserved as structured metadata.
+    - `team-task-deps.ts` rebuilds selected tasks from Markdown and currently recognizes only the manual-live marker, assigning fixed roles for ordinary tasks.
+    - Task ordering is used as a proxy for dependency ordering.
+  - **Required fix.**
+    1. Extend the planned-task schema with stable IDs, `dependsOn`, and an optional manual-gate contract containing `runbookTaskId`, operator, environment, required evidence, and rollback-document path.
+    2. Require every `manual-live-gate` task to reference an earlier automatable runbook task. Reject invalid plans before scaffolding.
+    3. Preserve this metadata through planner output, artifact serialization, scaffolded project files, task selection, durable run state, and workflow dispatch.
+    4. Prevent dispatch of a manual gate until its runbook task has landed. Surface the unmet prerequisite and required evidence in Cockpit.
+    5. Render the relationship clearly in `tasks.md` and `test-plan.md`, but do not rely on Markdown markers or list order as the authoritative contract.
+  - **Acceptance criteria.**
+    - A plan containing a manual-live gate without a runbook task fails validation before it reaches a work run.
+    - A manual gate cannot dispatch until its referenced runbook task is complete.
+    - The Cockpit shows the gate’s unmet runbook prerequisite, operator, expected evidence, and rollback document.
+    - Planner → artifact → tasks → selected task → workflow preserves task IDs, dependencies, and manual-gate fields without parsing prose.
+    - Tests cover valid pairs, missing runbooks, duplicate IDs, cyclic dependencies, incomplete prerequisites, restart recovery, and human-readable Markdown rendering.
+- [ ] **Security-review requirements in plans are informational instead of an enforceable product-team workflow gate.**
+  - **What is broken.** Rune has no `security` product-team role in `RoleName`, no `agents/security/` charter, no model-policy binding, and no workflow stage that runs a security review. A task can name “security” in its Roles line or carry a `_(security review)_` marker without the runtime invoking a security reviewer.
+  - **User impact.** Security-sensitive work can be planned and presented as security-reviewed while receiving only the ordinary reviewer pass.
+  - **Root cause.**
+    - `src/roles/loader.ts` has a closed six-role union without `security`.
+    - `SizedTask` has `designerNeeded` but no structured `securityNeeded`.
+    - `planning-artifact.ts` and `team-task-deps.ts` do not preserve a security flag through task selection.
+    - `team-task-deps.ts` does not resolve or invoke a security role.
+  - **Required fix.**
+    1. Add `security` as a product-team role with `agents/security/SOUL.md`, append-only memory, baseline examples, loader coverage, and a model-policy entry.
+    2. Add a first-class `securityNeeded` field to `SizedTask`; preserve it across planner prompts, parsing, artifacts, task files, selected tasks, and workflow state.
+    3. Add a security-review stage for flagged tasks after implementation and before task closeout. It must emit structured objection-class findings and block on unresolved security findings.
+    4. Keep unflagged tasks free of the extra review stage.
+    5. Treat any human-readable `_(security review)_` marker as a rendering detail, not the only runtime signal.
+  - **Acceptance criteria.**
+    - A flagged task invokes the security role and waits for its structured verdict before closeout.
+    - An unflagged task does not invoke the security role.
+    - A security objection blocks closeout with a durable, actionable finding.
+    - Security flags survive planner output, Markdown rendering, selected-task reconstruction, restart recovery, and workflow dispatch.
+    - Tests cover loader/model-policy resolution, flag round-trips, workflow ordering, blocking findings, non-invocation for unflagged tasks, and malformed/unknown flag handling.
+- [ ] **The planning process does not systematically interrogate existing mechanisms, runner coverage, manual ownership, or platform feasibility before producing a dispatchable plan.**
+  - **What is broken.** PM, tech-lead, and critique prompts require a coherent plan, but they do not force an inventory of existing policies/configuration/deferrals, all runtime integration paths, manual operator decisions, or platform-capability risks. The result can be a polished plan that duplicates existing mechanisms, misses a legacy runner, creates impossible environment-gated work, or leaves a manual task with no operator handoff.
+  - **User impact.** Critical planning gaps are found only after detailed external review or during execution, when work has already been dispatched.
+  - **Required fix.**
+    1. Extend PM assessment prompts with conditional interview questions for manual work: release coverage, operator, target environment, evidence, rollback, and whether the gate blocks release.
+    2. Extend tech-lead prompts with an explicit implementation audit: existing mechanism and deferral inventory, producer/consumer map, legacy plus orchestrated runner coverage, task metadata survivability, external-repository boundaries, and host-prerequisite/capability-probe requirements.
+    3. Extend the neutral planning critique to reject plans that lack those answers or lack a concrete task/ADR/probe for each unresolved risk.
+    4. Add deterministic plan-validation checks where possible, including: manual gates require runbooks; named roles must exist; required manual-only checks are rejected; selector inputs have an owning creation surface; and affected runner paths are named.
+    5. Update planning-role tests with representative failures and repairs.
+  - **Acceptance criteria.**
+    - A plan involving manual work produces either resolved operator/evidence/rollback decisions or an explicit interview-needed result.
+    - A plan adding policy/configuration must name the existing mechanism it extends or include a justified replacement/deferral.
+    - A plan affecting work execution names every supported runner path or explicitly scopes out unsupported paths.
+    - A platform-enforcement claim without a proved capability produces a fail-closed probe task rather than an unsupported guarantee.
+    - A selector depending on task tags includes an owning task and user surface for creating/persisting those tags.
+    - Prompt and parser tests prove the PM, tech lead, and critique reject or repair representative incomplete plans.
 
 ## Loop-filed
 
