@@ -1,19 +1,5 @@
 ## Active
 
-- [ ] **Successful operator notifications leave no log record, so "did Rune actually tell me?" is unanswerable after the fact.**
-  - **What is broken.** `TelegramSender` logs only failures (`src/transport/telegram-sender.ts:361`, `:377`, `:388`). A successful send writes nothing. When run `815bdec6` committed its first closeout (`466794c`) and the operator saw no Telegram alert, confirming or refuting delivery required hand-tracing five modules (emit site, publication ledger, drain loop, bus, sender) and still ended inconclusive.
-  - **Root cause.** Outbound delivery is fire-and-forget (`void this.send(...).catch(...)`). `notification-publications.jsonl` records the intent to publish, not the delivery. Nothing records that the Telegram API accepted the message.
-  - **User impact.** A notification that was never sent is indistinguishable from one that was sent and missed. Every "why didn't I get X" question becomes a full code audit.
-  - **Required fix.**
-    1. Emit one structured `log.info` on each successful `TelegramSender` send, carrying component `telegram`, the mutation/op id when present, the notification kind, the resolved chat id, and the message length.
-    2. Never log the message body. It can carry vault content and the deliberately un-scrubbed `operatorWorktreePath`.
-    3. Cover every send path: work-run start, work-run progress, orchestrated progress, and all terminal formats.
-    4. Keep the existing error logging unchanged.
-  - **Acceptance criteria.**
-    - A successful closeout-commit alert produces exactly one info record naming the notification kind and target chat.
-    - A failed send still produces the existing error record and no success record.
-    - No message body and no un-scrubbed absolute path reaches the log line.
-    - Tests assert the success record for an orchestrated progress alert and for a terminal, and assert body exclusion.
 - [ ] **Both PM adjudication seams are dead in production, so every surviving gate block parks the run and waits for a human.**
   - **What is broken.** Rune has two PM escape hatches for exactly the round-cap-disagreement case, and neither ever runs. (1) `acceptWithRationale` (`src/intent/team-task-workflow.ts:453`) is optional, and no production caller supplies it. (2) `pmWrapup` is declared as a **required** dep (`team-task-workflow.ts:445`) and fully implemented in production with its own prompt, model binding, and verdict parser (`src/jobs/team-task-deps.ts:2290`, `PM_WRAPUP_INSTRUCTION` at `:552`), but the workflow never calls it. Its only caller in the repository is `src/jobs/team-task-deps.test.ts:2449`. Any task reaching the round cap with an unresolved fail therefore returns `block(...)` with `loopExitReason: 'hard-budget'` (`team-task-workflow.ts:1573`), the orchestrator raises `execution-failure`, and the run parks. Run `815bdec6` parked on task 2 of 45 with tech-lead and reviewer both passing and only QA failing, and its transcript contains no `pm` role stage at all.
   - **Root cause.** `acceptWithRationale` was built as a test/operator seam and never wired into `buildOrchestrationDeps`. `pmWrapup` was built end to end but its invocation site was never added to the workflow's round-cap path, so a required dependency is satisfied by every caller and exercised by none.
@@ -182,6 +168,18 @@
     - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
 
 ## Done
+
+- [x] **Successful operator notifications leave no log record, so "did Rune actually tell me?" is unanswerable after the fact.**
+  - **Closed 2026-08-03.** Every successful Telegram delivery now emits one `telegram send delivered` record to `logs/rune.log`, so the question is answered by `grep 'telegram send delivered' logs/rune.log` instead of a five-module code audit.
+    - *One log site, one record per notification* — the two transport branches of `send()` (the `opts.approval` inline keyboard and `sendLongMessage`) were folded into a private `deliver()` chokepoint that owns the single `log.info` (`src/transport/telegram-sender.ts:331`, `:367`). Because `sendLongMessage` rejects if any chunk fails, a partially-delivered long message produces no success record.
+    - *Coverage is wider than the four listed paths, by decision.* Required-fix item 1 said "each successful `TelegramSender` send" while item 3 listed four paths; the operator chose the literal reading. Instrumenting the chokepoint covers `work-run-start`, `work-run-progress`, `orchestrated-progress`, and `terminal` (all terminal formats, including the parked Release/answer keyboard), **plus** every bus-published job alert (nightly summary, MCP watchdog, stall/parked nudge, Whoop) and chat reply under kind `message`. Op-tracker sends stay out — they call `bot.sendMessage` directly, are deleted when the op ends, and one record per op-start would be noise.
+    - *Body never logged* — the record is exactly `{kind, mutationId?, mutationKind?, chatId, chars}`. `kind`/`mutationKind` are enum-ish and `chars` is a number, so no user-authored text and no un-scrubbed `operatorWorktreePath` can reach it. The test pins the exact key set, so adding the body fails the suite.
+    - *Chat id is logged raw*, per the required fix. `src/transport/sender.ts:40` previously read "never log event.userId or event.text — contains PII"; it was narrowed to the text, since `rune.log` is 0600 and the id is already `TELEGRAM_USER_ID` in `.env.local`.
+    - *Component stayed `telegram-sender`, not `telegram`* — renaming the logger would have changed the component on the existing error records, which required-fix item 4 forbids. Each of the four error messages is byte-identical to before.
+  - **Verified.** All four acceptance criteria are covered by `describe('delivery logging')` in `src/transport/telegram-sender.test.ts` (closeout-commit alert → exactly one record naming kind + chat; rejected send → the existing error record and zero success records; body/path exclusion by exact key set; orchestrated-progress and terminal records). Full suite green (350 files, 6109 tests). Additionally proved against the **real** logger, not a mock: a scratchpad driver with `RUNE_LOGS_DIR` redirected fired a closeout-commit alert, a parked terminal seeded with a real worktree path, and a plain send — three records landed on disk with the right kinds, and a grep for the worktree path, task text, and message bodies returned zero hits.
+  - **What was broken.** `TelegramSender` logged only failures (`src/transport/telegram-sender.ts:361`, `:377`, `:388`). A successful send wrote nothing. When run `815bdec6` committed its first closeout (`466794c`) and the operator saw no Telegram alert, confirming or refuting delivery required hand-tracing five modules (emit site, publication ledger, drain loop, bus, sender) and still ended inconclusive.
+  - **Root cause.** Outbound delivery is fire-and-forget (`void this.send(...).catch(...)`). `notification-publications.jsonl` records the intent to publish, not the delivery. Nothing recorded that the Telegram API accepted the message.
+  - **User impact.** A notification that was never sent was indistinguishable from one that was sent and missed. Every "why didn't I get X" question became a full code audit.
 
 - [x] **Codex probe runtimes share one repo-level directory, so their cleanup assertions fail whenever two probes overlap and orphaned runtimes are never reaped.**
   - **Closed 2026-08-02.** The entry was already ticked but carried no closeout note, so each acceptance criterion was re-verified against the code before filing it here:
