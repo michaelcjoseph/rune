@@ -20,7 +20,29 @@ vi.mock('../integrations/telegram/client.js', () => ({
   stopTyping: mockStopTyping,
 }));
 
+// Mock the logger so the delivery-record assertions read the exact payload
+// TelegramSender emits (and so the suite doesn't spray records on stdout).
+const mockLogInfo = vi.fn();
+const mockLogWarn = vi.fn();
+const mockLogError = vi.fn();
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => ({
+    info: mockLogInfo,
+    warn: mockLogWarn,
+    error: mockLogError,
+    debug: vi.fn(),
+  }),
+}));
+
 const { TelegramSender } = await import('./telegram-sender.js');
+
+/** The `data` payloads of every `telegram send delivered` info record. */
+function deliveryRecords(): Record<string, unknown>[] {
+  return mockLogInfo.mock.calls
+    .filter((call) => call[0] === 'telegram send delivered')
+    .map((call) => call[1] as Record<string, unknown>);
+}
 
 const gateReceiptIdentity = {
   version: 1,
@@ -777,6 +799,160 @@ describe('TelegramSender', () => {
         'work-run-answer:abcd1234-5678-90ab-cdef-1234567890ab:1',
       ]);
       expect(buttons.map((button) => button.callback_data).join(' ')).not.toContain('work-run-release');
+    });
+  });
+
+  // Every successful send lands one structured record in logs/rune.log so
+  // "did Rune actually tell me?" is answerable without tracing emit site →
+  // publication ledger → drain loop → bus → sender.
+  describe('delivery logging', () => {
+    const MUTATION_ID = 'abcd1234-5678-90ab-cdef-1234567890ab';
+
+    function mutationEvent(over: Record<string, unknown>) {
+      return {
+        kind: 'mutation-event' as const,
+        mutationId: MUTATION_ID,
+        mutationKind: 'work-run',
+        subKind: 'completed',
+        ts: new Date().toISOString(),
+        data: {},
+        userId: 123,
+        ...over,
+      } as any;
+    }
+
+    async function flush() {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
+    it('records an orchestrated closeout-commit alert exactly once, naming the kind and target chat', async () => {
+      sender.onMutationEvent(mutationEvent({
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: {
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          taskText: 'Render the streak card',
+          shortSha: 'abc1234',
+          commitSubject: 'rune(rune): closeout — Render the streak card',
+          tasksDone: 3,
+          tasksTotal: 12,
+          tasksRemaining: 9,
+        },
+      }));
+      await flush();
+
+      const sent = mockSendLongMessage.mock.calls[0]![2] as string;
+      const records = deliveryRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({
+        kind: 'orchestrated-progress',
+        mutationId: MUTATION_ID,
+        mutationKind: 'orchestrated-work',
+        chatId: 123,
+        chars: sent.length,
+      });
+      expect(mockLogError).not.toHaveBeenCalled();
+    });
+
+    it('records a work-run terminal', async () => {
+      sender.onMutationEvent(mutationEvent({
+        data: { projectSlug: 'demo', outcome: 'branch-complete', workProduct: { commitCount: 2 } },
+      }));
+      await flush();
+
+      const records = deliveryRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        kind: 'terminal',
+        mutationId: MUTATION_ID,
+        mutationKind: 'work-run',
+        chatId: 123,
+      });
+    });
+
+    it('records the work-run start and progress kinds distinctly', async () => {
+      sender.onMutationEvent(mutationEvent({
+        subKind: 'start',
+        data: { projectSlug: 'demo', runId: 'run-7', operatorWorktreePath: '/Users/jarvis/worktrees/rune/demo' },
+      }));
+      sender.onMutationEvent(mutationEvent({
+        subKind: 'progress',
+        data: { line: '📊 add the widget · 1/2 tasks' },
+      }));
+      await flush();
+
+      expect(deliveryRecords().map((record) => record['kind'])).toEqual([
+        'work-run-start',
+        'work-run-progress',
+      ]);
+    });
+
+    it('never carries the message body — no vault content, no un-scrubbed worktree path', async () => {
+      const worktree = '/Users/jarvis/workspace/.worktrees/rune/24-execution-profiles';
+      sender.onMutationEvent(mutationEvent({
+        data: {
+          projectSlug: 'demo',
+          parked: true,
+          operatorWorktreePath: worktree,
+          pendingCheck: 'Answer required: Which implementation?',
+          parkedQuestion: {
+            source: 'ask-user-question',
+            question: 'Which implementation?',
+            askedAt: new Date().toISOString(),
+            options: [{ id: '0', label: 'Small patch', value: 'small' }],
+          },
+        },
+      }));
+      await flush();
+
+      const records = deliveryRecords();
+      expect(records).toHaveLength(1);
+      const serialized = JSON.stringify(records[0]);
+      expect(serialized).not.toContain(worktree);
+      expect(serialized).not.toContain('worktrees');
+      expect(serialized).not.toContain('Which implementation?');
+      expect(serialized).not.toContain('demo');
+      expect(Object.keys(records[0]!).sort()).toEqual(
+        ['chars', 'chatId', 'kind', 'mutationId', 'mutationKind'],
+      );
+    });
+
+    it('records an approval-keyboard send (parked Release button) exactly once', async () => {
+      sender.onMutationEvent(mutationEvent({
+        data: { projectSlug: 'demo', parked: true, operatorWorktreePath: '/tmp/worktrees/rune/demo' },
+      }));
+      await flush();
+
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      expect(deliveryRecords()).toHaveLength(1);
+      expect(deliveryRecords()[0]).toMatchObject({ kind: 'terminal' });
+    });
+
+    it('a failed send records the error and no success record', async () => {
+      mockSendLongMessage.mockRejectedValueOnce(new Error('Telegram 429'));
+      sender.onMutationEvent(mutationEvent({
+        data: { projectSlug: 'demo', outcome: 'branch-complete', workProduct: { commitCount: 1 } },
+      }));
+      await flush();
+
+      expect(deliveryRecords()).toHaveLength(0);
+      expect(mockLogError).toHaveBeenCalledWith(
+        'TelegramSender.onMutationEvent send failed',
+        { error: 'Telegram 429' },
+      );
+    });
+
+    it('records a plain send (chat reply / bus-published job alert) with no mutation id', async () => {
+      await sender.send(456, 'Nightly processing complete.');
+
+      const records = deliveryRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({
+        kind: 'message',
+        chatId: 456,
+        chars: 'Nightly processing complete.'.length,
+      });
     });
   });
 
