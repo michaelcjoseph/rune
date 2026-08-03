@@ -82,6 +82,7 @@ Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journ
 
 `LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored).
 
+- **`logs/rune.log`** — the process log (`src/utils/logger.ts`), one JSON object per line, mode 0600, renamed to `.1` past 50 MB; honors `RUNE_LOGS_DIR` and is disabled under vitest. Every successful Telegram delivery lands one `telegram send delivered` record here carrying the notification kind (`message` for a chat reply or bus-published job alert; `work-run-start` / `work-run-progress` / `orchestrated-progress` / `terminal` for a mutation-event notification), the mutation id + kind when present, the target chat id, and the message length — **never the body**, which can hold vault content and the un-scrubbed `operatorWorktreePath`. `grep 'telegram send delivered' logs/rune.log` is how "did Rune actually tell me?" is answered; a send Telegram rejected produces the error record and no success record.
 - **`logs/last-workout.json`** — most recent generated workout, written by `/workout`, consumed by `/done-workout`; exposed via `config.LAST_WORKOUT_FILE`.
 - **`logs/agent-runs.jsonl`** — rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()`.
 - **`logs/mutations.jsonl`** — rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`.
