@@ -80,6 +80,7 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
       'diff': ' src/foo.ts | 3 +++\n 1 file changed, 3 insertions(+)\n',
       'status': '', // clean tree
     }),
+    canonicalRepoId: async (repoPath) => repoPath,
     getProduct: () => PRODUCT,
     worktreeFor: (product, project) => `/tmp/worktrees/${product}/${project}`,
     worktreeExists: () => true,

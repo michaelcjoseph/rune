@@ -67,7 +67,11 @@ import {
 } from './work-run-finalizer.js';
 import type { GateValidationReceipt } from './work-run-gate.js';
 import { runGate } from './work-run-gate-runtime.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
 import {
   writeSummary,
   appendIndexRow,
@@ -369,6 +373,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
   const product = getProductConfig(run.product, config.PRODUCTS_CONFIG_FILE);
   const repoPath = product.repoPath;
   const baseBranch = product.baseBranch;
+  const repoId = await canonicalRepoId(repoPath);
   const validationCommands = product.validationCommands ?? [];
   const branch = workBranchName(run.project);
 
@@ -492,7 +497,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     recordGateValidationReceipt: (receipt) =>
       writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt),
     gate: () =>
-      withBaseBranchLock(run.product, baseBranch, async () => {
+      withBaseBranchLock(repoId, baseBranch, async () => {
         const verdict = await runGate({
           product: run.product,
           repoPath,
@@ -505,7 +510,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
             ? { validationCwd: product.validationCwd }
             : {}),
           tasksRemaining: productFacts.transitions.tasksRemaining,
-          concurrentRun: hasConcurrentRunForProduct(run.product, run.id),
+          concurrentRun: await hasConcurrentRun(run.id, repoId, baseBranch),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
           validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
         });
@@ -570,16 +575,24 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
   return result.terminalEvent;
 }
 
-/** Another work-run owns the same product right now (its branch could be based
- *  on a base branch this release's merge is about to move) — fails the gate
+/** Another work run owns the same repository/base branch this release's merge
+ *  is about to move — fails the gate
  *  toward HOLD. Excludes the release mutation itself (kind `work-run-release`). */
-function hasConcurrentRunForProduct(product: string, releaseRunId: string): boolean {
-  return [...activeRuns.values()].some(
-    (h) =>
-      h.descriptor.kind === 'work-run' &&
-      h.descriptor.id !== releaseRunId &&
-      ((h.descriptor.payload as { product?: string }).product ?? 'rune') === product &&
-      h.descriptor.status === 'running',
+function hasConcurrentRun(
+  releaseRunId: string,
+  repoId: string,
+  baseBranch: string,
+): Promise<boolean> {
+  return hasConcurrentBaseBranchRun(
+    activeRuns.values(),
+    releaseRunId,
+    repoId,
+    baseBranch,
+    new Set(['orchestrated-work', 'work-run']),
+    (candidateProduct) => {
+      const candidate = getProductConfig(candidateProduct, config.PRODUCTS_CONFIG_FILE);
+      return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+    },
   );
 }
 

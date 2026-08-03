@@ -40,4 +40,22 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-Start with: Add canonical repository identity resolution using the realpath of git-common-dir, with a deterministic realpath(repoPath) fallback, and rekey every base-branch lock acquisition and concurrent-run fact from product/baseBranch to repoId/baseBranch (acquisition sites: `work-runner.ts`, `orchestrated-work-runner.ts`, `work-run-release.ts`, `recovery-finalize-runner.ts`). Tests prove products sharing a repository contend (rune/rune-mcp; writing/brand) and distinct repositories do not. Note: security-role-integration must land before scope-boundary-gate (the first security-tagged task).
+- tech-lead repaired test intent: src/jobs/work-run-merge-lock.test.ts
+- epositories/worktrees now contend; distinct repositories and branches remain independent.
+- Updated affected test seams for the new identity contract.
+- No tests removed.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 350 files passed, 6,124 tests passed, 8 todo
+- `git diff --check` — clean
+- epos, missing paths, and stale products.
+- Confirmed unreadable product config retains the worktree repo-path fallback and HOLDs on `missing-validation-command` before merge/push.
+- No tests removed.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 350 files passed; 6,127 tests passed, 8 todo
+- coder self-review (revised): Awaited git-common-dir realpath resolution so failures are logged and use the deterministic repo-path fallback. Audited all four repo-keyed lock sites; no tests removed. npm run build and npm test passed (350 files, 6,127 tests, 8 todo).

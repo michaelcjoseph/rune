@@ -208,7 +208,11 @@ import {
   treeForCommit,
   verifyTaskBaseTree,
 } from './canonical-git.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
 import { resolveLiveWorkProject } from './work-project.js';
@@ -2678,13 +2682,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             durationMs: Date.now() - startedAtMs,
             exitFact: 'clean-exit',
           });
-          const hasConcurrentRun = (): boolean =>
-            [...activeRuns.values()].some(
-              (h) =>
-                (h.descriptor.kind === 'orchestrated-work' || h.descriptor.kind === 'work-run') &&
-                h.descriptor.id !== descriptor.id &&
-                ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'rune') === product &&
-                h.descriptor.status === 'running',
+          const repoId = await canonicalRepoId(repoPath);
+          const hasConcurrentRun = (): Promise<boolean> =>
+            hasConcurrentBaseBranchRun(
+              activeRuns.values(),
+              descriptor.id,
+              repoId,
+              baseBranch,
+              new Set(['orchestrated-work', 'work-run']),
+              (candidateProduct) => {
+                const candidate = getProductConfig(candidateProduct, config.PRODUCTS_CONFIG_FILE);
+                return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+              },
             );
 
           const effects: FinalizerEffects = {
@@ -2826,7 +2835,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             recordGateValidationReceipt: (receipt) =>
               writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
             gate: () =>
-              withBaseBranchLock(product, baseBranch, async () => {
+              withBaseBranchLock(repoId, baseBranch, async () => {
                 const verdict = await deps.runGate({
                   product,
                   repoPath,
@@ -2838,7 +2847,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   validationAdapters,
                   ...(validationCwd !== undefined ? { validationCwd } : {}),
                   tasksRemaining: gateTasksRemaining,
-                  concurrentRun: hasConcurrentRun(),
+                  concurrentRun: await hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
                   validationArtifactsDir: join(deps.workRunsDir, descriptor.id, 'validation-diagnostics'),
                   cancelled: ctx.cancel,

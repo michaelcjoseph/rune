@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import type { MutationEvent } from '../transport/mutations.js';
+import { activeRuns, type MutationEvent } from '../transport/mutations.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { worktreePathFor, VALID_SLUG } from '../intent/sandbox.js';
 import { workBranchName } from './work-runner.js';
@@ -50,7 +50,11 @@ import {
 } from './work-run-finalizer.js';
 import type { GateResult, GateValidationReceipt } from './work-run-gate.js';
 import { runGate, type GateRuntimeOpts } from './work-run-gate-runtime.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import {
@@ -100,6 +104,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  *  the unit test injects stubs so `finalizeStaleRun` runs with no real repo. */
 export interface RecoveryFinalizeIO {
   runGit: GitRunner;
+  /** Canonical repository identity resolver; production uses git-common-dir. */
+  canonicalRepoId: typeof canonicalRepoId;
   /** Resolve a product's config (repo path + base branch). Throws on unknown. */
   getProduct: (product: string) => ProductConfig;
   /** Absolute worktree path for a run. */
@@ -130,6 +136,7 @@ export interface RecoveryFinalizeIO {
 function defaultIO(): RecoveryFinalizeIO {
   return {
     runGit: defaultRunGit,
+    canonicalRepoId,
     getProduct: (product) => getProductConfig(product, config.PRODUCTS_CONFIG_FILE),
     worktreeFor: (product, project) => worktreePathFor(product, project, config.WORKTREE_ROOT),
     worktreeExists: (p) => existsSync(p),
@@ -191,6 +198,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   }
 
   const product = io.getProduct(run.product); // throws on unknown product
+  const repoId = await io.canonicalRepoId(product.repoPath);
   let gateValidationReceipt: GateValidationReceipt | undefined =
     io.readGateValidationReceipt?.(config.WORK_RUNS_DIR, run.id);
   const worktree = io.worktreeFor(run.product, run.project); // throws on bad slug
@@ -343,6 +351,18 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   };
 
   const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${run.product}-${run.id}`);
+  const hasConcurrentRun = (): Promise<boolean> =>
+    hasConcurrentBaseBranchRun(
+      activeRuns.values(),
+      run.id,
+      repoId,
+      product.baseBranch,
+      new Set(['orchestrated-work', 'work-run']),
+      (candidateProduct) => {
+        const candidate = io.getProduct(candidateProduct);
+        return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+      },
+    );
 
   // In `gated-merge` resume mode, supply the merge effects. On resume from
   // `merged-not-pushed`/`pushed-not-deleted` the finalizer SKIPS the gate +
@@ -354,7 +374,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   const effects: FinalizerEffects = resumeGatedMerge
     ? {
         ...baseEffects,
-        baseBranchCriticalSection: (fn) => withBaseBranchLock(run.product, product.baseBranch, fn),
+        baseBranchCriticalSection: (fn) => withBaseBranchLock(repoId, product.baseBranch, fn),
         recordGateValidationReceipt: (receipt) => {
           writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt);
           gateValidationReceipt = receipt;
@@ -376,7 +396,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
               ? { validationCwd: product.validationCwd }
               : {}),
             tasksRemaining: gateTasksRemaining,
-            concurrentRun: false,
+            concurrentRun: await hasConcurrentRun(),
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
             validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
           });

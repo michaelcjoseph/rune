@@ -79,6 +79,12 @@ vi.mock('../config.js', () => ({
 const mockActiveRuns = new Map<string, any>();
 vi.mock('../transport/mutations.js', () => ({ activeRuns: mockActiveRuns }));
 
+vi.mock('./work-run-merge-lock.js', () => ({
+  canonicalRepoId: async (repoPath: string) => repoPath,
+  hasConcurrentBaseBranchRun: async () => false,
+  withBaseBranchLock: async (_repoId: string, _baseBranch: string, fn: () => unknown) => fn(),
+}));
+
 vi.mock('../ai/claude.js', () => ({
   CLAUDE_BIN: '/usr/local/bin/claude',
   registerActiveProcess: vi.fn(),

@@ -176,6 +176,8 @@ const mockWithBaseBranchLock = vi.fn(
 );
 vi.mock('./work-run-merge-lock.js', () => ({
   withBaseBranchLock: mockWithBaseBranchLock,
+  canonicalRepoId: async (repoPath: string) => repoPath,
+  hasConcurrentBaseBranchRun: async () => false,
   baseBranchLockKey: (p: string, b: string) => `${p}:${b}`,
 }));
 
@@ -2098,7 +2100,7 @@ describe('workRunApplier', () => {
       expect(mockDestroyWorktree).toHaveBeenCalledTimes(1);
     });
 
-    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(product, baseBranch) (RED until wiring)', async () => {
+    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(repoId, baseBranch)', async () => {
       setupBranchComplete();
       mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
 
@@ -2110,9 +2112,9 @@ describe('workRunApplier', () => {
       // Hold mode leaves the gated-merge effects undefined → RED.
       expect(typeof effects.gate).toBe('function');
       // The real gated-merge finalizer the wiring routes through invokes the gate
-      // effect, which acquires the per-product/per-base-branch lock and runs the
+      // effect, which acquires the per-repository/per-base-branch lock and runs the
       // gate inside it.
-      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('rune', 'main', expect.any(Function));
+      expect(mockWithBaseBranchLock).toHaveBeenCalledWith(TEST_PROJECT_ROOT, 'main', expect.any(Function));
       expect(mockRunGate).toHaveBeenCalledWith(expect.objectContaining({
         validationCommands: ['npm run build', 'npm test'],
         validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
