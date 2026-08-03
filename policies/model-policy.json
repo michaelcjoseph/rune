@@ -51,7 +51,7 @@
     }
   ],
   "globalFallback": "opus",
-  "_roleDefaults_comment": "Per-role default model alias. `evaluator` (project 08, A6.2) resolves to an openai model so the autonomous Evaluator adjudicates cross-provider by default; the resolver also takes `distinctFromProvider` at call time, so an openai generator pushes the evaluator back to the anthropic globalFallback. The six product-team roles (project 14, Phase 8): PM and tech lead → fable (anthropic, Fable 5), reviewer + designer → opus (anthropic, Opus 4.8), artifact roles → qa: gpt-5.6-terra, coder: gpt-5.6-sol (openai, via the Codex CLI); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed). `planning-critique` is the `/plan` cross-model critique pass — it must be a non-anthropic, coding-capable model because it runs through `runCodex` against a Claude-authored plan. `writer` drives the writing pipeline's plan/draft/critique/revise one-shots (SOUL + voice prose) — must stay claude-format (the calls go through the Claude CLI; writing-run-deps falls back to ONESHOT_MODEL otherwise).",
+  "_roleDefaults_comment": "Per-role default model alias. `evaluator` (project 08, A6.2) resolves to an openai model so the autonomous Evaluator adjudicates cross-provider by default; the resolver also takes `distinctFromProvider` at call time, so an openai generator pushes the evaluator back to the anthropic globalFallback. The six product-team roles (project 14, Phase 8): PM and tech lead → fable (anthropic, Fable 5), reviewer + designer → opus (anthropic, Opus 4.8), artifact roles → qa: gpt-5.6-terra, coder: gpt-5.6-sol (openai, via the Codex CLI); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed). `planning-critique` is the `/plan` cross-model critique pass — it must be a non-anthropic, coding-capable model because it runs through `runCodex` against a Claude-authored plan. `writer` drives the writing pipeline's plan/draft/critique/revise one-shots (SOUL + voice prose) — must stay claude-format (the calls go through the Claude CLI; writing-run-deps falls back to ONESHOT_MODEL otherwise). `adjudicator` breaks a reviewer-vs-tech-lead tie on a diff; its model is a DECLARED choice, not a runtime distinctness computation — reviewer (opus) and tech lead (fable) are both anthropic, so the adjudicator sits on the openai side by design. It shares a model with the coder, which is an accepted self-preference risk whose mitigations are fresh context (it never sees the coder's reasoning) and escalate-on-repeat; revisit if adjudications trend toward always upholding the pass.",
   "roleDefaults": {
     "evaluator": "gpt-5.6-terra",
     "pm": "fable",
@@ -60,6 +60,7 @@
     "designer": "opus",
     "qa": "gpt-5.6-terra",
     "coder": "gpt-5.6-sol",
+    "adjudicator": "gpt-5.6-sol",
     "planning-critique": "gpt-5.6-sol",
     "writer": "opus"
   },

@@ -57,6 +57,7 @@ import {
   ValidationProfileUnavailableError,
   runTeamTaskWorkflow,
   SELF_REVIEW_NOTE_MAX_CHARS,
+  type AdjudicationRuling,
   type ObjectionClass,
   type ObjectionFinding,
   type ObjectionSeverity,
@@ -167,6 +168,10 @@ export interface TeamRoleModels {
   coder: RoleModelBinding;
   reviewer: RoleModelBinding | null;
   designer: RoleModelBinding;
+  /** Split-verdict tie-breaker. Null when the `adjudicator` policy entry is
+   *  missing or unresolvable — the workflow then falls back to today's blocking
+   *  behavior rather than to a silent pass. */
+  adjudicator: RoleModelBinding | null;
 }
 
 const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
@@ -206,7 +211,19 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     });
   }
 
-  return { pm, techLead, qa, coder, reviewer, designer };
+  // The adjudicator's model is a DECLARED policy choice, not a runtime
+  // distinctness computation — no `distinctFromProvider` here. A missing or
+  // unresolvable entry yields null, and the workflow blocks as it does today.
+  let adjudicator: RoleModelBinding | null = null;
+  try {
+    adjudicator = resolveRole('adjudicator', ['deep-reasoning']);
+  } catch (err) {
+    log.warn('resolveTeamRoleModels: no adjudicator — split verdicts fail closed', {
+      error: (err as Error).message,
+    });
+  }
+
+  return { pm, techLead, qa, coder, reviewer, designer, adjudicator };
 }
 
 /** Join a resolution alias back to its registry entry and narrow provider /
@@ -555,6 +572,36 @@ const PM_WRAPUP_INSTRUCTION = [
   '```',
 ].join('\n');
 
+const ADJUDICATOR_INSTRUCTION = [
+  'Two roles read the same diff and reached opposite verdicts. Rule on which',
+  'verdict the artifacts support. Your ruling is DECISIVE for this round — no',
+  'human sees it before it takes effect.',
+  '',
+  'You have NO tools and NO repository access. You see ONLY the artifacts below:',
+  'the diff, the spec, the tests, and each role\'s verdict text. You never see the',
+  'coder\'s reasoning or any earlier round. Never claim to have read, grepped, or',
+  'verified anything on disk — you cannot, and doing so invalidates your ruling.',
+  '',
+  'Rule on the DISPUTED CLAIM, not on the diff as a whole. Do not look for new',
+  'problems. Do not split the difference — there is no third outcome.',
+  '',
+  'Weigh evidence over assertion: a verdict anchored to a file and line with a',
+  'described failure mechanism outweighs a confident sentence. If the failing',
+  'verdict cannot point at anything in the diff, it does not stand.',
+  '',
+  'If the artifacts genuinely do not settle it, set upholds to "unresolved". That',
+  'is an honest answer and Rune fails closed to a human on it. A confident guess',
+  'is worse.',
+  '',
+  'When you uphold the FAIL you MUST include `finding` — the objection restated',
+  'with a concrete location, so the coder knows exactly what to change.',
+  '',
+  'Respond with EXACTLY ONE fenced ```adjudication block containing JSON:',
+  '```adjudication',
+  '{"upholds": "pass", "rationale": "<why the artifacts settle it this way>", "finding": {"class": "concurrency", "severity": "high", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change>", "reversible": true}}',
+  '```',
+].join('\n');
+
 const EVIDENCE_REPROMPT_INSTRUCTION = [
   'You raised one or more BLOCKING findings that do not carry the evidence their',
   'objection class requires. Supply that evidence now — this is your only',
@@ -806,6 +853,31 @@ function parseFlagVerdict(
     ...(notes !== undefined ? { notes } : {}),
     ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     ...(typeof v['repairable'] === 'boolean' ? { repairable: v['repairable'] } : {}),
+  };
+}
+
+/** Fail-closed adjudication parser. Anything it cannot read as a complete,
+ *  decisive ruling comes back as an upheld FAIL with an empty rationale, which
+ *  the workflow rejects as inadmissible and treats as a block — never a pass. */
+function parseAdjudication(text: string): AdjudicationRuling {
+  const parsed = extractFencedJson(text, 'adjudication');
+  if (!parsed || typeof parsed !== 'object') {
+    return { upholds: 'fail', rationale: '' };
+  }
+  const v = parsed as Record<string, unknown>;
+  const upholds = v['upholds'];
+  if (upholds !== 'pass' && upholds !== 'fail') {
+    // Includes the deliberate "unresolved" escape hatch.
+    return { upholds: 'fail', rationale: '' };
+  }
+  const rationale = typeof v['rationale'] === 'string'
+    ? v['rationale'].slice(0, NOTE_MAX_CHARS)
+    : '';
+  const { findings } = parseFindings({ findings: v['finding'] === undefined ? [] : [v['finding']] });
+  return {
+    upholds,
+    rationale,
+    ...(findings[0] !== undefined ? { finding: findings[0] } : {}),
   };
 }
 
@@ -2262,6 +2334,76 @@ export function buildProductionTeamTaskDeps(
       return parsePmWrapup(reply);
     },
 
+    // Tie-break a split that would otherwise end the task. Fresh context by
+    // construction — `judge` opens a throwaway session per invocation, and the
+    // body carries only artifacts plus the two verdict texts, never the coder's
+    // reasoning or any earlier round. A null binding means the `adjudicator`
+    // policy entry is missing or unresolvable, and the workflow blocks.
+    ...(models.adjudicator === null ? {} : {
+      adjudicateSplit: async ({
+        task,
+        dissentingRole,
+        concurringRole,
+        dissentingVerdict,
+        concurringVerdict,
+        escalate,
+        judgmentContext,
+      }) => {
+        const binding = escalate
+          ? escalatedAdjudicatorBinding(models.adjudicator!)
+          : models.adjudicator!;
+        const body = [
+          `## Task\n\n${task.text}`,
+          '',
+          ...(judgmentContext !== undefined
+            ? [
+                formatFullTaskReviewArtifact(
+                  judgmentContext.diff,
+                  judgmentContext.reviewState,
+                  judgmentContext.artifactPass,
+                ),
+                '',
+                `## Spec\n\n${judgmentContext.spec}`,
+                '',
+                `## Tests\n\n${
+                  Array.isArray(judgmentContext.tests)
+                    ? judgmentContext.tests.join('\n')
+                    : judgmentContext.tests
+                }`,
+                '',
+              ]
+            : []),
+          `## The disputed verdict — ${dissentingRole} FAILED this diff`,
+          '',
+          formatVerdictForAdjudication(dissentingVerdict),
+          '',
+          `## The opposing verdict — ${concurringRole} PASSED this diff`,
+          '',
+          formatVerdictForAdjudication(concurringVerdict),
+          ...(escalate
+            ? [
+                '',
+                '## Note',
+                '',
+                'This exact objection was already adjudicated in an earlier round of',
+                'this task and the coder round did not settle it. Read the diff for',
+                'what actually changed since, and rule decisively.',
+              ]
+            : []),
+        ].join('\n');
+        return judge(
+          'adjudicator',
+          binding,
+          ADJUDICATOR_INSTRUCTION,
+          body,
+          task.id,
+          'adjudicator-split',
+          undefined,
+          parseAdjudication,
+        );
+      },
+    }),
+
     // The role gets ONE bounded chance to ground its own blocking findings, on
     // its own model, seeing only the findings it already raised. Never a second
     // review: the parser drops anything whose class it did not already object
@@ -2438,6 +2580,50 @@ function manualLiveGateEvidence(task: SelectedTask): TaskEvidence {
     task,
     'manual/live release gate requires operator evidence; automated QA/coder/reviewer workflow is intentionally skipped',
   );
+}
+
+/** Render one verdict for the adjudicator: outcome, notes, and each finding with
+ *  its anchor, so the ruling can weigh evidence against assertion. */
+function formatVerdictForAdjudication(verdict: GateVerdict): string {
+  const lines = [`outcome: ${verdict.outcome}`];
+  if (verdict.notes?.trim()) lines.push(`notes: ${verdict.notes.trim()}`);
+  if (verdict.suggestedChange?.trim()) {
+    lines.push(`suggested change: ${verdict.suggestedChange.trim()}`);
+  }
+  if (verdict.findings.length === 0) {
+    lines.push('findings: (none — this verdict cites no specific defect)');
+  } else {
+    lines.push('findings:');
+    for (const finding of verdict.findings) {
+      lines.push(
+        `- ${finding.class} / ${finding.severity} at ${finding.location || '(no location given)'}`,
+        `  ${finding.rationale}`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/** Escalate the adjudicator when the same objection is adjudicated twice in one
+ *  task: the first ruling did not settle it, so buy more reasoning. Prefers the
+ *  policy's strongest deep-reasoning model on the SAME provider, so the declared
+ *  cross-provider posture is preserved; falls back to the original binding when
+ *  there is nothing stronger to move to. */
+function escalatedAdjudicatorBinding(binding: RoleModelBinding): RoleModelBinding {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  const candidate = policy?.models.find(
+    (model) =>
+      model.provider === binding.provider &&
+      model.alias !== binding.alias &&
+      model.status === 'preferred' &&
+      model.capabilities.includes('deep-reasoning'),
+  );
+  if (candidate === undefined) return binding;
+  return {
+    alias: candidate.alias,
+    provider: candidate.provider as DispatchProvider,
+    format: candidate.format as RoleModelBinding['format'],
+  };
 }
 
 function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding | null {

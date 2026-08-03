@@ -342,13 +342,13 @@ describe('roles/loader — char budget', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Charter inventory — all six roles have a charter + memory file on disk
+// Charter inventory — every role has a charter + memory file on disk
 // ---------------------------------------------------------------------------
 
 describe('roles/loader — charter inventory (real disk)', () => {
-  it('enumerates exactly the six product-team roles', () => {
+  it('enumerates exactly the product-team roles', () => {
     expect([...ROLE_NAMES].sort()).toEqual(
-      ['coder', 'designer', 'pm', 'qa', 'reviewer', 'tech-lead'].sort(),
+      ['adjudicator', 'coder', 'designer', 'pm', 'qa', 'reviewer', 'tech-lead'].sort(),
     );
   });
 

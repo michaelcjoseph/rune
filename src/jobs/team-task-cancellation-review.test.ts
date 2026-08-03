@@ -66,6 +66,7 @@ function models(overrides: Partial<TeamRoleModels> = {}): TeamRoleModels {
     coder: codexModel,
     reviewer: claudeModel,
     designer: claudeModel,
+    adjudicator: codexModel,
     ...overrides,
   };
 }

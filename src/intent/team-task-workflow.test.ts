@@ -932,6 +932,212 @@ describe('team-task-workflow — finding evidence contract', () => {
   });
 });
 
+// The closeout gate is unanimous-AND, so a reviewer-vs-tech-lead disagreement is
+// modeled as failure and nothing ever compares the two arguments — the run parks
+// and waits for a human. One tie-breaker with fresh context resolves it.
+describe('team-task-workflow — split adjudication', () => {
+  const disputed: ObjectionFinding = {
+    class: 'concurrency',
+    severity: 'high',
+    location: 'src/lease.ts:42',
+    rationale: 'withLease releases on holder abort while work may still run, ' +
+      'allowing a later waiter into the same critical section',
+    reversible: true,
+  };
+
+  /** The true 1-1 tie: the reviewer withholds a pass with reasoning but no
+   *  objection-class finding, the tech lead passes. Nothing in the pre-existing
+   *  gate can break this — `hasOnlySeverityDerivedFailures` is false, so the cap
+   *  falls through to the final block. That makes it the right fixture for
+   *  fail-closed assertions: today's behavior here IS a block, so "falls back to
+   *  today's behavior" is observable. */
+  function splitDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
+    return makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [],
+        notes: 'the lease release ordering still reads wrong to me',
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      ...over,
+    });
+  }
+
+  /** A split over a concrete finding, for ledger/follow-up assertions. */
+  function findingSplitDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
+    return makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [disputed] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      ...over,
+    });
+  }
+
+  it('a split at the cap dispatches exactly one adjudicator and resolves without a human', async () => {
+    const calls: unknown[] = [];
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async (input) => {
+        calls.push(input);
+        return { upholds: 'pass', rationale: 'releaseOnHolderAbort is threaded through acquireWithPolicy' };
+      },
+    }));
+
+    expect(calls).toHaveLength(1);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.adjudications).toHaveLength(1);
+    expect(ev.adjudications?.[0]).toMatchObject({
+      round: 1,
+      dissentingRole: 'reviewer',
+      concurringRole: 'tech-lead',
+      upheld: 'pass',
+      escalated: false,
+    });
+  });
+
+  it('gives the adjudicator both verdicts and the artifacts, never the coder handoff', async () => {
+    let seen: Record<string, any> | undefined;
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, findingSplitDeps({
+      adjudicateSplit: async (input) => {
+        seen = input as Record<string, any>;
+        return { upholds: 'pass', rationale: 'the guard answers it' };
+      },
+    }));
+
+    expect(seen?.['dissentingVerdict']?.findings?.[0]).toMatchObject({ location: 'src/lease.ts:42' });
+    expect(seen?.['concurringVerdict']?.outcome).toBe('pass');
+    expect(seen?.['judgmentContext']?.diff).toBeDefined();
+    expect(seen?.['judgmentContext']?.spec).toBe(INPUT.spec);
+    expect(seen?.['judgmentContext']?.tests).toBeDefined();
+  });
+
+  it('unanimity dispatches no adjudicator', async () => {
+    let called = false;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      adjudicateSplit: async () => {
+        called = true;
+        return { upholds: 'pass', rationale: 'unreachable' };
+      },
+    }));
+
+    expect(called).toBe(false);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev).not.toHaveProperty('adjudications');
+  });
+
+  it('does not adjudicate a first-round split while coder rounds remain', async () => {
+    let calls = 0;
+    let round = 0;
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `diff ${round}`, handoffNotes: [] };
+      },
+      // Round 1 splits; round 2 is unanimous — the coder fixed it, and no
+      // adjudication was ever paid for.
+      reviewer: async () => round === 1
+        ? { outcome: 'fail', findings: [disputed] }
+        : { outcome: 'pass', findings: [], verifiedFindings: [] },
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async () => {
+        calls += 1;
+        return { upholds: 'pass', rationale: 'should not run in round 1' };
+      },
+    }));
+
+    expect(calls).toBe(0);
+  });
+
+  it('upholding the fail keeps the objection open and blocks', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async () => ({
+        upholds: 'fail',
+        rationale: 'the finally releases on abort before in-flight work settles',
+        finding: disputed,
+      }),
+    }));
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.adjudications?.[0]?.upheld).toBe('fail');
+    // The ruling's finding is handed to the coder, not left implicit.
+    expect(ev.findingsLedger.some(
+      (entry) => entry.status === 'open' && entry.location === disputed.location,
+    )).toBe(true);
+  });
+
+  it('upholding the pass files the dissent as a follow-up rather than dropping it', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, findingSplitDeps({
+      adjudicateSplit: async () => ({
+        upholds: 'pass',
+        rationale: 'the abort path is guarded at src/lease.ts:114',
+      }),
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.downgradedFindings).toHaveLength(1);
+    expect(ev.downgradedFindings?.[0]?.finding).toEqual(disputed);
+    expect(ev.downgradedFindings?.[0]?.reason).toContain('adjudicator upheld');
+    expect(ev.findingsLedger.every((entry) => entry.status === 'resolved')).toBe(true);
+  });
+
+  it('escalates when the same objection is adjudicated a second time', async () => {
+    const escalations: boolean[] = [];
+    let round = 0;
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `diff ${round}`, handoffNotes: [] };
+      },
+      // The same objection survives the coder round, so round 2 is a repeat.
+      reviewer: async () => ({ outcome: 'fail', findings: [disputed] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async ({ escalate }) => {
+        escalations.push(escalate);
+        return {
+          upholds: 'fail',
+          rationale: 'still unresolved',
+          finding: disputed,
+        };
+      },
+    }));
+
+    // Round 1 has a remaining round so it is not adjudicated; the signature is
+    // first seen at the cap. A second identical dispute escalates.
+    expect(escalations.length).toBeGreaterThanOrEqual(1);
+    expect(escalations.at(-1)).toBe(escalations.length > 1);
+  });
+
+  it('fails closed when no adjudicator is wired', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps());
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.adjudications?.[0]?.failClosedReason).toBe('no adjudicator is wired');
+  });
+
+  it('fails closed when the adjudicator throws', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async () => {
+        throw new Error('provider unavailable');
+      },
+    }));
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.adjudications?.[0]?.failClosedReason).toContain('provider unavailable');
+  });
+
+  it('fails closed on an unusable ruling rather than reading it as a pass', async () => {
+    for (const ruling of [
+      { upholds: 'pass' as const, rationale: '   ' },
+      { upholds: 'fail' as const, rationale: 'it is broken' }, // upheld fail, no finding
+      { upholds: 'unresolved' as unknown as 'pass', rationale: 'cannot tell from the diff' },
+    ]) {
+      const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+        adjudicateSplit: async () => ruling,
+      }));
+      expect(ev.outcome, JSON.stringify(ruling)).toBe('blocked');
+      expect(ev.adjudications?.[0]?.failClosedReason).toBeDefined();
+    }
+  });
+});
+
 describe('team-task-workflow — objection gate', () => {
   const objection: ObjectionFinding = {
     class: 'security',
@@ -4575,6 +4781,11 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'reviewer', stage: 'review' },
       { role: 'tech-lead', stage: 'diff-review' },
       { role: 'designer', stage: 'design' },
+      // The reviewer failed while the tech lead and designer passed — a split,
+      // at cap 1, so the tie-breaker is dispatched. No `adjudicateSplit` dep is
+      // wired in this fixture, so it fails closed; the stage is emitted either
+      // way, because a fail-closed adjudication must be as visible as a ruling.
+      { role: 'adjudicator', stage: 'split-adjudication' },
     ]);
     expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
     expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
@@ -4662,7 +4873,10 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
       { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'designer', verdict: 'pass', gate: 'design-review' },
+      // Split at the cap with no adjudicator wired → fail closed, and SAY so.
+      { role: 'adjudicator', verdict: 'fail', gate: 'implementation-diff' },
     ]);
+    expect(verdicts.at(-1)?.data?.['summary']).toContain('no adjudicator is wired');
     expect(verdicts.every((event) => String(event.data?.['summary']).trim().length > 0)).toBe(true);
     expect(verdicts.every((event) => String(event.data?.['line']).trim().length > 0)).toBe(true);
   });

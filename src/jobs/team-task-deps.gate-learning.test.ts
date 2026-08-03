@@ -150,6 +150,7 @@ const models: TeamRoleModels = {
   coder: openai,
   reviewer: anthropic,
   designer: anthropic,
+  adjudicator: openai,
 };
 
 function sandbox(): SandboxSpec {
