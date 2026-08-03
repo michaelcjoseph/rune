@@ -710,7 +710,7 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
 
 function hasAggregateFixtureFences(text: string): boolean {
   return text.includes('```tl-test-review') || text.includes('```tl-diff-review') ||
-    text.includes('```designer-review') || text.includes('```pm-wrapup');
+    text.includes('```designer-review') || text.includes('```pm-acceptance');
 }
 
 function parseFindings(v: Record<string, unknown>): {

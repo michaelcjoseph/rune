@@ -54,7 +54,7 @@ Detailed reference, read on demand (not loaded every session):
 - **`health/`** — workout-generation pipeline + last-workout artifact, shared by `/workout`/`/done-workout` and the MCP health tools.
 - **`integrations/`** — telegram / whoop / readwise clients.
 - **`vault/`, `workspace/`** — guarded file accessors (`readVaultFile`/`writeVaultFile` etc.), journal, git, durable chat turns/sessions, voice.
-- **`writer/`, `roles/`** — role-agent SOUL + memory loaders (writer + six product-team roles).
+- **`writer/`, `roles/`** — role-agent SOUL + memory loaders (writer + the seven product-team roles).
 - **`utils/`** — time (America/Chicago), logging, path scrubbing, telemetry logs, launchd-safe toolchain PATH construction.
 - **`cli/`** — local CLI · **`scripts/`** — dev tools (evals, intent-scan, backfill, live acceptance) · **`policies/`** — model/escalation/products config.
 
@@ -180,7 +180,7 @@ Runtime agents are spawned by Rune via `runAgent()`; dev-tooling agents are used
 
 **Dev tooling (`/work` + `/review` skills):** test-specialist, code-reviewer, security-auditor, architecture-reviewer, code-simplifier, docs-sync.
 
-**Product-team roles (project 14, `agents/<role>/` SOUL + memory):** pm, tech-lead, qa, coder, reviewer, designer. Plus the writer role (`agents/writer/`). → `docs/architecture/subsystems.md` and `reviews-kb-vault.md`.
+**Product-team roles (project 14, `agents/<role>/` SOUL + memory):** pm, tech-lead, qa, coder, reviewer, designer, adjudicator (tie-breaks a reviewer-vs-tech-lead split that would otherwise end a task). Plus the writer role (`agents/writer/`). → `docs/architecture/subsystems.md` and `reviews-kb-vault.md`.
 
 ## MCP Server
 

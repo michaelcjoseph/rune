@@ -167,8 +167,8 @@ const GREEN_JUDGMENT_REPLY = [
   '```designer-review',
   '{"pass": true}',
   '```',
-  '```pm-wrapup',
-  '{"resolved": true}',
+  '```pm-acceptance',
+  '{"accepted": true, "rationale": "fixture acceptance"}',
   '```',
 ].join('\n');
 
