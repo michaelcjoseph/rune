@@ -71,6 +71,92 @@
     - A platform-enforcement claim without a proved capability produces a fail-closed probe task rather than an unsupported guarantee.
     - A selector depending on task tags includes an owning task and user surface for creating/persisting those tags.
     - Prompt and parser tests prove the PM, tech lead, and critique reject or repair representative incomplete plans.
+- [ ] **Successful operator notifications leave no log record, so "did Rune actually tell me?" is unanswerable after the fact.**
+  - **What is broken.** `TelegramSender` logs only failures (`src/transport/telegram-sender.ts:361`, `:377`, `:388`). A successful send writes nothing. When run `815bdec6` committed its first closeout (`466794c`) and the operator saw no Telegram alert, confirming or refuting delivery required hand-tracing five modules (emit site, publication ledger, drain loop, bus, sender) and still ended inconclusive.
+  - **Root cause.** Outbound delivery is fire-and-forget (`void this.send(...).catch(...)`). `notification-publications.jsonl` records the intent to publish, not the delivery. Nothing records that the Telegram API accepted the message.
+  - **User impact.** A notification that was never sent is indistinguishable from one that was sent and missed. Every "why didn't I get X" question becomes a full code audit.
+  - **Required fix.**
+    1. Emit one structured `log.info` on each successful `TelegramSender` send, carrying component `telegram`, the mutation/op id when present, the notification kind, the resolved chat id, and the message length.
+    2. Never log the message body. It can carry vault content and the deliberately un-scrubbed `operatorWorktreePath`.
+    3. Cover every send path: work-run start, work-run progress, orchestrated progress, and all terminal formats.
+    4. Keep the existing error logging unchanged.
+  - **Acceptance criteria.**
+    - A successful closeout-commit alert produces exactly one info record naming the notification kind and target chat.
+    - A failed send still produces the existing error record and no success record.
+    - No message body and no un-scrubbed absolute path reaches the log line.
+    - Tests assert the success record for an orchestrated progress alert and for a terminal, and assert body exclusion.
+- [ ] **Both PM adjudication seams are dead in production, so every surviving gate block parks the run and waits for a human.**
+  - **What is broken.** Rune has two PM escape hatches for exactly the round-cap-disagreement case, and neither ever runs. (1) `acceptWithRationale` (`src/intent/team-task-workflow.ts:453`) is optional, and no production caller supplies it. (2) `pmWrapup` is declared as a **required** dep (`team-task-workflow.ts:445`) and fully implemented in production with its own prompt, model binding, and verdict parser (`src/jobs/team-task-deps.ts:2290`, `PM_WRAPUP_INSTRUCTION` at `:552`), but the workflow never calls it. Its only caller in the repository is `src/jobs/team-task-deps.test.ts:2449`. Any task reaching the round cap with an unresolved fail therefore returns `block(...)` with `loopExitReason: 'hard-budget'` (`team-task-workflow.ts:1573`), the orchestrator raises `execution-failure`, and the run parks. Run `815bdec6` parked on task 2 of 45 with tech-lead and reviewer both passing and only QA failing, and its transcript contains no `pm` role stage at all.
+  - **Root cause.** `acceptWithRationale` was built as a test/operator seam and never wired into `buildOrchestrationDeps`. `pmWrapup` was built end to end but its invocation site was never added to the workflow's round-cap path, so a required dependency is satisfied by every caller and exercised by none.
+  - **User impact.** Forward progress requires a human. One dissenting role verdict stops a 45-task project indefinitely, which inverts the platform's stated priority that work keeps moving.
+  - **Required fix.**
+    1. Wire a production `acceptWithRationale` that dispatches the PM role with the task, spec, diff, surviving rejection feedback, and the full findings ledger.
+    2. Require a non-empty rationale and record it in run evidence and the task record.
+    3. Restrict PM acceptance to reversible findings below a configured severity. Irreversible, `high`, and `critical` findings keep blocking.
+    4. File every accepted-over-dissent case into the terminal bug backlog (`src/intent/terminal-bug-backlog.ts`) so the concern survives closeout.
+    5. Emit an activity event and an operator notification whenever acceptance overrides a role verdict.
+  - **Acceptance criteria.**
+    - A round-cap block carrying a reversible, sub-threshold finding closes out with a recorded PM rationale instead of parking.
+    - A critical, high, or irreversible finding still parks.
+    - The rationale, the overridden verdict, and the dissenting role appear in the task record and in Cockpit run inspection.
+    - Every override files a deduped backlog entry.
+    - Tests cover acceptance, refusal at threshold, missing rationale, and backlog filing.
+- [ ] **QA gates the coder's diff, which duplicates the reviewer, runs on the coder's own provider, and can stall a run that both structured gates approved. QA's work should end when the coder starts.**
+  - **What is broken.** After the coder's self-review, the workflow dispatches three parallel judgments: `qa :: diff-revalidation`, `reviewer :: review`, `tech-lead :: diff-review` (`src/intent/team-task-workflow.ts:1028`, `:1078-1091`). QA's stage runs no tests. It is an LLM reading the same diff the other two read, and it returns `{ approved: boolean; notes?: string }` (`team-task-workflow.ts:1676`), a shape with no room for a file, a line, or a failing test name. It blocks the gate on that boolean. In run `815bdec6` task 2 round 3, QA rejected with one unanchored sentence restating a finding the tech lead had certified resolved by id, while reviewer and tech lead both passed with `file:line` analysis. The run parked with 44 tasks left.
+  - **Root cause.**
+    - `agents/qa/SOUL.md` is a test-authorship charter. It contains no diff-review mandate, yet the workflow grants QA diff-blocking authority.
+    - The one check QA nominally owns, whether the diff weakened the tests, is already available to the tech lead, which reviews QA's test intent at `tech-lead :: test-review` before the coder starts and then reads the full diff, test files included.
+    - QA runs on `gpt-5.6-terra` and the coder on `gpt-5.6-sol` (`policies/model-policy.json`), the same provider family. Rune enforces distinct-provider review for the reviewer, fail-closed, because same-provider review is weak. QA's diff gate is the only gate that violates that rule.
+  - **User impact.** The least structured and least independent of the three gates can stall a run the other two approved, while costing a model call and a share of the round budget every round.
+  - **Decision.** QA authors the tests and stops. There is no QA stage after implementation. The fix is removal, not more machinery around QA's verdict.
+  - **Required fix.**
+    1. Remove the `qa :: diff-revalidation` stage from the post-implementation judgment batch. Delete `qaRevalidateDiff`, `revalidateQaDiff`, and `QA_DIFF_REVALIDATION_INSTRUCTION` (`src/jobs/team-task-deps.ts:535`, `:2107`) outright rather than leaving another unwired seam.
+    2. Add the test-integrity questions to the tech lead's existing `diff-review` prompt. No new stage and no new model call. Three questions: was a QA-authored test deleted, weakened, or retargeted by this diff; is there behavior in this diff that no test touches; does the implementation satisfy a test's shape without satisfying its intent.
+    3. Leave the pre-implementation flow untouched: `qa :: test` still authors tests from the spec first, and `tech-lead :: test-review` still reviews that intent before the coder starts.
+    4. Update the review-edges section of `agents/qa/SOUL.md` to state that QA holds no post-implementation gate.
+  - **Acceptance criteria.**
+    - The post-implementation batch dispatches exactly two role judgments, reviewer and tech lead (plus designer when flagged).
+    - No QA prompt, dependency, or verdict path survives past the coder's self-review. Removal is deletion, not a disabled flag.
+    - The tech lead's diff-review prompt asks the three test-integrity questions, and a finding it raises from them cites the offending test file.
+    - A diff that deletes or weakens a QA-authored test is caught by the tech lead and blocks.
+    - QA still authors tests first, and the tech lead still reviews test intent before implementation.
+    - Round budget and gate accounting reflect two voters, not three.
+- [ ] **A blocking role rejection requires no evidence, so a one-sentence assertion outweighs two grounded approvals.**
+  - **What is broken.** QA's round-3 verdict in run `815bdec6` was, in full, "withLease releases on holder abort while work may still run, allowing a later waiter into the same critical section." No file, no line, no failing test, no reproduction. Reviewer and tech-lead passed the same diff with `file:line` anchors, naming the exact mechanism (`releaseOnHolderAbort` threaded through `acquireWithPolicy`) that resolved the concern. The unevidenced verdict blocked the run.
+  - **Root cause.** The gate treats every fail as equally authoritative. `GateVerdict` permits a bare pass/fail with free-text notes, only the reviewer's charter requires a structured payload, and nothing validates that a fail carries the evidence its objection class demands.
+  - **User impact.** The cheapest possible objection has the same stopping power as a rigorous one, which biases the entire loop toward stalling.
+  - **Required fix.**
+    1. Define a per-class evidence contract. A `concurrency`, `data-integrity`, or `security` fail requires a location plus a concrete failure scenario. A QA fail requires either a named failing test or a named missing test with its exact scenario.
+    2. Validate the contract when the verdict is parsed. A fail that does not meet it is downgraded to a non-blocking observation and filed as a follow-up item, with the downgrade and its reason recorded.
+    3. Give the role exactly one bounded re-prompt to supply the missing evidence before downgrade.
+    4. Never downgrade a fail backed by a reproducible failing command.
+  - **Acceptance criteria.**
+    - An unevidenced fail does not block and appears in the run record as downgraded, with its reason.
+    - A fail citing a failing test, or a concrete location plus scenario, blocks exactly as today.
+    - The role receives exactly one re-prompt to supply evidence.
+    - Downgraded objections are filed as follow-up items, never silently dropped.
+    - Tests cover each class contract, the re-prompt, downgrade recording, and the no-downgrade guarantee for reproducible failures.
+- [ ] **A split role verdict has no adjudicator. Once the gate drops to two voters, every disagreement is a 1-1 tie that nothing can break, so the run parks instead of deciding.**
+  - **What is broken.** The closeout gate is unanimous-AND over per-role verdicts (`buildWorkflowGateVerdicts`). Disagreement is modeled as failure, never as a question that needs an answer. In run `815bdec6` task 2 round 3, reviewer and tech lead both passed with grounded `file:line` analysis while QA failed with one unanchored sentence, and the run parked without any component comparing the arguments. Removing QA's diff gate (see the QA entry above) fixes that specific case but removes the majority signal entirely: reviewer against tech lead is 1-1, and there is no third vote to read. Adjudication moves from useful to load-bearing.
+  - **Root cause.** The gate ANDs verdicts and has no adjudication path, and both PM seams that could have decided are dead in production (see the PM-adjudication entry above).
+  - **User impact.** Any reviewer / tech-lead disagreement stops the run and waits for a human, which inverts the platform's priority that work keeps moving.
+  - **Required fix.**
+    1. Detect a split at the gate: at least one fail and at least one pass among the dispatched roles.
+    2. Dispatch exactly one tie-break adjudicator with fresh context, resolved from a new `adjudicator` entry in `policies/model-policy.json`, set to `gpt-5.6-sol` for now. The adjudicator's model is a declared policy choice, not a runtime distinctness computation. Rune stays on Anthropic and OpenAI, and reviewer (`opus`) and tech lead (`fable`) are both Anthropic, so the adjudicator sits on the OpenAI side by design. It shares a model with the coder, which is an accepted self-preference risk: fresh context (it never sees the coder's reasoning) and escalate-on-repeat are the mitigations. Revisit if adjudications trend toward always upholding the pass.
+    3. Give it the diff, spec, tests, and each disputing role's full verdict text. Require a structured ruling that names which verdict it upholds and why, in the shared finding shape when it upholds a fail.
+    4. Make the ruling decisive for that round, recorded in the task record and the findings ledger.
+    5. Escalate the adjudicator's model when the same finding signature has already been adjudicated in a prior round of the same task.
+    6. Fail closed. An adjudicator that errors, or a missing/unresolvable `adjudicator` policy entry, falls back to today's blocking behavior, never to a silent pass.
+  - **Acceptance criteria.**
+    - A 1-1 split dispatches exactly one adjudicator and resolves without human input.
+    - The adjudicator resolves from the `adjudicator` model-policy entry, and is never one of the two disputants' models.
+    - The adjudicator receives the diff, the spec, the tests, and both verdict texts, and never the coder's chain of thought or prior-round scratch context.
+    - A ruling upholding the fail keeps the finding open and returns the task to the coder.
+    - A ruling upholding the pass closes the task out and files the dissent as a deduped follow-up item.
+    - A repeat adjudication on the same finding signature escalates the model.
+    - Unanimity dispatches no adjudicator.
+    - Adjudicator failure or a missing policy entry blocks, and the reason is recorded.
+    - Tests cover splits, unanimity, policy resolution, fresh-context isolation, repeat escalation, and fail-closed fallback.
 
 ## Loop-filed
 
