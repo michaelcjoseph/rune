@@ -488,14 +488,12 @@ export interface TeamTaskDeps {
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
   }) => Promise<GateReviewVerdict>;
-  pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
-    resolved: boolean;
-    rationale?: string;
-  }>;
-  /** Optional core override seam for tests/operator surfaces. A high/critical
-   *  reviewer block still gets the normal coder correction first; only a
-   *  surviving block reaches this seam, and acceptance requires a non-empty
-   *  rationale recorded in the evidence. */
+  /** Last-resort wrap-up call at the round cap, per `agents/pm/SOUL.md`. Only a
+   *  block that survived every coder round reaches this seam, and only when no
+   *  open finding is irreversible or at/above `PM_ACCEPTANCE_MAX_SEVERITY`.
+   *  Acceptance requires a non-empty rationale, which is recorded in the task
+   *  evidence and filed as a follow-up. Absent, throwing, or refusing all leave
+   *  the block exactly as it was. */
   acceptWithRationale?: (
     input: AcceptWithRationaleInput,
   ) => Promise<AcceptWithRationaleResult>;
@@ -1758,6 +1756,89 @@ async function runGated(
     });
   }
 
+  // Last resort before a human: non-objection disagreement at the cap is
+  // exactly what `agents/pm/SOUL.md` already claims the PM owns — "Wrap up at
+  // the cap. When a task exhausts its retry budget on non-objection
+  // disagreement, you make the wrap-up call." Until now the charter promised
+  // something no code path ever invoked, and every surviving block parked.
+  //
+  // The PM's authority stops where the charter says it stops: a non-reversible
+  // or at/above-threshold finding is not the PM's to clear, and acceptance
+  // requires a rationale. Both refusals leave the block untouched.
+  const acceptanceBlocker = pmAcceptanceBlocker(
+    findingsLedger,
+    explicitNonReversibleFindingIds,
+  );
+  if (deps.acceptWithRationale !== undefined && acceptanceBlocker === undefined) {
+    roles.add('pm');
+    emitRoleStage(input, 'pm', 'cap-acceptance');
+    let acceptance: AcceptWithRationaleResult | undefined;
+    try {
+      acceptance = await deps.acceptWithRationale({
+        task,
+        reason: lastRejectionFeedback?.whatFailed ??
+          'round cap reached with unresolved task feedback',
+        reviewerVerdict: toPublicGateVerdict(
+          lastReviewer ?? { outcome: 'fail', findings: [] },
+        ),
+        rejectionFeedback: lastRejectionFeedback ?? buildGateRejectionFeedback({
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          artifact: 'implementation-diff',
+          reason: 'round cap reached with unresolved task feedback',
+        }),
+      });
+    } catch {
+      /* Acceptance is an escape hatch; its failure must leave the block intact. */
+    }
+    const rationale = acceptance?.rationale?.trim() ?? '';
+    if (acceptance?.accepted === true && rationale !== '') {
+      const record: PmAcceptance = {
+        actor: acceptance.actor,
+        decision: 'accepted-with-rationale',
+        rationale,
+      };
+      // The overridden dissent is filed, never dropped: it leaves as a
+      // follow-up so the concern survives closeout.
+      for (const finding of openFindingsLedger(findingsLedger)) {
+        downgradedFindings.push({
+          finding,
+          sourceGate: finding.sourceGate,
+          round,
+          gaps: [],
+          reason: `${record.actor} accepted over ${finding.sourceGate}'s dissent: ${rationale}`,
+          rePrompted: false,
+        });
+      }
+      emitRoleVerdict(input, {
+        role: 'pm',
+        gate: 'implementation-diff',
+        verdict: 'pass',
+        summary: `accepted over dissent: ${rationale}`,
+      });
+      emitPmAcceptance(input, task, record, lastRejectionFeedback);
+      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+      return {
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: roles.list(),
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        findingsLedger,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes,
+        acceptance: record,
+        ...(adjudications.length > 0 ? { adjudications } : {}),
+        ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
+        ...(approvedReviewSurfaceHash !== undefined
+          ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+          : {}),
+        ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+      };
+    }
+  }
+
   return block(task, roles, handoffNotes, {
     blockedReason: lastRejectionFeedback === undefined
       ? 'round cap reached with unresolved task feedback'
@@ -1971,6 +2052,32 @@ async function applyEvidenceContract(
     findings: surviving,
     outcome: surviving.length > 0 ? outcomeForObjectionSeverities(surviving) : 'pass',
   };
+}
+
+/** Severity at or above which a finding is never the PM's to accept. Sits beside
+ *  `SEVERITY_LOOP_HARD_BUDGET` because both bound the same escape hatch: how far
+ *  the machine may go before a human is required. */
+export const PM_ACCEPTANCE_MAX_SEVERITY: ObjectionSeverity = 'medium';
+
+/** Why the PM may NOT accept, or undefined when acceptance is permitted. Mirrors
+ *  `agents/pm/SOUL.md`: the PM's authority does not extend to clearing
+ *  objection-class findings, and irreversibility is never negotiable. */
+function pmAcceptanceBlocker(
+  ledger: FindingsLedgerEntry[],
+  explicitNonReversibleFindingIds: Set<string>,
+): string | undefined {
+  for (const entry of openFindingsLedger(ledger)) {
+    if (
+      entry.reversible === false ||
+      explicitNonReversibleFindingIds.has(entry.id)
+    ) {
+      return `non-reversible ${entry.class} finding at ${entry.location}`;
+    }
+    if (severityRank[entry.severity] >= severityRank[PM_ACCEPTANCE_MAX_SEVERITY]) {
+      return `${entry.severity} ${entry.class} finding at ${entry.location}`;
+    }
+  }
+  return undefined;
 }
 
 /** The gate is unanimous-AND, so a disagreement is modeled as failure and the
@@ -2643,6 +2750,36 @@ function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): 
         stage,
         label,
         line: label,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+/** Record an acceptance-over-dissent on the run's activity stream. The operator
+ *  NOTIFICATION is raised a layer up, in `project-orchestrator`, which owns the
+ *  progress-event channel that reaches Telegram and the cockpit. */
+function emitPmAcceptance(
+  input: TeamTaskRunInput,
+  task: SizedTask,
+  acceptance: PmAcceptance,
+  rejectionFeedback: GateRejectionFeedback | undefined,
+): void {
+  if (input.emit === undefined) return;
+  const overriddenRole = rejectionFeedback?.rejectingRole ?? 'reviewer';
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'pm-acceptance',
+        taskId: task.id,
+        taskText: task.text,
+        actor: acceptance.actor,
+        overriddenRole,
+        rationale: acceptance.rationale,
+        line: `${acceptance.actor} accepted "${task.text}" over ${overriddenRole}'s dissent · ` +
+          acceptance.rationale,
       },
     });
   } catch {

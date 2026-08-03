@@ -409,6 +409,11 @@ async function runProjectOrchestrationImpl(
         );
       }
 
+      // Announce an override of a role verdict before validation runs: the
+      // operator should learn that a dissent was accepted even if the task then
+      // fails its closeout checks.
+      emitPmAcceptance(deps, task, evidence);
+
       // Mechanical validation is a separate gate. Closeout itself is not
       // entered until validation and post-validation review-surface checks pass.
       const checks = await deps.runCloseoutChecks(task, evidence);
@@ -1009,6 +1014,36 @@ function emitCloseoutCommit(
       commitSubject: commit.subject,
       ...progress,
       line: `${task.text} committed ${shortSha} · ${progress.tasksDone}/${progress.tasksTotal} done · ${progress.tasksRemaining} remaining`,
+    },
+  });
+}
+
+/** Operator notification for an acceptance that overrode a role's dissent.
+ *  Overriding a gate verdict is a decision the operator should hear about the
+ *  same day, not discover in a run record later. Mirrors `emitCloseoutCommit`'s
+ *  progress-event shape, so it reaches Telegram and the cockpit through the
+ *  existing channel. */
+function emitPmAcceptance(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  evidence: TaskEvidence,
+): void {
+  const acceptance = evidence.acceptance;
+  if (acceptance === undefined) return;
+  const overriddenRole = evidence.rejectionFeedback?.rejectingRole ?? 'a role';
+  deps.emit?.({
+    kind: 'progress',
+    data: {
+      event: 'pm-acceptance',
+      projectSlug: deps.project,
+      product: deps.product,
+      taskId: task.id,
+      taskText: task.text,
+      actor: acceptance.actor,
+      overriddenRole,
+      rationale: acceptance.rationale,
+      line: `${acceptance.actor} accepted "${task.text}" over ${overriddenRole}'s dissent · ` +
+        acceptance.rationale,
     },
   });
 }

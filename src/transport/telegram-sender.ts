@@ -252,6 +252,27 @@ function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
   return parts.length > 1 ? parts.join(' · ') : null;
 }
 
+/** An acceptance that overrode a role's dissent at the round cap. Surfaced to
+ *  the operator as it happens: the machine decided to ship something a gate
+ *  objected to, which is exactly the kind of call a human wants to see the same
+ *  day rather than find in a run record later. */
+function formatPmAcceptanceProgress(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (data['event'] !== 'pm-acceptance') return null;
+  const taskText = typeof data['taskText'] === 'string' ? data['taskText'] : '';
+  const actor = data['actor'] === 'human' ? 'human' : 'PM';
+  const overriddenRole = typeof data['overriddenRole'] === 'string'
+    ? data['overriddenRole']
+    : 'a role';
+  const rationale = typeof data['rationale'] === 'string' ? data['rationale'] : '';
+  const parts = [
+    `⚖️ ${actor} accepted over ${overriddenRole}'s dissent`,
+    taskText,
+    rationale,
+  ].filter((part) => part !== '');
+  return parts.length > 1 ? parts.join(' · ') : null;
+}
+
 /** Terminal message for a `writing` mutation (/blog, /writing-critique). The
  *  generic fallback would render "✅ /work --auto … finished" — wrong surface
  *  language for a writing run. Failure reasons arrive pre-scrubbed (the
@@ -382,7 +403,9 @@ export class TelegramSender implements MessageSender {
       return;
     }
     if (event.mutationKind === 'orchestrated-work' && event.subKind === 'progress') {
-      const text = formatMergeSuccessProgress(event) ?? formatCloseoutCommitProgress(event);
+      const text = formatMergeSuccessProgress(event)
+        ?? formatCloseoutCommitProgress(event)
+        ?? formatPmAcceptanceProgress(event);
       if (text) {
         void this.send(event.userId, text).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent orchestrated progress send failed', {

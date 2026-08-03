@@ -347,7 +347,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       'reviewer',
       'techLeadReviewDiff',
       'designer',
-      'pmWrapup',
+      'acceptWithRationale',
       'resolveReviewerProvider',
     ];
     for (const name of seamNames) {
@@ -2444,8 +2444,23 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const tl = await deps.techLeadReviewTests({ task: sizedTask, qa: { kind: 'tests-written', testIds: [] } });
     expect(tl.approved).toBe(false);
 
-    const pm = await deps.pmWrapup({ task: sizedTask, reason: 'cap' });
-    expect(pm.resolved).toBe(false);
+    const pm = await deps.acceptWithRationale!({
+      task: sizedTask,
+      reason: 'cap',
+      reviewerVerdict: { outcome: 'fail', findings: [] },
+      rejectionFeedback: {
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        rejectedRole: 'coder',
+        artifact: 'implementation-diff',
+        rejectedArtifact: 'implementation-diff',
+        reason: 'cap',
+        whatFailed: 'cap',
+        notes: [],
+        actionableNotes: [],
+      },
+    });
+    expect(pm.accepted).toBe(false);
   });
 
   it('coder seam returns the execution-agent diff; qa seam maps diff/no-diff to tests-written/rationale', async () => {

@@ -57,6 +57,7 @@ import {
   ValidationProfileUnavailableError,
   runTeamTaskWorkflow,
   SELF_REVIEW_NOTE_MAX_CHARS,
+  type AcceptWithRationaleResult,
   type AdjudicationRuling,
   type ObjectionClass,
   type ObjectionFinding,
@@ -560,15 +561,31 @@ const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
   '```',
 ].join('\n');
 
-const PM_WRAPUP_INSTRUCTION = [
-  'You are the product manager. The team hit the round cap on this task with',
-  'non-objection disagreement. Decide whether the current state satisfies the',
-  'product intent (resolve) or needs a human (leave unresolved). You CANNOT',
-  'clear objection-class findings — those never reach you.',
+const PM_ACCEPTANCE_INSTRUCTION = [
+  'You are the product manager. The team hit the round cap on this task and one',
+  'role still withholds its approval. Decide whether the current state satisfies',
+  'the product intent well enough to ship (accept) or genuinely needs a human',
+  '(decline).',
   '',
-  'Respond with EXACTLY ONE fenced ```pm-wrapup block containing JSON:',
-  '```pm-wrapup',
-  '{"resolved": true, "rationale": "<required non-empty if resolved true>", "notes": "<short reason if resolved false>"}',
+  'This is the wrap-up call your charter gives you, and it is the difference',
+  'between the project continuing and it stopping until a human intervenes. Do',
+  'not decline reflexively — declining is correct only when shipping this would',
+  'mean shipping something you would not defend to the user.',
+  '',
+  'Your authority has a hard edge. You CANNOT clear an irreversible finding, and',
+  'you CANNOT clear a medium-or-worse objection-class finding — Rune withholds',
+  'those from you entirely, so anything you see here is reversible and minor. If',
+  'the dissent below reads as more serious than that, decline: it means the',
+  'disagreement is not the kind you are allowed to settle.',
+  '',
+  'If you accept, `rationale` is REQUIRED and must say what you are accepting and',
+  'why it is acceptable for the user — not that the budget ran out. It is',
+  'recorded permanently against this task and filed as a follow-up item, so write',
+  'it for the human who reads it in three months.',
+  '',
+  'Respond with EXACTLY ONE fenced ```pm-acceptance block containing JSON:',
+  '```pm-acceptance',
+  '{"accepted": true, "rationale": "<required non-empty when accepted is true>", "notes": "<short reason when accepted is false>"}',
   '```',
 ].join('\n');
 
@@ -881,18 +898,20 @@ function parseAdjudication(text: string): AdjudicationRuling {
   };
 }
 
-function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } {
-  const parsed = extractFencedJson(text, 'pm-wrapup');
+/** Fail-closed acceptance parser. Anything unreadable is a REFUSAL, so an
+ *  unparseable reply leaves the task blocked rather than shipping it. */
+function parsePmAcceptance(text: string): AcceptWithRationaleResult {
+  const parsed = extractFencedJson(text, 'pm-acceptance');
   if (!parsed || typeof parsed !== 'object') {
-    return { resolved: false };
+    return { accepted: false, actor: 'pm' };
   }
   const v = parsed as Record<string, unknown>;
-  const resolved = v['resolved'] === true;
   const rationale = typeof v['rationale'] === 'string'
     ? v['rationale'].slice(0, NOTE_MAX_CHARS)
     : undefined;
   return {
-    resolved,
+    accepted: v['accepted'] === true,
+    actor: 'pm',
     ...(rationale !== undefined ? { rationale } : {}),
   };
 }
@@ -2328,10 +2347,31 @@ export function buildProductionTeamTaskDeps(
       );
     },
 
-    pmWrapup: async ({ task, reason }) => {
-      const body = [`## Task\n\n${task.text}`, '', `## Situation\n\n${reason}`].join('\n');
-      const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body, task.id, 'pm-wrapup');
-      return parsePmWrapup(reply);
+    acceptWithRationale: async ({ task, reason, reviewerVerdict, rejectionFeedback }) => {
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Why the task did not close\n\n${reason}`,
+        '',
+        `## The dissenting role\n\n${rejectionFeedback.rejectingRole} rejected the ` +
+          `${rejectionFeedback.rejectedArtifact}: ${rejectionFeedback.whatFailed}`,
+        ...(rejectionFeedback.actionableNotes.length > 0
+          ? ['', `## What they asked for\n\n${rejectionFeedback.actionableNotes.join('\n')}`]
+          : []),
+        '',
+        '## Their verdict',
+        '',
+        formatVerdictForAdjudication(reviewerVerdict),
+      ].join('\n');
+      const reply = await judge(
+        'pm',
+        models.pm,
+        PM_ACCEPTANCE_INSTRUCTION,
+        body,
+        task.id,
+        'pm-cap-acceptance',
+      );
+      return parsePmAcceptance(reply);
     },
 
     // Tie-break a split that would otherwise end the task. Fresh context by

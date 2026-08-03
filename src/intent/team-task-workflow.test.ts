@@ -90,7 +90,6 @@ function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
     reviewer: async () => cleanVerdict,
     techLeadReviewDiff: async () => ({ pass: true }),
     designer: async () => ({ pass: true }),
-    pmWrapup: async () => ({ resolved: true }),
     resolveReviewerProvider: () => 'openai',
     ...over,
   };
@@ -932,6 +931,169 @@ describe('team-task-workflow — finding evidence contract', () => {
   });
 });
 
+// agents/pm/SOUL.md has always promised this: "Wrap up at the cap. When a task
+// exhausts its retry budget on non-objection disagreement, you make the wrap-up
+// call." Until now the charter promised something no code path invoked, so every
+// surviving block parked and one dissenting verdict could stop a 45-task project.
+describe('team-task-workflow — PM acceptance at the cap', () => {
+  /** Non-objection disagreement at the cap: the terminal that used to park. */
+  function capDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
+    return makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [],
+        notes: 'I would extract the helper before this lands',
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      ...over,
+    });
+  }
+
+  const accept = async () => ({
+    accepted: true,
+    actor: 'pm' as const,
+    rationale: 'The helper shape is a style preference; the user-visible behavior is correct.',
+  });
+
+  it('closes out with a recorded rationale instead of parking', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, capDeps({
+      acceptWithRationale: accept,
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.acceptance).toEqual({
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale: 'The helper shape is a style preference; the user-visible behavior is correct.',
+    });
+    expect(ev.rolesInvoked).toContain('pm');
+  });
+
+  it('parks when no acceptance seam is wired — the pre-existing behavior', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, capDeps());
+    expect(ev.outcome).toBe('blocked');
+    expect(ev).not.toHaveProperty('acceptance');
+  });
+
+  it('requires a non-empty rationale', async () => {
+    for (const result of [
+      { accepted: true, actor: 'pm' as const },
+      { accepted: true, actor: 'pm' as const, rationale: '   ' },
+      { accepted: false, actor: 'pm' as const, rationale: 'this needs a human' },
+    ]) {
+      const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, capDeps({
+        acceptWithRationale: async () => result,
+      }));
+      expect(ev.outcome, JSON.stringify(result)).toBe('blocked');
+      expect(ev).not.toHaveProperty('acceptance');
+    }
+  });
+
+  it('a throwing acceptance seam leaves the block intact', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, capDeps({
+      acceptWithRationale: async () => {
+        throw new Error('pm provider down');
+      },
+    }));
+    expect(ev.outcome).toBe('blocked');
+  });
+
+  it('is never consulted for an at-threshold finding', async () => {
+    let called = false;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [{
+          class: 'security',
+          severity: 'medium',
+          location: 'src/auth.ts:12',
+          rationale: 'the retry path skips the allow-list check on the second attempt',
+          reversible: true,
+        }],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      acceptWithRationale: async () => {
+        called = true;
+        return { accepted: true, actor: 'pm', rationale: 'must not be consulted' };
+      },
+    }));
+
+    expect(called).toBe(false);
+    expect(ev).not.toHaveProperty('acceptance');
+  });
+
+  it('is never consulted for an irreversible finding', async () => {
+    let called = false;
+    await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [{
+          class: 'data-integrity',
+          severity: 'low',
+          location: 'src/store.ts:88',
+          rationale: 'the migration drops a column that a revert cannot restore',
+          reversible: false,
+        }],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      acceptWithRationale: async () => {
+        called = true;
+        return { accepted: true, actor: 'pm', rationale: 'must not be consulted' };
+      },
+    }));
+
+    expect(called).toBe(false);
+  });
+
+  it('announces the override on the activity stream', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1, emit: (event) => events.push(event) },
+      capDeps({ acceptWithRationale: accept }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    const announcement = events.find((event) => event.data?.['event'] === 'pm-acceptance');
+    expect(announcement?.data?.['rationale']).toContain('style preference');
+    expect(announcement?.data?.['overriddenRole']).toBe('reviewer');
+    const verdict = events.find(
+      (event) => event.data?.['event'] === 'role-verdict' && event.data?.['role'] === 'pm',
+    );
+    expect(verdict?.data?.['summary']).toContain('accepted over dissent');
+  });
+
+  // The PM only ever sees findings-free disagreement: any open finding is at
+  // least `medium` (a `low` one maps to pass-with-warnings and never blocks), and
+  // `PM_ACCEPTANCE_MAX_SEVERITY` refuses medium-and-above. That is the charter's
+  // boundary expressed in code — "your authority does not extend to clearing
+  // objection-class findings" — and it means a findings-backed block still parks
+  // unless the pre-existing severity loop resolves it on its own.
+  it('never accepts while ANY objection-class finding is open', async () => {
+    for (const severity of ['medium', 'high', 'critical'] as const) {
+      let called = false;
+      await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+        reviewer: async () => ({
+          outcome: 'fail',
+          findings: [{
+            class: 'security',
+            severity,
+            location: 'src/auth.ts:12',
+            rationale: 'the retry path skips the allow-list check on the second attempt',
+            reversible: true,
+          }],
+        }),
+        techLeadReviewDiff: async () => ({ pass: true }),
+        acceptWithRationale: async () => {
+          called = true;
+          return { accepted: true, actor: 'pm', rationale: 'must not be consulted' };
+        },
+      }));
+      expect(called, severity).toBe(false);
+    }
+  });
+});
+
 // The closeout gate is unanimous-AND, so a reviewer-vs-tech-lead disagreement is
 // modeled as failure and nothing ever compares the two arguments — the run parks
 // and waits for a human. One tie-breaker with fresh context resolves it.
@@ -1165,10 +1327,6 @@ describe('team-task-workflow — objection gate', () => {
   it('does not expose a high severity finding as an open human block', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [objection] }),
-      pmWrapup: async () => ({
-        resolved: true,
-        rationale: 'The finding remains in the verdict ledger for the severity loop.',
-      }),
     });
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
     expect(ev.outcome).toBe('ready-for-closeout');
@@ -1192,10 +1350,6 @@ describe('team-task-workflow — objection gate', () => {
         outcome: 'fail',
         findings: [phase14Finding],
       } as unknown as ReviewerVerdict),
-      pmWrapup: async () => ({
-        resolved: true,
-        rationale: 'PM records the high outbound finding for terminal severity handling.',
-      }),
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
@@ -1532,10 +1686,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           reviewer: async () => ({
             objections: [objectionWithSeverity(c.severity)],
           }),
-          pmWrapup: async () => ({
-            resolved: true,
-            rationale: 'PM accepts the non-objection disagreement for this severity-mapping case.',
-          }),
         }),
       );
 
@@ -1578,10 +1728,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           reviewer: async () => ({
             objections: c.severities.map(objectionWithSeverity),
           }),
-          pmWrapup: async () => ({
-            resolved: true,
-            rationale: 'PM accepts the non-objection disagreement for this strictest-outcome case.',
-          }),
         }),
       );
 
@@ -1611,10 +1757,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
             findings: [lowFinding],
             notes: 'reviewer raised a low-severity follow-up',
           } as unknown as ReviewerVerdict;
-        },
-        pmWrapup: async () => {
-          pmCalled = true;
-          return { resolved: true, rationale: 'PM should not be needed for a warning.' };
         },
       }),
     );
@@ -1646,13 +1788,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           findings: [mediumFinding],
           notes: 'reviewer raised a medium-severity fixable finding',
         } as unknown as ReviewerVerdict),
-        pmWrapup: async () => {
-          pmCalled = true;
-          return {
-            resolved: true,
-            rationale: 'Legacy PM acceptance should not be consulted.',
-          };
-        },
       }),
     );
 
@@ -1725,13 +1860,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           notes: `security finding still open after review ${reviewerCalls}`,
         };
       },
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
@@ -1757,13 +1885,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           objections: [],
           notes: 'copy polish remains outside the hard task contract',
         }),
-        pmWrapup: async () => {
-          pmCalled = true;
-          return {
-            resolved: true,
-            rationale: 'Legacy PM acceptance should not be consulted.',
-          };
-        },
       }),
     );
 
@@ -1793,13 +1914,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         findings: [blockingFinding],
         notes: 'security finding remains open',
       }),
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
       ...({
         acceptWithRationale: async (input: unknown) => {
           overrideInputs.push(input);
@@ -1838,13 +1952,6 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         outcome: 'fail',
         findings: [blockingFinding],
       }),
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
       ...({
         acceptWithRationale: async (input: unknown) => {
           overrideInputs.push(input);
@@ -1957,7 +2064,6 @@ describe('team-task-workflow — gate rejection records', () => {
             objections: [],
             notes: 'reviewer wants the empty-state branch covered',
           }),
-          pmWrapup: async () => ({ resolved: false }),
         },
         expected: {
           rejectingRole: 'reviewer',
@@ -2024,7 +2130,6 @@ describe('team-task-workflow — gate rejection records', () => {
             pass: false,
             notes: 'implementation does not wire the empty-state guard',
           }),
-          pmWrapup: async () => ({ resolved: false }),
         },
         expected: {
           rejectingRole: 'tech-lead',
@@ -2110,12 +2215,6 @@ describe('team-task-workflow — gate rejection records', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — worktree coder self-review', () => {
-  function forbidPmWrapup(): TeamTaskDeps['pmWrapup'] {
-    return async () => {
-      throw new Error('PM wrap-up must not be consulted by coder self-review');
-    };
-  }
-
   it('self-reviews every coder round before downstream roles consume canonical Git state', async () => {
     const order: string[] = [];
     const selfReviewInputs: CoderResult[] = [];
@@ -2195,7 +2294,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
           expect(diff).toContain('FIXED');
           return { pass: true };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2339,7 +2437,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
           designerDiffs.push(diff);
           return { pass: true };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2411,7 +2508,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
           designerDiffs.push(diff);
           return { pass: true };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2505,7 +2601,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
           return { pass: true };
         },
         designer: async () => ({ pass: true }),
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2552,7 +2647,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
         },
         techLeadReviewDiff: async () => ({ pass: true }),
         designer: async () => ({ pass: true }),
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2743,12 +2837,6 @@ describe('team-task-workflow — worktree coder self-review', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — round cap', () => {
-  function forbidPmWrapup(): TeamTaskDeps['pmWrapup'] {
-    return async () => {
-      throw new Error('PM wrap-up must not be consulted for per-task terminal handling');
-    };
-  }
-
   it('passes every open finding to the next coder round sorted by severity', async () => {
     type CoderInputWithLedger = {
       rejectionFeedback?: GateRejectionFeedback[];
@@ -2819,7 +2907,6 @@ describe('team-task-workflow — round cap', () => {
               }
             : { pass: true };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -2946,7 +3033,6 @@ describe('team-task-workflow — round cap', () => {
               }
             : { outcome: 'pass', findings: [], notes: 'designer verified prior findings' };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3080,7 +3166,6 @@ describe('team-task-workflow — round cap', () => {
             })),
           } as ReviewerVerdictWithVerification;
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3161,7 +3246,6 @@ describe('team-task-workflow — round cap', () => {
             notes: `review pass ${reviewerCalls} still sees the same auth timing finding`,
           };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3241,7 +3325,6 @@ describe('team-task-workflow — round cap', () => {
             })),
           } as ReviewerVerdictWithVerification;
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3348,7 +3431,6 @@ describe('team-task-workflow — round cap', () => {
               }
             : { outcome: 'pass', findings: [] };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3424,10 +3506,6 @@ describe('team-task-workflow — round cap', () => {
             outcome: 'pass-with-warnings',
             findings: [designerWarning],
           };
-        },
-        pmWrapup: async () => {
-          pmCalled = true;
-          return { resolved: true, rationale: 'PM must not be consulted for all-low exit.' };
         },
       }),
     );
@@ -3523,7 +3601,6 @@ describe('team-task-workflow — round cap', () => {
             ? { outcome: 'fail', findings: [firstRoundDesignerFinding] }
             : { outcome: 'pass', findings: [] };
         },
-        pmWrapup: forbidPmWrapup(),
       }),
     );
 
@@ -3559,10 +3636,6 @@ describe('team-task-workflow — round cap', () => {
             }
           : { outcome: 'pass', objections: [] };
       },
-      pmWrapup: async () => {
-        pmCalled = true;
-        return { resolved: true };
-      },
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
@@ -3596,10 +3669,6 @@ describe('team-task-workflow — round cap', () => {
         objections: [],
         notes: 'reviewer still sees the contract violation after retry',
       }),
-      pmWrapup: async () => {
-        pmCalled = true;
-        return { resolved: false };
-      },
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
@@ -3829,13 +3898,6 @@ describe('team-task-workflow — round cap', () => {
     let pmCalled = false;
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }), // non-objection fail
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
     });
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
     expect(pmCalled).toBe(false);
@@ -3851,13 +3913,6 @@ describe('team-task-workflow — round cap', () => {
         objections: [],
         notes: 'reviewer still wants the empty-state branch covered',
       }),
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
@@ -3883,13 +3938,6 @@ describe('team-task-workflow — round cap', () => {
         objections: [finding],
         notes: 'reviewer still wants the egress guard tightened',
       }),
-      pmWrapup: async () => {
-        pmCalled = true;
-        return {
-          resolved: true,
-          rationale: 'Legacy PM acceptance should not be consulted.',
-        };
-      },
     });
 
     const ev = await runTeamTaskWorkflow(
@@ -3933,7 +3981,6 @@ describe('team-task-workflow — round cap', () => {
         objections: [terminalFinding],
         notes: 'reviewer still wants the egress guard tightened',
       }),
-      pmWrapup: forbidPmWrapup(),
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
@@ -3985,13 +4032,6 @@ describe('team-task-workflow — round cap', () => {
             outcome: 'fail',
             findings: finding === undefined ? [] : [finding],
             notes: 'reviewer still sees high severity residue',
-          };
-        },
-        pmWrapup: async () => {
-          pmCalled = true;
-          return {
-            resolved: true,
-            rationale: 'PM must not be consulted for severity-loop terminal handling.',
           };
         },
       }),
@@ -4048,13 +4088,6 @@ describe('team-task-workflow — round cap', () => {
             outcome: finding?.severity === 'low' ? 'pass-with-warnings' : 'fail',
             findings: finding === undefined ? [] : [finding],
             notes: `round ${reviewerCalls} max severity is ${finding?.severity ?? 'none'}`,
-          };
-        },
-        pmWrapup: async () => {
-          pmCalled = true;
-          return {
-            resolved: true,
-            rationale: 'PM must not be consulted while a severity loop is converging.',
           };
         },
       }),
@@ -4145,13 +4178,6 @@ describe('team-task-workflow — round cap', () => {
             notes: `round ${reviewerCalls} still leaves above-low residue`,
           };
         },
-        pmWrapup: async () => {
-          pmCalled = true;
-          return {
-            resolved: true,
-            rationale: 'PM must not be consulted for hard-budget terminal handling.',
-          };
-        },
       }),
     );
 
@@ -4229,13 +4255,6 @@ describe('team-task-workflow — round cap', () => {
               notes: `round ${reviewerCalls} still leaves non-reversible ${severity} residue`,
             };
           },
-          pmWrapup: async () => {
-            pmCalled = true;
-            return {
-              resolved: true,
-              rationale: 'PM must not be consulted for non-reversible terminal residue.',
-            };
-          },
         }),
       );
 
@@ -4279,7 +4298,6 @@ describe('team-task-workflow — round cap', () => {
   it('a still-open terminal does not enter blocked-on-human or mention PM in the hold reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),
-      pmWrapup: forbidPmWrapup(),
     });
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
     expect(ev.rolesInvoked).not.toContain('pm');
@@ -4760,7 +4778,6 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true, rationale: 'Legacy PM acceptance should not be consulted.' }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -4806,7 +4823,6 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true, rationale: 'Legacy PM acceptance should not be consulted.' }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -4858,7 +4874,6 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true, rationale: 'Legacy PM acceptance should not be consulted.' }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -4899,10 +4914,6 @@ describe('team-task-workflow — execution observability', () => {
       reviewer: async () => ({
         pass: false,
         objections: [objection],
-      }),
-      pmWrapup: async () => ({
-        resolved: true,
-        rationale: 'PM keeps this high-severity finding in the convergence ledger.',
       }),
     });
 
