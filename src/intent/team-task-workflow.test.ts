@@ -786,6 +786,152 @@ describe('team-task-workflow — reviewer independence', () => {
 // Objection-class gate
 // ---------------------------------------------------------------------------
 
+// A blocking finding in a high-stakes class must carry the evidence its class
+// demands, or it stops blocking. The cheapest possible objection had exactly the
+// same stopping power as a rigorous one, which biased the whole loop toward
+// stalling (run 815bdec6: one unanchored sentence outvoted two grounded
+// approvals).
+describe('team-task-workflow — finding evidence contract', () => {
+  const unanchored: ObjectionFinding = {
+    class: 'concurrency',
+    severity: 'high',
+    location: '',
+    rationale: 'withLease releases on holder abort while work may still run, ' +
+      'allowing a later waiter into the same critical section',
+  };
+  const anchored: ObjectionFinding = {
+    ...unanchored,
+    location: 'src/lease.ts:42',
+  };
+
+  it('an unevidenced finding does not block, and is recorded as downgraded with its reason', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [unanchored] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.findings).toEqual([]);
+    expect(ev.findingsLedger).toEqual([]);
+    expect(ev.downgradedFindings).toHaveLength(1);
+    expect(ev.downgradedFindings?.[0]).toMatchObject({
+      sourceGate: 'reviewer',
+      round: 1,
+      gaps: ['location'],
+      rePrompted: false,
+    });
+    expect(ev.downgradedFindings?.[0]?.reason).toContain('concrete location');
+  });
+
+  it('the same finding WITH a location blocks exactly as before', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [anchored] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    }));
+
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.reviewerVerdict?.findings).toEqual([anchored]);
+    expect(ev.findingsLedger).toHaveLength(1);
+    expect(ev).not.toHaveProperty('downgradedFindings');
+  });
+
+  it('gives the role exactly one re-prompt, and honors evidence it supplies', async () => {
+    let rePrompts = 0;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [unanchored] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async ({ role, gaps }) => {
+        rePrompts += 1;
+        expect(role).toBe('reviewer');
+        expect(gaps).toHaveLength(1);
+        expect(gaps[0]?.ask).toContain('concrete location');
+        return [anchored];
+      },
+    }));
+
+    expect(rePrompts).toBe(1);
+    expect(ev.reviewerVerdict?.findings).toEqual([anchored]);
+    expect(ev).not.toHaveProperty('downgradedFindings');
+  });
+
+  it('downgrades when the re-prompt fails to supply the evidence', async () => {
+    let rePrompts = 0;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [unanchored] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async () => {
+        rePrompts += 1;
+        return [{ ...unanchored, location: 'various' }];
+      },
+    }));
+
+    expect(rePrompts).toBe(1);
+    expect(ev.downgradedFindings).toHaveLength(1);
+    expect(ev.downgradedFindings?.[0]?.rePrompted).toBe(true);
+  });
+
+  it('a re-prompt cannot raise severity — that would be a second bite at the gate', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [{ ...unanchored, severity: 'medium' }],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async () => [{ ...anchored, severity: 'critical' }],
+    }));
+
+    // The escalated replacement is refused, so the original medium finding is
+    // still the one held to the contract — and it still has no location.
+    expect(ev.downgradedFindings).toHaveLength(1);
+    expect(ev.downgradedFindings?.[0]?.finding.severity).toBe('medium');
+  });
+
+  it('never downgrades a finding backed by a reproducible failure', async () => {
+    const reproducible: ObjectionFinding = {
+      ...unanchored,
+      location: 'unknown',
+      rationale: 'src/lease.test.ts "releases once" fails against this diff',
+    };
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [reproducible] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async () => {
+        throw new Error('a reproducible failure must never be re-prompted');
+      },
+    }));
+
+    expect(ev.reviewerVerdict?.findings).toEqual([reproducible]);
+    expect(ev).not.toHaveProperty('downgradedFindings');
+  });
+
+  it('a re-prompt that throws does not fail the task', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [unanchored] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async () => {
+        throw new Error('provider down');
+      },
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.downgradedFindings).toHaveLength(1);
+  });
+
+  it('leaves a bare fail with no findings alone — that is ordinary disagreement', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [],
+        notes: 'the helper should be extracted before this lands',
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    }));
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev).not.toHaveProperty('downgradedFindings');
+  });
+});
+
 describe('team-task-workflow — objection gate', () => {
   const objection: ObjectionFinding = {
     class: 'security',

@@ -555,6 +555,30 @@ const PM_WRAPUP_INSTRUCTION = [
   '```',
 ].join('\n');
 
+const EVIDENCE_REPROMPT_INSTRUCTION = [
+  'You raised one or more BLOCKING findings that do not carry the evidence their',
+  'objection class requires. Supply that evidence now — this is your only',
+  'opportunity. A finding you cannot ground is downgraded to a non-blocking',
+  'observation and filed as a follow-up item; it will not block the task.',
+  '',
+  'For each finding below, return the SAME finding with the missing piece filled',
+  'in:',
+  '- location: the file (with extension) and, where you can, the line —',
+  '  `src/lease.ts:42`. Never "unknown", "various", or "multiple files".',
+  '- rationale: the concrete failure scenario. What sequence of events produces',
+  '  the wrong outcome, and what IS the wrong outcome? Not the name of the risk.',
+  '',
+  'This is not a second review. Do NOT add findings, do NOT raise a severity, and',
+  'do NOT re-argue a finding you cannot locate in the diff — withdraw it by',
+  'omitting it. If the evidence is not in the artifacts you were given, say so by',
+  'returning an empty findings array.',
+  '',
+  'Respond with EXACTLY ONE fenced ```finding-evidence block containing JSON:',
+  '```finding-evidence',
+  '{"findings": [{"class": "concurrency", "severity": "high", "location": "<file:line>", "rationale": "<concrete failure scenario>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}]}',
+  '```',
+].join('\n');
+
 const GATE_LESSON_DRAFT_INSTRUCTION = [
   'You are the rejecting product-team role. Draft ONE candidate craft lesson for',
   'the rejected counterpart role from the structured gate rejection below.',
@@ -2236,6 +2260,53 @@ export function buildProductionTeamTaskDeps(
       const body = [`## Task\n\n${task.text}`, '', `## Situation\n\n${reason}`].join('\n');
       const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body, task.id, 'pm-wrapup');
       return parsePmWrapup(reply);
+    },
+
+    // The role gets ONE bounded chance to ground its own blocking findings, on
+    // its own model, seeing only the findings it already raised. Never a second
+    // review: the parser drops anything whose class it did not already object
+    // to, and the workflow independently refuses a raised severity.
+    requestFindingEvidence: async ({ role, task, gaps, judgmentContext }) => {
+      const binding = bindingForRole(models, role);
+      if (binding === null) return [];
+      const raisedClasses = new Set(gaps.map(({ finding }) => finding.class));
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        ...(judgmentContext !== undefined
+          ? [
+              formatFullTaskReviewArtifact(
+                judgmentContext.diff,
+                judgmentContext.reviewState,
+                judgmentContext.artifactPass,
+              ),
+              '',
+            ]
+          : []),
+        '## Findings missing required evidence',
+        '',
+        ...gaps.flatMap(({ finding, ask }) => [
+          `- class: ${finding.class} · severity: ${finding.severity}`,
+          `  location: ${finding.location || '(none given)'}`,
+          `  rationale: ${finding.rationale}`,
+          `  you must supply: ${ask}`,
+        ]),
+      ].join('\n');
+      return judge(
+        role,
+        binding,
+        EVIDENCE_REPROMPT_INSTRUCTION,
+        body,
+        task.id,
+        `${role}-finding-evidence`,
+        undefined,
+        (reply) => {
+          const parsed = extractFencedJson(reply, 'finding-evidence');
+          if (!parsed || typeof parsed !== 'object') return [];
+          const { findings } = parseFindings(parsed as Record<string, unknown>);
+          return findings.filter((finding) => raisedClasses.has(finding.class));
+        },
+      );
     },
 
     onGateRejection: learnFromGateRejection,

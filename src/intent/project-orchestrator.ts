@@ -753,7 +753,10 @@ async function recordTerminalBugs(
   evidence: TaskEvidence,
   opts: { missingWriter: 'blocked' | 'ok' } = { missingWriter: 'blocked' },
 ): Promise<CheckpointResult> {
-  const entries = terminalBugEntries(deps.runId, evidence);
+  const entries = [
+    ...terminalBugEntries(deps.runId, evidence),
+    ...downgradedFindingEntries(deps.runId, evidence),
+  ];
   if (entries.length === 0) return { kind: 'ok' };
   if (deps.appendTerminalBugEntries === undefined) {
     if (opts.missingWriter === 'ok') return { kind: 'ok' };
@@ -799,6 +802,31 @@ function terminalBugEntries(
     });
   }
   return [...entriesById.values()];
+}
+
+/** Findings demoted by the evidence contract. They are FILED so the concern
+ *  survives closeout, but they are deliberately NOT part of
+ *  `terminalBugEntries` — that collector also drives the non-reversible-severe
+ *  run hold, and letting a downgraded finding hold the run would undo the
+ *  downgrade. The bullet carries the downgrade reason so a human triaging
+ *  bugs.md sees why it is a follow-up rather than a block. */
+function downgradedFindingEntries(
+  runId: string,
+  evidence: TaskEvidence,
+): OrchestrationTerminalBugEntry[] {
+  return (evidence.downgradedFindings ?? []).map((entry, index) => ({
+    runId,
+    taskId: evidence.taskId,
+    findingId: `downgraded-${entry.sourceGate}-r${entry.round}-${index + 1}`,
+    sourceGate: entry.sourceGate,
+    class: entry.finding.class,
+    severity: entry.finding.severity === 'low' ? 'medium' : entry.finding.severity,
+    location: entry.finding.location.trim() || 'unspecified',
+    rationale: `${entry.finding.rationale} [${entry.reason}]`,
+    // Never `false`: a false value here would make this entry indistinguishable
+    // from an irreversible blocking finding to any future consumer.
+    reversible: true,
+  }));
 }
 
 function hasNonReversibleSevereTerminalFinding(evidence: TaskEvidence): boolean {

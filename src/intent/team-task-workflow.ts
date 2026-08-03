@@ -40,6 +40,12 @@ import type {
   FullSuiteAttestation,
 } from './full-suite-attestation.js';
 import { isGitObjectId } from './git-object-id.js';
+import {
+  describeEvidenceGaps,
+  evidenceGapsForFinding,
+  findingSignature,
+  type EvidenceGap,
+} from './finding-evidence.js';
 export { isGitObjectId } from './git-object-id.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
@@ -152,6 +158,20 @@ export interface WorkflowGateVerdicts {
   reviewer?: GateVerdict;
   techLeadDiff?: GateVerdict;
   designer?: GateVerdict;
+}
+
+/** A blocking finding that failed its class evidence contract and was demoted to
+ *  a non-blocking observation. Recorded, and filed as a follow-up — never
+ *  silently dropped. */
+export interface DowngradedFinding {
+  finding: ObjectionFinding;
+  sourceGate: FindingSourceGate;
+  round: number;
+  gaps: EvidenceGap[];
+  /** Human-readable statement of what the role was asked for and did not supply. */
+  reason: string;
+  /** Whether the role was given its one bounded chance to supply the evidence. */
+  rePrompted: boolean;
 }
 
 export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer';
@@ -449,6 +469,19 @@ export interface TeamTaskDeps {
   acceptWithRationale?: (
     input: AcceptWithRationaleInput,
   ) => Promise<AcceptWithRationaleResult>;
+  /** One bounded chance for a role to supply the evidence its blocking finding
+   *  is missing, before the finding is downgraded to a non-blocking
+   *  observation. Called at most once per verdict per round, and only when a
+   *  finding fails its class evidence contract. Absent ⇒ no re-prompt; the
+   *  contract itself is enforced either way, so a fixture cannot smuggle an
+   *  unevidenced finding through by omitting this seam. */
+  requestFindingEvidence?: (input: {
+    role: FindingSourceGate;
+    task: SizedTask;
+    /** Only the findings that failed the contract, with what each is missing. */
+    gaps: Array<{ finding: ObjectionFinding; gaps: EvidenceGap[]; ask: string }>;
+    judgmentContext?: JudgmentContext;
+  }) => Promise<ObjectionFinding[]>;
   /** Optional gate-time learning hook. Awaited before a corrective retry so a
    *  written lesson can load into the counterpart role's next invocation. */
   onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
@@ -537,6 +570,10 @@ export interface TaskEvidence {
   /** Successful coder self-reviews, one per implementation round. Optional so
    * historical persisted records remain readable. */
   coderSelfReviews?: CoderSelfReviewRecord[];
+  /** Blocking findings demoted to non-blocking observations because they failed
+   *  their class evidence contract. Present only when at least one was
+   *  downgraded; each is filed as a follow-up at terminal. */
+  downgradedFindings?: DowngradedFinding[];
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
@@ -885,6 +922,9 @@ async function runGated(
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
+  // Accumulated across rounds: a finding downgraded in round 1 stays visible in
+  // the terminal record even if the role never raises it again.
+  const downgradedFindings: DowngradedFinding[] = [];
   const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
   let round = 0;
   let previousMaxOpenSeverity: ObjectionSeverity | undefined;
@@ -1219,6 +1259,33 @@ async function runGated(
       ? normalizeGateVerdict(designerSettled.value as GateReviewVerdict)
       : undefined;
 
+    // Evidence contract — between normalization and every consumer (ledger
+    // merge, gate evaluation, judgment outcomes, coder feedback), so an
+    // unevidenced blocking finding never reaches any of them. An operational
+    // reviewer failure is exempt: its findings are already fail-closed evidence
+    // of a malformed verdict, not an objection to weigh.
+    if (lastReviewer !== undefined && lastReviewer.operationalFailureReason === undefined) {
+      const contracted = await applyEvidenceContract(
+        deps, task, 'reviewer', lastReviewer, round, judgmentContext, downgradedFindings,
+      );
+      lastReviewer = {
+        ...lastReviewer,
+        outcome: contracted.outcome,
+        findings: contracted.findings,
+        objections: contracted.findings,
+      };
+    }
+    if (lastTechLeadDiff !== undefined) {
+      lastTechLeadDiff = await applyEvidenceContract(
+        deps, task, 'tech-lead', lastTechLeadDiff, round, judgmentContext, downgradedFindings,
+      );
+    }
+    if (lastDesigner !== undefined) {
+      lastDesigner = await applyEvidenceContract(
+        deps, task, 'designer', lastDesigner, round, judgmentContext, downgradedFindings,
+      );
+    }
+
     judgmentOutcomes.splice(0, judgmentOutcomes.length, ...judgmentCalls.map(({ role }, index) => {
       const result = settled[index]!;
       if (result.status === 'rejected') {
@@ -1371,6 +1438,7 @@ async function runGated(
         findingsLedger,
         loopExitReason: 'operational',
         objectionOpen: false,
+        downgradedFindings,
         noCodeTestRationale,
       });
     }
@@ -1397,6 +1465,7 @@ async function runGated(
         loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes,
+        ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
         ...(approvedReviewSurfaceHash !== undefined
           ? { reviewSurfaceHash: approvedReviewSurfaceHash }
           : {}),
@@ -1437,6 +1506,7 @@ async function runGated(
           loopExitReason: 'stagnation',
           objectionOpen: false,
           handoffNotes,
+          ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
           ...(approvedReviewSurfaceHash !== undefined
             ? { reviewSurfaceHash: approvedReviewSurfaceHash }
             : {}),
@@ -1477,6 +1547,7 @@ async function runGated(
         findingsLedger,
         loopExitReason: 'hard-budget',
         objectionOpen: false,
+        downgradedFindings,
         noCodeTestRationale,
       });
     }
@@ -1490,6 +1561,7 @@ async function runGated(
       loopExitReason: 'hard-budget',
       objectionOpen: false,
       handoffNotes,
+      ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
       ...(approvedReviewSurfaceHash !== undefined
         ? { reviewSurfaceHash: approvedReviewSurfaceHash }
         : {}),
@@ -1507,6 +1579,7 @@ async function runGated(
       gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
       findingsLedger,
       loopExitReason: 'hard-budget',
+      downgradedFindings,
       noCodeTestRationale,
     });
   }
@@ -1522,6 +1595,7 @@ async function runGated(
     gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
     findingsLedger,
     loopExitReason: 'hard-budget',
+    downgradedFindings,
     noCodeTestRationale,
   });
 }
@@ -1554,6 +1628,7 @@ function block(
     loopExitReason: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
+    downgradedFindings?: DowngradedFinding[];
   },
 ): TaskEvidence {
   return {
@@ -1570,6 +1645,9 @@ function block(
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
     findingsLedger: extra.findingsLedger,
     loopExitReason: extra.loopExitReason,
+    ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
+      ? { downgradedFindings: extra.downgradedFindings }
+      : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
@@ -1589,6 +1667,7 @@ function fail(
     loopExitReason: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
+    downgradedFindings?: DowngradedFinding[];
   },
 ): TaskEvidence {
   return {
@@ -1605,9 +1684,109 @@ function fail(
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
     findingsLedger: extra.findingsLedger,
     loopExitReason: extra.loopExitReason,
+    ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
+      ? { downgradedFindings: extra.downgradedFindings }
+      : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
+  };
+}
+
+/** Enforce the per-class evidence contract on one role's findings.
+ *
+ *  A blocking finding in a high-stakes class that carries neither a concrete
+ *  location nor a concrete failure scenario gets the role exactly ONE bounded
+ *  re-prompt to supply what is missing. What still fails afterwards is removed
+ *  from the verdict and recorded as downgraded, so the cheapest possible
+ *  objection stops having the same stopping power as a rigorous one.
+ *
+ *  The returned verdict's outcome is recomputed from the SURVIVING findings.
+ *  That is sound because a verdict carrying findings always derives its outcome
+ *  from them (both normalizers discard the role's own `outcome` field in that
+ *  case) — so if every finding is downgraded, the verdict had no other reason to
+ *  fail and becomes a pass.
+ *
+ *  A re-prompt that throws is swallowed: it is an evidence-gathering
+ *  convenience, and its failure must not convert a role verdict into a task
+ *  failure. The contract still applies to whatever the role originally said. */
+async function applyEvidenceContract(
+  deps: TeamTaskDeps,
+  task: SizedTask,
+  sourceGate: FindingSourceGate,
+  verdict: GateVerdict,
+  round: number,
+  judgmentContext: JudgmentContext | undefined,
+  downgraded: DowngradedFinding[],
+): Promise<GateVerdict> {
+  if (verdict.findings.length === 0) return verdict;
+
+  const gapsBySignature = new Map<string, EvidenceGap[]>();
+  for (const finding of verdict.findings) {
+    const gaps = evidenceGapsForFinding(finding);
+    if (gaps.length > 0) gapsBySignature.set(findingSignature(finding), gaps);
+  }
+  if (gapsBySignature.size === 0) return verdict;
+
+  let findings = verdict.findings;
+  let rePrompted = false;
+  if (deps.requestFindingEvidence !== undefined) {
+    rePrompted = true;
+    try {
+      const supplemented = await deps.requestFindingEvidence({
+        role: sourceGate,
+        task,
+        gaps: verdict.findings.flatMap((finding) => {
+          const gaps = gapsBySignature.get(findingSignature(finding));
+          return gaps === undefined
+            ? []
+            : [{ finding, gaps, ask: describeEvidenceGaps(gaps) }];
+        }),
+        ...(judgmentContext !== undefined ? { judgmentContext } : {}),
+      });
+      // A re-prompt may only strengthen the SAME objections; it can neither add
+      // new findings nor raise severity, or "supply evidence" would become a
+      // second bite at the gate.
+      if (supplemented.length > 0) {
+        findings = verdict.findings.map((original) => {
+          const replacement = supplemented.find(
+            (candidate) =>
+              candidate.class === original.class &&
+              severityRank[candidate.severity] <= severityRank[original.severity],
+          );
+          return replacement ?? original;
+        });
+      }
+    } catch {
+      /* Evidence gathering is best-effort; the contract below still applies. */
+    }
+  }
+
+  const surviving: ObjectionFinding[] = [];
+  for (const finding of findings) {
+    const gaps = evidenceGapsForFinding(finding);
+    if (gaps.length === 0) {
+      surviving.push(finding);
+      continue;
+    }
+    downgraded.push({
+      finding,
+      sourceGate,
+      round,
+      gaps,
+      reason: `downgraded to a non-blocking observation: a blocking ${finding.class} ` +
+        `finding requires ${describeEvidenceGaps(gaps)}`,
+      rePrompted,
+    });
+  }
+
+  if (surviving.length === findings.length) {
+    return { ...verdict, findings };
+  }
+  return {
+    ...verdict,
+    findings: surviving,
+    outcome: surviving.length > 0 ? outcomeForObjectionSeverities(surviving) : 'pass',
   };
 }
 
