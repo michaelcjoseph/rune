@@ -14,8 +14,8 @@
  *         → verdicts/findings merge in stable role order
  *         → open objection-class finding ⇒ hard block (PM can't clear it)
  *         → all gates green ⇒ ready-for-closeout
- *     → cap reached: return machine terminal evidence; never PM wrap-up /
- *       blocked-on-human from a per-task path
+ *     → cap reached: adjudicate an eligible reviewer/tech-lead split, or let
+ *       the PM settle an eligible findings-free disagreement with rationale
  *
  * It does NOT mark `tasks.md`, write `context.md`, or merge — Rune owns
  * closeout. Every role is an injected seam, so the whole flow runs on fixtures
@@ -40,8 +40,18 @@ import type {
   FullSuiteAttestation,
 } from './full-suite-attestation.js';
 import { isGitObjectId } from './git-object-id.js';
+import {
+  describeEvidenceGaps,
+  evidenceGapsForFinding,
+  findingSignature,
+  type EvidenceGap,
+} from './finding-evidence.js';
 export { isGitObjectId } from './git-object-id.js';
-import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -154,6 +164,60 @@ export interface WorkflowGateVerdicts {
   designer?: GateVerdict;
 }
 
+/** A tie-break ruling on a reviewer-vs-tech-lead split. Decisive for the round. */
+export interface AdjudicationRuling {
+  /** Which side of the split the artifacts support. */
+  upholds: 'pass' | 'fail';
+  /** Why, in the adjudicator's words. Required — an unexplained ruling is not
+   *  admissible and fails closed to the block. */
+  rationale: string;
+  /** Present when upholding a fail: the objection restated so the blocked task
+   *  and any later repair have an exact change target. */
+  finding?: ObjectionFinding;
+  /** Trusted executor identity attached by the production seam after parsing;
+   * never accepted from the model-authored adjudication JSON. */
+  execution?: {
+    modelAlias: string;
+    provider: DispatchProvider;
+  };
+}
+
+/** One recorded adjudication, kept on the task evidence so Cockpit inspection
+ *  can show who disagreed, what was ruled, and on which model. */
+export interface AdjudicationRecord {
+  round: number;
+  /** The role whose fail was in dispute, and the role that passed. */
+  dissentingRole: FindingSourceGate;
+  concurringRole: FindingSourceGate;
+  /** Stable identity of the disputed objection, used to detect a repeat. */
+  signature: string;
+  upheld: 'pass' | 'fail';
+  rationale: string;
+  /** True when this signature survived an earlier round and the alternate
+   *  binding was requested. `executedModelAlias` proves a call completed. */
+  escalated: boolean;
+  /** Trusted binding that produced the parsed ruling. Absent when no role was
+   *  wired, the executor threw, or on historical records. */
+  executedModelAlias?: string;
+  executedProvider?: DispatchProvider;
+  /** Set instead of a ruling when adjudication could not run or be trusted. */
+  failClosedReason?: string;
+}
+
+/** A blocking finding that failed its class evidence contract and was demoted to
+ *  a non-blocking observation. Recorded, and filed as a follow-up — never
+ *  silently dropped. */
+export interface DowngradedFinding {
+  finding: ObjectionFinding;
+  sourceGate: FindingSourceGate;
+  round: number;
+  gaps: EvidenceGap[];
+  /** Human-readable statement of what the role was asked for and did not supply. */
+  reason: string;
+  /** Whether the role was given its one bounded chance to supply the evidence. */
+  rePrompted: boolean;
+}
+
 export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer';
 export type FindingStatus = 'open' | 'resolved' | 'regressed';
 export type LoopExitReason = 'all-low' | 'stagnation' | 'hard-budget' | 'operational';
@@ -182,13 +246,21 @@ export interface PmAcceptance {
   actor: AcceptanceActor;
   decision: 'accepted-with-rationale';
   rationale: string;
+  /** Optional only for historical persisted records written before this field existed. */
+  dissentingRole?: FindingSourceGate;
+  /** The exact role verdict the PM overrode, not a reviewer-only proxy. */
+  overriddenVerdict?: GateVerdict;
 }
 
 export interface AcceptWithRationaleInput {
   task: SizedTask;
+  spec: string;
   reason: string;
-  reviewerVerdict: GateVerdict;
+  dissentingRole: FindingSourceGate;
+  dissentingVerdict: GateVerdict;
   rejectionFeedback: GateRejectionFeedback;
+  findingsLedger: FindingsLedgerEntry[];
+  judgmentContext?: JudgmentContext;
 }
 
 export interface AcceptWithRationaleResult {
@@ -327,7 +399,14 @@ export interface ReviewerInput {
   judgmentBatchId?: string;
 }
 
-export type JudgmentRole = 'qa' | 'reviewer' | 'tech-lead' | 'designer';
+/** The roles that judge the coder's diff. QA is deliberately absent: QA authors
+ *  the tests and stops when the coder starts. Its former `diff-revalidation`
+ *  stage read the same artifact the reviewer and tech lead read, returned a bare
+ *  boolean with no room for a file or a failing test name, and ran on the
+ *  coder's own provider family — the one gate that violated the distinct-provider
+ *  review rule. The test-integrity questions it nominally owned are now part of
+ *  the tech lead's diff review, which already reads the test files. */
+export type JudgmentRole = 'reviewer' | 'tech-lead' | 'designer';
 
 /** One immutable canonical snapshot shared by every eligible post-coder
  * judgment in a round. Role-specific legacy fields remain on each input for
@@ -404,17 +483,6 @@ export interface TeamTaskDeps {
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderSelfReviewResult>;
-  qaRevalidateDiff?: (input: {
-    task: SizedTask;
-    qa: QaResult;
-    diff: string;
-    spec: string;
-    context: string;
-    reviewState?: Omit<CanonicalReviewState, 'diff'>;
-    artifactPass?: 'first-pass' | 'coder-retry' | 'closeout-retry';
-    judgmentContext?: JudgmentContext;
-    judgmentBatchId?: string;
-  }) => Promise<{ approved: boolean; notes?: string }>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
     task: SizedTask;
@@ -442,17 +510,43 @@ export interface TeamTaskDeps {
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
   }) => Promise<GateReviewVerdict>;
-  pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
-    resolved: boolean;
-    rationale?: string;
-  }>;
-  /** Optional core override seam for tests/operator surfaces. A high/critical
-   *  reviewer block still gets the normal coder correction first; only a
-   *  surviving block reaches this seam, and acceptance requires a non-empty
-   *  rationale recorded in the evidence. */
+  /** Last-resort wrap-up call at the round cap, per `agents/pm/SOUL.md`. Only a
+   *  block that survived every coder round reaches this seam, and only when no
+   *  open finding is irreversible or at/above `PM_ACCEPTANCE_MAX_SEVERITY`.
+   *  Acceptance requires a non-empty rationale, which is recorded in the task
+   *  evidence and filed as a follow-up. Absent, throwing, or refusing all leave
+   *  the block exactly as it was. */
   acceptWithRationale?: (
     input: AcceptWithRationaleInput,
   ) => Promise<AcceptWithRationaleResult>;
+  /** One bounded chance for a role to supply the evidence its blocking finding
+   *  is missing, before the finding is downgraded to a non-blocking
+   *  observation. Called at most once per verdict per round, and only when a
+   *  finding fails its class evidence contract. Absent ⇒ no re-prompt; the
+   *  contract itself is enforced either way, so a fixture cannot smuggle an
+   *  unevidenced finding through by omitting this seam. */
+  requestFindingEvidence?: (input: {
+    role: FindingSourceGate;
+    task: SizedTask;
+    /** Only the findings that failed the contract, with what each is missing. */
+    gaps: Array<{ finding: ObjectionFinding; gaps: EvidenceGap[]; ask: string }>;
+    judgmentContext?: JudgmentContext;
+  }) => Promise<ObjectionFinding[]>;
+  /** Break a reviewer-vs-tech-lead split that would otherwise end the task.
+   *  Receives the diff, spec, tests, and both verdict texts — never the coder's
+   *  reasoning or prior-round scratch context. Absent, throwing, or returning an
+   *  unusable ruling all fail CLOSED to today's blocking behavior. */
+  adjudicateSplit?: (input: {
+    task: SizedTask;
+    dissentingRole: FindingSourceGate;
+    concurringRole: FindingSourceGate;
+    dissentingVerdict: GateVerdict;
+    concurringVerdict: GateVerdict;
+    /** True when this same objection survived an earlier round of this task —
+     *  the caller escalates to the separately declared model. */
+    escalate: boolean;
+    judgmentContext?: JudgmentContext;
+  }) => Promise<AdjudicationRuling>;
   /** Optional gate-time learning hook. Awaited before a corrective retry so a
    *  written lesson can load into the counterpart role's next invocation. */
   onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
@@ -541,6 +635,12 @@ export interface TaskEvidence {
   /** Successful coder self-reviews, one per implementation round. Optional so
    * historical persisted records remain readable. */
   coderSelfReviews?: CoderSelfReviewRecord[];
+  /** Blocking findings demoted to non-blocking observations because they failed
+   *  their class evidence contract. Present only when at least one was
+   *  downgraded; each is filed as a follow-up at terminal. */
+  downgradedFindings?: DowngradedFinding[];
+  /** Tie-break rulings on reviewer-vs-tech-lead splits, in round order. */
+  adjudications?: AdjudicationRecord[];
   /** Structured role-gate feedback for corrective retries / learning. */
   rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
@@ -888,8 +988,15 @@ async function runGated(
   let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
-  let lastQaDiffReview: { approved: boolean; notes?: string } | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
+  let lastJudgmentContext: JudgmentContext | undefined;
+  // Accumulated across rounds: a finding downgraded in round 1 stays visible in
+  // the terminal record even if the role never raises it again.
+  const downgradedFindings: DowngradedFinding[] = [];
+  const adjudications: AdjudicationRecord[] = [];
+  /** Disputed-objection signatures seen in an earlier round. A repeat means the
+   *  coder round did not settle it, so the ruling escalates. */
+  const seenSplitSignatures = new Set<string>();
   const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
   let round = 0;
   let previousMaxOpenSeverity: ObjectionSeverity | undefined;
@@ -1020,12 +1127,12 @@ async function runGated(
       coderHandoffNotes: Object.freeze([...canonicalCoder.handoffNotes]),
       artifactPass,
     });
+    lastJudgmentContext = judgmentContext;
     const judgmentBatchId = randomUUID();
 
     // Publish starts in canonical order before invoking any role. Completion
     // order is deliberately invisible; verdict processing below uses this same
     // order after every child has settled.
-    emitRoleStage(input, 'qa', 'diff-revalidation');
     roles.add('reviewer');
     previousRole = emitRoleTransition(
       input,
@@ -1075,20 +1182,6 @@ async function runGated(
       role: JudgmentRole;
       promise: Promise<unknown>;
     }> = [
-      {
-        role: 'qa',
-        promise: startJudgment(() => revalidateQaDiff(deps, {
-          task,
-          qa,
-          diff: judgmentContext.diff,
-          spec: judgmentContext.spec,
-          context: judgmentContext.projectContext,
-          reviewState: judgmentContext.reviewState,
-          artifactPass: judgmentContext.artifactPass,
-          judgmentContext,
-          judgmentBatchId,
-        })),
-      },
       {
         role: 'reviewer',
         promise: startJudgment(() => deps.reviewer({
@@ -1223,14 +1316,9 @@ async function runGated(
       rejected.find(({ reason }) => !(reason instanceof RoleCancellationError)) ??
       rejected[0];
 
-    const qaSettled = settledByRole.get('qa');
     const reviewerSettled = settledByRole.get('reviewer');
     const techLeadSettled = settledByRole.get('tech-lead');
     const designerSettled = settledByRole.get('designer');
-    const qaDiffReview = qaSettled?.status === 'fulfilled'
-      ? qaSettled.value as Awaited<ReturnType<typeof revalidateQaDiff>>
-      : undefined;
-    lastQaDiffReview = qaDiffReview;
     const rawReviewerVerdict = reviewerSettled?.status === 'fulfilled'
       ? reviewerSettled.value as ReviewerVerdict
       : undefined;
@@ -1244,6 +1332,33 @@ async function runGated(
       ? normalizeGateVerdict(designerSettled.value as GateReviewVerdict)
       : undefined;
 
+    // Evidence contract — between normalization and every consumer (ledger
+    // merge, gate evaluation, judgment outcomes, coder feedback), so an
+    // unevidenced blocking finding never reaches any of them. An operational
+    // reviewer failure is exempt: its findings are already fail-closed evidence
+    // of a malformed verdict, not an objection to weigh.
+    if (lastReviewer !== undefined && lastReviewer.operationalFailureReason === undefined) {
+      const contracted = await applyEvidenceContract(
+        deps, task, 'reviewer', lastReviewer, round, judgmentContext, downgradedFindings,
+      );
+      lastReviewer = {
+        ...lastReviewer,
+        outcome: contracted.outcome,
+        findings: contracted.findings,
+        objections: contracted.findings,
+      };
+    }
+    if (lastTechLeadDiff !== undefined) {
+      lastTechLeadDiff = await applyEvidenceContract(
+        deps, task, 'tech-lead', lastTechLeadDiff, round, judgmentContext, downgradedFindings,
+      );
+    }
+    if (lastDesigner !== undefined) {
+      lastDesigner = await applyEvidenceContract(
+        deps, task, 'designer', lastDesigner, round, judgmentContext, downgradedFindings,
+      );
+    }
+
     judgmentOutcomes.splice(0, judgmentOutcomes.length, ...judgmentCalls.map(({ role }, index) => {
       const result = settled[index]!;
       if (result.status === 'rejected') {
@@ -1252,14 +1367,6 @@ async function runGated(
           role,
           status: cancelled ? 'cancelled' : 'failed',
           summary: boundedJudgmentSummary((result.reason as Error).message),
-        } satisfies JudgmentOutcomeEvidence;
-      }
-      if (role === 'qa') {
-        const verdict = result.value as { approved: boolean; notes?: string };
-        return {
-          role,
-          status: verdict.approved ? 'pass' : 'reject',
-          ...(verdict.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
         } satisfies JudgmentOutcomeEvidence;
       }
       const verdict = role === 'reviewer'
@@ -1283,29 +1390,6 @@ async function runGated(
 
     // Consume completed results before surfacing the stable primary operational
     // failure so bounded sibling outcomes and findings remain durable.
-    if (qaDiffReview !== undefined) {
-      emitRoleVerdict(input, {
-        role: 'qa',
-        gate: 'implementation-diff',
-        verdict: qaDiffReview.approved ? 'pass' : 'fail',
-        summary: qaDiffReview.notes?.trim() || (qaDiffReview.approved
-          ? 'QA approved the canonical implementation diff'
-          : 'QA test intent no longer matches the canonical implementation diff'),
-      });
-      if (!qaDiffReview.approved) {
-        const feedback = buildGateRejectionFeedback({
-          rejectingRole: 'qa',
-          counterpartRole: 'coder',
-          artifact: 'implementation-diff',
-          reason: qaDiffReview.notes?.trim() ||
-            'QA test intent no longer matches the canonical implementation diff',
-        });
-        await recordGateRejection(deps, feedback);
-        emitGateRejection(input, feedback);
-        lastRejectionFeedback = feedback;
-        roundFeedback.push(feedback);
-      }
-    }
     let reviewerOperationalFeedback: GateRejectionFeedback | undefined;
     if (lastReviewer !== undefined) {
       mergeFindingsIntoLedger(
@@ -1427,12 +1511,13 @@ async function runGated(
         findingsLedger,
         loopExitReason: 'operational',
         objectionOpen: false,
+        downgradedFindings,
+        adjudications,
         noCodeTestRationale,
       });
     }
 
     if (
-      qaDiffReview?.approved === true &&
       lastReviewer !== undefined &&
       isReviewerPass(lastReviewer) &&
       isGatePass(lastTechLeadDiff) &&
@@ -1454,11 +1539,255 @@ async function runGated(
         loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes,
+        ...(adjudications.length > 0 ? { adjudications } : {}),
+        ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
         ...(approvedReviewSurfaceHash !== undefined
           ? { reviewSurfaceHash: approvedReviewSurfaceHash }
           : {}),
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
       };
+    }
+
+    const lastRound = round >= configuredRoundBudget;
+
+    // A required designer verdict is never a tie to delegate. At the terminal
+    // round it remains a direct blocking gate, regardless of severity-loop or
+    // adjudication escape hatches.
+    if (lastRound && task.designerNeeded && !isGatePass(lastDesigner)) {
+      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+      return block(task, roles, handoffNotes, {
+        blockedReason: 'designer review failed at the round cap',
+        ...(lastRejectionFeedback !== undefined
+          ? { rejectionFeedback: lastRejectionFeedback }
+          : {}),
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        findingsLedger,
+        loopExitReason: 'hard-budget',
+        downgradedFindings,
+        adjudications,
+        noCodeTestRationale,
+      });
+    }
+
+    // Split adjudication. The contract is specifically reviewer-vs-tech-lead;
+    // designer is an independent required gate and never enters this pairing.
+    // disagreement is modeled as failure and nothing ever compares the two
+    // arguments — the run parks and waits for a human. One tie-breaker with
+    // fresh context resolves it.
+    //
+    // NOT every split: a round-1 finding the coder can simply fix should not
+    // cost an adjudication. This fires only when the split would otherwise end
+    // the task — the disputed objection already survived a coder retry, or the
+    // round cap is next.
+    const split = detectSplit(lastReviewer, lastTechLeadDiff);
+    if (split !== undefined) {
+      const dissenting = split.dissentingVerdict;
+      const concurring = split.concurringVerdict;
+      const signature = splitSignature(dissenting);
+      const repeat = seenSplitSignatures.has(signature);
+      seenSplitSignatures.add(signature);
+
+      if (repeat || lastRound) {
+        const humanBlocker = deps.adjudicateSplit === undefined
+          ? undefined
+          : adjudicationLedgerHumanBlocker(
+              findingsLedger,
+              explicitNonReversibleFindingIds,
+            ) ?? adjudicationHumanBlocker(dissenting);
+        if (humanBlocker !== undefined) {
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          return block(task, roles, handoffNotes, {
+            blockedReason: humanBlocker,
+            ...(lastRejectionFeedback !== undefined
+              ? { rejectionFeedback: lastRejectionFeedback }
+              : {}),
+            reviewerVerdict: lastReviewer,
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            findingsLedger,
+            loopExitReason: 'hard-budget',
+            downgradedFindings,
+            adjudications,
+            noCodeTestRationale,
+          });
+        }
+        if (deps.adjudicateSplit !== undefined) {
+          roles.add('adjudicator');
+          emitRoleStage(input, 'adjudicator', 'split-adjudication', {
+            adjudicatorBinding: repeat ? 'escalation' : 'base',
+          });
+        }
+        let ruling: AdjudicationRuling | undefined;
+        let failClosedReason: string | undefined;
+        try {
+          ruling = await deps.adjudicateSplit?.({
+            task,
+            dissentingRole: split.dissentingRole,
+            concurringRole: split.concurringRole,
+            dissentingVerdict: toPublicGateVerdict(dissenting),
+            concurringVerdict: toPublicGateVerdict(concurring),
+            escalate: repeat,
+            judgmentContext,
+          });
+          if (deps.adjudicateSplit === undefined) {
+            failClosedReason = 'no adjudicator is wired';
+          }
+        } catch (err) {
+          failClosedReason = `adjudicator failed: ${(err as Error).message}`;
+        }
+        failClosedReason ??= rulingFailure(ruling);
+
+        adjudications.push({
+          round,
+          dissentingRole: split.dissentingRole,
+          concurringRole: split.concurringRole,
+          signature,
+          upheld: failClosedReason === undefined ? ruling!.upholds : 'fail',
+          rationale: failClosedReason === undefined ? ruling!.rationale : '',
+          escalated: repeat,
+          ...(ruling?.execution !== undefined
+            ? {
+                executedModelAlias: ruling.execution.modelAlias,
+                executedProvider: ruling.execution.provider,
+              }
+            : {}),
+          ...(failClosedReason !== undefined ? { failClosedReason } : {}),
+        });
+        if (deps.adjudicateSplit !== undefined) {
+          emitRoleVerdict(input, {
+            role: 'adjudicator',
+            gate: 'implementation-diff',
+            verdict: failClosedReason === undefined && ruling!.upholds === 'pass' ? 'pass' : 'fail',
+            summary: failClosedReason ??
+              `upheld the ${ruling!.upholds} of ${
+                ruling!.upholds === 'fail' ? split.dissentingRole : split.concurringRole
+              }: ${ruling!.rationale}`,
+            adjudicatorBinding: repeat ? 'escalation' : 'base',
+          });
+        }
+
+        // A ruling for the pass is decisive for the round: the task closes out,
+        // and the dissent becomes a follow-up rather than vanishing. Anything
+        // else — an upheld fail, or any fail-closed reason — leaves the block
+        // exactly where it was.
+        if (failClosedReason === undefined && ruling!.upholds === 'pass') {
+          const protectedFinding = adjudicationLedgerHumanBlocker(
+            findingsLedger,
+            explicitNonReversibleFindingIds,
+          );
+          if (protectedFinding !== undefined) {
+            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+            return block(task, roles, handoffNotes, {
+              blockedReason: protectedFinding,
+              ...(lastRejectionFeedback !== undefined
+                ? { rejectionFeedback: lastRejectionFeedback }
+                : {}),
+              reviewerVerdict: lastReviewer,
+              gateVerdicts: buildWorkflowGateVerdicts(
+                lastReviewer,
+                lastTechLeadDiff,
+                lastDesigner,
+              ),
+              findingsLedger,
+              loopExitReason: 'hard-budget',
+              objectionOpen: true,
+              downgradedFindings,
+              adjudications,
+              noCodeTestRationale,
+            });
+          }
+          for (const finding of dissenting.findings) {
+            downgradedFindings.push({
+              finding,
+              sourceGate: split.dissentingRole,
+              round,
+              gaps: [],
+              reason: `adjudicator upheld ${split.concurringRole}'s pass over ` +
+                `${split.dissentingRole}'s fail: ${ruling!.rationale}`,
+              rePrompted: false,
+            });
+          }
+          resolveAdjudicatedFindings(
+            findingsLedger,
+            split.dissentingRole,
+            dissenting.findings,
+          );
+          const remainingBlockingFinding = openFindingsLedger(findingsLedger).find(
+            (entry) => severityRank[entry.severity] > severityRank.low,
+          );
+          if (remainingBlockingFinding !== undefined) {
+            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+            return block(task, roles, handoffNotes, {
+              blockedReason: 'adjudicator settled the current split, but another blocking ' +
+                `${remainingBlockingFinding.class} finding remains open at ` +
+                remainingBlockingFinding.location,
+              ...(lastRejectionFeedback !== undefined
+                ? { rejectionFeedback: lastRejectionFeedback }
+                : {}),
+              reviewerVerdict: lastReviewer,
+              gateVerdicts: buildWorkflowGateVerdicts(
+                lastReviewer,
+                lastTechLeadDiff,
+                lastDesigner,
+              ),
+              findingsLedger,
+              loopExitReason: 'hard-budget',
+              objectionOpen: true,
+              downgradedFindings,
+              adjudications,
+              noCodeTestRationale,
+            });
+          }
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          return {
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: roles.list(),
+            reviewerVerdict: lastReviewer,
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            findingsLedger,
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes,
+            adjudications,
+            ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
+            ...(approvedReviewSurfaceHash !== undefined
+              ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+              : {}),
+            ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+          };
+        }
+        // Safe to merge unreviewed: `rulingFailure` already held this finding to
+        // its class evidence contract, so a `failClosedReason` of undefined
+        // means it carries a location and a failure scenario.
+        if (failClosedReason === undefined && ruling!.finding !== undefined) {
+          mergeFindingsIntoLedger(
+            findingsLedger,
+            explicitNonReversibleFindingIds,
+            split.dissentingRole,
+            [ruling!.finding],
+            round,
+          );
+        }
+        if (deps.adjudicateSplit !== undefined) {
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          return block(task, roles, handoffNotes, {
+            blockedReason: failClosedReason ??
+              `adjudicator upheld ${split.dissentingRole}'s fail: ${ruling!.rationale}`,
+            ...(lastRejectionFeedback !== undefined
+              ? { rejectionFeedback: lastRejectionFeedback }
+              : {}),
+            reviewerVerdict: lastReviewer,
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            findingsLedger,
+            loopExitReason: 'hard-budget',
+            objectionOpen: false,
+            downgradedFindings,
+            adjudications,
+            noCodeTestRationale,
+          });
+        }
+      }
     }
 
     const maxOpenSeverity = maxOpenFindingSeverity(findingsLedger);
@@ -1478,7 +1807,6 @@ async function runGated(
       }
       if (
         flatMaxOpenSeverityRounds >= 3 &&
-        qaDiffReview?.approved === true &&
         firstNonReversibleHighSeverityFinding(
           findingsLedger,
           explicitNonReversibleFindingIds,
@@ -1495,6 +1823,8 @@ async function runGated(
           loopExitReason: 'stagnation',
           objectionOpen: false,
           handoffNotes,
+          ...(adjudications.length > 0 ? { adjudications } : {}),
+          ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
           ...(approvedReviewSurfaceHash !== undefined
             ? { reviewSurfaceHash: approvedReviewSurfaceHash }
             : {}),
@@ -1519,7 +1849,6 @@ async function runGated(
   // structured verdicts/feedback, but do not route to PM wrap-up or a human
   // blocked state.
   if (
-    lastQaDiffReview?.approved === true &&
     hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner) &&
     maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
@@ -1536,6 +1865,8 @@ async function runGated(
         findingsLedger,
         loopExitReason: 'hard-budget',
         objectionOpen: false,
+        downgradedFindings,
+        adjudications,
         noCodeTestRationale,
       });
     }
@@ -1549,6 +1880,8 @@ async function runGated(
       loopExitReason: 'hard-budget',
       objectionOpen: false,
       handoffNotes,
+      ...(adjudications.length > 0 ? { adjudications } : {}),
+      ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
       ...(approvedReviewSurfaceHash !== undefined
         ? { reviewSurfaceHash: approvedReviewSurfaceHash }
         : {}),
@@ -1556,18 +1889,103 @@ async function runGated(
     };
   }
 
-  if (task.designerNeeded && !isGatePass(lastDesigner)) {
-    return block(task, roles, handoffNotes, {
-      blockedReason: 'designer review failed at the round cap',
-      ...(lastRejectionFeedback !== undefined
-        ? { rejectionFeedback: lastRejectionFeedback }
-        : {}),
-      reviewerVerdict: lastReviewer,
-      gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
-      findingsLedger,
-      loopExitReason: 'hard-budget',
-      noCodeTestRationale,
+  // Last resort before a human: non-objection disagreement at the cap is
+  // exactly what `agents/pm/SOUL.md` already claims the PM owns — "Wrap up at
+  // the cap. When a task exhausts its retry budget on non-objection
+  // disagreement, you make the wrap-up call." Until now the charter promised
+  // something no code path ever invoked, and every surviving block parked.
+  //
+  // The PM's authority stops where the charter says it stops: a non-reversible
+  // or at/above-threshold finding is not the PM's to clear, and acceptance
+  // requires a rationale. Both refusals leave the block untouched.
+  const acceptanceBlocker = pmAcceptanceBlocker(
+    findingsLedger,
+    explicitNonReversibleFindingIds,
+  );
+  if (deps.acceptWithRationale !== undefined && acceptanceBlocker === undefined) {
+    roles.add('pm');
+    emitRoleStage(input, 'pm', 'cap-acceptance');
+    let acceptance: AcceptWithRationaleResult | undefined;
+    const rejectionFeedback = lastRejectionFeedback ?? buildGateRejectionFeedback({
+      rejectingRole: 'reviewer',
+      counterpartRole: 'coder',
+      artifact: 'implementation-diff',
+      reason: 'round cap reached with unresolved task feedback',
     });
+    const dissentingRole = isFindingSourceGate(rejectionFeedback.rejectingRole)
+      ? rejectionFeedback.rejectingRole
+      : 'reviewer';
+    const dissentingVerdict = verdictForGate(
+      dissentingRole,
+      lastReviewer,
+      lastTechLeadDiff,
+      lastDesigner,
+    ) ?? { outcome: 'fail', findings: [] };
+    try {
+      acceptance = await deps.acceptWithRationale({
+        task,
+        spec: input.spec,
+        reason: lastRejectionFeedback?.whatFailed ??
+          'round cap reached with unresolved task feedback',
+        dissentingRole,
+        dissentingVerdict: toPublicGateVerdict(dissentingVerdict),
+        rejectionFeedback,
+        findingsLedger: findingsLedger.map((finding) => ({ ...finding })),
+        ...(lastJudgmentContext !== undefined
+          ? { judgmentContext: lastJudgmentContext }
+          : {}),
+      });
+    } catch {
+      /* Acceptance is an escape hatch; its failure must leave the block intact. */
+    }
+    const rationale = acceptance?.rationale?.trim() ?? '';
+    if (acceptance?.accepted === true && rationale !== '') {
+      const record: PmAcceptance = {
+        actor: acceptance.actor,
+        decision: 'accepted-with-rationale',
+        rationale,
+        dissentingRole,
+        overriddenVerdict: toPublicGateVerdict(dissentingVerdict),
+      };
+      // The overridden dissent is filed, never dropped: it leaves as a
+      // follow-up so the concern survives closeout.
+      for (const finding of openFindingsLedger(findingsLedger)) {
+        downgradedFindings.push({
+          finding,
+          sourceGate: finding.sourceGate,
+          round,
+          gaps: [],
+          reason: `${record.actor} accepted over ${finding.sourceGate}'s dissent: ${rationale}`,
+          rePrompted: false,
+        });
+      }
+      emitRoleVerdict(input, {
+        role: 'pm',
+        gate: 'implementation-diff',
+        verdict: 'pass',
+        summary: `accepted over dissent: ${rationale}`,
+      });
+      emitPmAcceptance(input, task, record, rejectionFeedback);
+      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+      return {
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: roles.list(),
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        findingsLedger,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes,
+        acceptance: record,
+        ...(adjudications.length > 0 ? { adjudications } : {}),
+        ...(downgradedFindings.length > 0 ? { downgradedFindings } : {}),
+        ...(approvedReviewSurfaceHash !== undefined
+          ? { reviewSurfaceHash: approvedReviewSurfaceHash }
+          : {}),
+        ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+      };
+    }
   }
 
   return block(task, roles, handoffNotes, {
@@ -1581,6 +1999,8 @@ async function runGated(
     gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
     findingsLedger,
     loopExitReason: 'hard-budget',
+    downgradedFindings,
+    adjudications,
     noCodeTestRationale,
   });
 }
@@ -1613,6 +2033,8 @@ function block(
     loopExitReason: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
+    downgradedFindings?: DowngradedFinding[];
+    adjudications?: AdjudicationRecord[];
   },
 ): TaskEvidence {
   return {
@@ -1629,6 +2051,12 @@ function block(
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
     findingsLedger: extra.findingsLedger,
     loopExitReason: extra.loopExitReason,
+    ...(extra.adjudications !== undefined && extra.adjudications.length > 0
+      ? { adjudications: extra.adjudications }
+      : {}),
+    ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
+      ? { downgradedFindings: extra.downgradedFindings }
+      : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
@@ -1648,6 +2076,8 @@ function fail(
     loopExitReason: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
+    downgradedFindings?: DowngradedFinding[];
+    adjudications?: AdjudicationRecord[];
   },
 ): TaskEvidence {
   return {
@@ -1664,20 +2094,264 @@ function fail(
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
     findingsLedger: extra.findingsLedger,
     loopExitReason: extra.loopExitReason,
+    ...(extra.adjudications !== undefined && extra.adjudications.length > 0
+      ? { adjudications: extra.adjudications }
+      : {}),
+    ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
+      ? { downgradedFindings: extra.downgradedFindings }
+      : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
   };
 }
 
-async function revalidateQaDiff(
+/** Enforce the per-class evidence contract on one role's findings.
+ *
+ *  A blocking finding in a high-stakes class that carries neither a concrete
+ *  location nor a concrete failure scenario gets the role exactly ONE bounded
+ *  re-prompt to supply what is missing. What still fails afterwards is removed
+ *  from the verdict and recorded as downgraded, so the cheapest possible
+ *  objection stops having the same stopping power as a rigorous one.
+ *
+ *  The returned verdict's outcome is recomputed from the SURVIVING findings.
+ *  That is sound because a verdict carrying findings always derives its outcome
+ *  from them (both normalizers discard the role's own `outcome` field in that
+ *  case) — so if every finding is downgraded, the verdict had no other reason to
+ *  fail and becomes a pass.
+ *
+ *  A re-prompt that throws is swallowed: it is an evidence-gathering
+ *  convenience, and its failure must not convert a role verdict into a task
+ *  failure. The contract still applies to whatever the role originally said. */
+async function applyEvidenceContract(
   deps: TeamTaskDeps,
-  input: Parameters<NonNullable<TeamTaskDeps['qaRevalidateDiff']>>[0],
-): Promise<{ approved: boolean; notes?: string }> {
-  if (deps.qaRevalidateDiff === undefined) {
-    return { approved: true };
+  task: SizedTask,
+  sourceGate: FindingSourceGate,
+  verdict: GateVerdict,
+  round: number,
+  judgmentContext: JudgmentContext | undefined,
+  downgraded: DowngradedFinding[],
+): Promise<GateVerdict> {
+  if (verdict.findings.length === 0) return verdict;
+
+  const gapsBySignature = new Map<string, EvidenceGap[]>();
+  for (const finding of verdict.findings) {
+    const gaps = evidenceGapsForFinding(finding);
+    if (gaps.length > 0) gapsBySignature.set(findingSignature(finding), gaps);
   }
-  return deps.qaRevalidateDiff(input);
+  if (gapsBySignature.size === 0) return verdict;
+
+  let findings = verdict.findings;
+  let rePrompted = false;
+  if (deps.requestFindingEvidence !== undefined) {
+    rePrompted = true;
+    try {
+      const supplemented = await deps.requestFindingEvidence({
+        role: sourceGate,
+        task,
+        gaps: verdict.findings.flatMap((finding) => {
+          const gaps = gapsBySignature.get(findingSignature(finding));
+          return gaps === undefined
+            ? []
+            : [{ finding, gaps, ask: describeEvidenceGaps(gaps) }];
+        }),
+        ...(judgmentContext !== undefined ? { judgmentContext } : {}),
+      });
+      // A re-prompt may only strengthen the SAME objections; it can neither add
+      // new findings nor raise severity, or "supply evidence" would become a
+      // second bite at the gate.
+      if (supplemented.length > 0) {
+        const usedSupplements = new Set<number>();
+        findings = verdict.findings.map((original) => {
+          const originalGaps = gapsBySignature.get(findingSignature(original));
+          if (originalGaps === undefined) return original;
+          const replacementIndex = supplemented.findIndex(
+            (candidate, index) =>
+              !usedSupplements.has(index) &&
+              candidate.class === original.class &&
+              candidate.severity === original.severity &&
+              (originalGaps.includes('location') || candidate.location === original.location) &&
+              (originalGaps.includes('failure-scenario') || candidate.rationale === original.rationale),
+          );
+          if (replacementIndex < 0) return original;
+          usedSupplements.add(replacementIndex);
+          return supplemented[replacementIndex]!;
+        });
+      }
+    } catch {
+      /* Evidence gathering is best-effort; the contract below still applies. */
+    }
+  }
+
+  const surviving: ObjectionFinding[] = [];
+  for (const finding of findings) {
+    const gaps = evidenceGapsForFinding(finding);
+    if (gaps.length === 0) {
+      surviving.push(finding);
+      continue;
+    }
+    downgraded.push({
+      finding,
+      sourceGate,
+      round,
+      gaps,
+      reason: `downgraded to a non-blocking observation: a blocking ${finding.class} ` +
+        `finding requires ${describeEvidenceGaps(gaps)}`,
+      rePrompted,
+    });
+  }
+
+  if (surviving.length === findings.length) {
+    return { ...verdict, findings };
+  }
+  return {
+    ...verdict,
+    findings: surviving,
+    outcome: surviving.length > 0 ? outcomeForObjectionSeverities(surviving) : 'pass',
+  };
+}
+
+/** Severity at or above which a finding is never the PM's to accept. Sits beside
+ *  `SEVERITY_LOOP_HARD_BUDGET` because both bound the same escape hatch: how far
+ *  the machine may go before a human is required. */
+export const PM_ACCEPTANCE_MAX_SEVERITY: ObjectionSeverity = 'medium';
+
+/** Why the PM may NOT accept, or undefined when acceptance is permitted. Mirrors
+ *  `agents/pm/SOUL.md`: the PM's authority does not extend to clearing
+ *  objection-class findings, and irreversibility is never negotiable. */
+function pmAcceptanceBlocker(
+  ledger: FindingsLedgerEntry[],
+  explicitNonReversibleFindingIds: Set<string>,
+): string | undefined {
+  for (const entry of openFindingsLedger(ledger)) {
+    if (
+      entry.reversible === false ||
+      explicitNonReversibleFindingIds.has(entry.id)
+    ) {
+      return `non-reversible ${entry.class} finding at ${entry.location}`;
+    }
+    if (severityRank[entry.severity] >= severityRank[PM_ACCEPTANCE_MAX_SEVERITY]) {
+      return `${entry.severity} ${entry.class} finding at ${entry.location}`;
+    }
+  }
+  return undefined;
+}
+
+/** The gate is unanimous-AND, so a disagreement is modeled as failure and the
+ *  run parks with nobody having compared the arguments. This detects the split:
+ *  at least one dispatched role failed and at least one passed. */
+function detectSplit(
+  reviewer: GateVerdict | undefined,
+  techLead: GateVerdict | undefined,
+): {
+  dissentingRole: Extract<FindingSourceGate, 'reviewer' | 'tech-lead'>;
+  concurringRole: Extract<FindingSourceGate, 'reviewer' | 'tech-lead'>;
+  dissentingVerdict: GateVerdict;
+  concurringVerdict: GateVerdict;
+} | undefined {
+  if (reviewer === undefined || techLead === undefined) return undefined;
+  const reviewerPasses = isGatePass(reviewer);
+  const techLeadPasses = isGatePass(techLead);
+  if (reviewerPasses === techLeadPasses) return undefined;
+  return reviewerPasses
+    ? {
+        dissentingRole: 'tech-lead',
+        concurringRole: 'reviewer',
+        dissentingVerdict: techLead,
+        concurringVerdict: reviewer,
+      }
+    : {
+        dissentingRole: 'reviewer',
+        concurringRole: 'tech-lead',
+        dissentingVerdict: reviewer,
+        concurringVerdict: techLead,
+      };
+}
+
+function isFindingSourceGate(role: RoleName): role is FindingSourceGate {
+  return role === 'reviewer' || role === 'tech-lead' || role === 'designer';
+}
+
+function verdictForGate(
+  role: FindingSourceGate,
+  reviewer: GateVerdict | undefined,
+  techLead: GateVerdict | undefined,
+  designer: GateVerdict | undefined,
+): GateVerdict | undefined {
+  if (role === 'reviewer') return reviewer;
+  if (role === 'tech-lead') return techLead;
+  return designer;
+}
+
+/** High/critical or explicitly irreversible objections are human-owned. */
+function adjudicationHumanBlocker(verdict: GateVerdict): string | undefined {
+  const finding = verdict.findings.find(
+    (candidate) =>
+      candidate.reversible === false ||
+      severityRank[candidate.severity] >= severityRank.high,
+  );
+  if (finding === undefined) return undefined;
+  return `human-owned ${finding.severity} ${finding.class} finding at ${finding.location}`;
+}
+
+/** Adjudication may settle only the current reviewer/tech-lead split. It must
+ *  never erase a protected finding that remains open from another gate or an
+ *  earlier round. Explicit irreversibility is tracked separately because the
+ *  public ledger conservatively normalizes an omitted reversible flag to
+ *  false, while only an explicit `false` transfers ownership to a human. */
+function adjudicationLedgerHumanBlocker(
+  ledger: FindingsLedgerEntry[],
+  explicitNonReversibleFindingIds: Set<string>,
+): string | undefined {
+  const finding = openFindingsLedger(ledger).find((entry) =>
+    explicitNonReversibleFindingIds.has(entry.id) ||
+    severityRank[entry.severity] >= severityRank.high);
+  if (finding === undefined) return undefined;
+  const protectedKind = explicitNonReversibleFindingIds.has(finding.id)
+    ? `non-reversible ${finding.severity}`
+    : finding.severity;
+  return `human-owned ${protectedKind} ${finding.class} finding at ${finding.location}`;
+}
+
+/** Identity of the disputed objection, so a repeat across rounds is detectable.
+ *  A findings-free fail is identified by its notes instead. */
+function splitSignature(verdict: GateVerdict): string {
+  if (verdict.findings.length > 0) {
+    return verdict.findings.map(findingSignature).sort().join(' | ');
+  }
+  return `notes: ${(verdict.notes ?? '').replace(/\s+/g, ' ').trim()}`;
+}
+
+/** An adjudication ruling is admissible only when it is complete. An empty
+ *  rationale, or a fail upheld with no concrete finding for the blocked task
+ *  record, is not a decision — it fails closed to the block.
+ *
+ *  An upheld finding must also satisfy the same class evidence contract every
+ *  other blocking finding does. The adjudicator is the one role whose output
+ *  nothing downstream reviews — its ruling is decisive for the round — so an
+ *  unanchored assertion here would block a task with exactly the confident-but-
+ *  ungrounded objection the contract exists to catch, and would do it with more
+ *  authority than the reviewer's. Unlike a role gate there is no re-prompt and
+ *  no downgrade: a gap makes the ruling inadmissible, which fails closed to the
+ *  block and keeps the ungrounded finding out of the ledger, the coder feedback,
+ *  and any later escalation. */
+function rulingFailure(ruling: AdjudicationRuling | undefined): string | undefined {
+  if (ruling === undefined) return 'adjudicator returned no ruling';
+  if (ruling.upholds !== 'pass' && ruling.upholds !== 'fail') {
+    return `adjudicator returned an unusable verdict "${String(ruling.upholds)}"`;
+  }
+  if (ruling.rationale.trim() === '') return 'adjudicator gave no rationale';
+  if (ruling.upholds === 'fail') {
+    if (ruling.finding === undefined) {
+      return 'adjudicator upheld the fail without a finding for the coder';
+    }
+    const gaps = evidenceGapsForFinding(ruling.finding);
+    if (gaps.length > 0) {
+      return `adjudicator upheld the fail with a ${ruling.finding.class} finding that lacks ` +
+        describeEvidenceGaps(gaps);
+    }
+  }
+  return undefined;
 }
 
 export const JUDGMENT_CANCEL_GRACE_MS = 1_000;
@@ -2146,7 +2820,7 @@ function mergeFindingsIntoLedger(
     const id = buildFindingId(sourceGate, normalized);
     if (finding.reversible === false) {
       explicitNonReversibleFindingIds.add(id);
-    } else {
+    } else if (finding.reversible === true) {
       explicitNonReversibleFindingIds.delete(id);
     }
     const existing = ledger.find((entry) => entry.id === id);
@@ -2190,6 +2864,28 @@ function applyFindingVerifications(
     const existing = ledger.find((entry) => entry.id === verification.id);
     if (existing === undefined) continue;
     existing.status = verification.status;
+  }
+}
+
+/** Close exactly the findings included in the verdict the adjudicator saw.
+ * Older findings from the same gate remain open: a ruling on one claim has no
+ * authority over a different claim, and only the adjudicated findings are
+ * separately recorded as follow-ups. */
+function resolveAdjudicatedFindings(
+  ledger: FindingsLedgerEntry[],
+  sourceGate: FindingSourceGate,
+  findings: ObjectionFinding[],
+): void {
+  const adjudicatedIds = new Set(findings.map((finding) =>
+    buildFindingId(sourceGate, toPublicFinding(finding))));
+  for (const entry of ledger) {
+    if (
+      entry.sourceGate === sourceGate &&
+      adjudicatedIds.has(entry.id) &&
+      isUnresolvedFinding(entry)
+    ) {
+      entry.status = 'resolved';
+    }
   }
 }
 
@@ -2280,7 +2976,12 @@ function emitRoleTransition(
   return role;
 }
 
-function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): void {
+function emitRoleStage(
+  input: TeamTaskRunInput,
+  role: RoleName,
+  stage: string,
+  details: Record<string, unknown> = {},
+): void {
   if (input.emit === undefined) return;
   const label = `${role}: ${stage}`;
   try {
@@ -2290,6 +2991,7 @@ function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): 
         event: 'role-stage',
         role,
         stage,
+        ...details,
         label,
         line: label,
       },
@@ -2299,6 +3001,42 @@ function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): 
   }
 }
 
+/** Record an acceptance-over-dissent on the run's activity stream. The operator
+ *  NOTIFICATION is raised a layer up, in `project-orchestrator`, which owns the
+ *  progress-event channel that reaches Telegram and the cockpit. */
+function emitPmAcceptance(
+  input: TeamTaskRunInput,
+  task: SizedTask,
+  acceptance: PmAcceptance,
+  rejectionFeedback: GateRejectionFeedback | undefined,
+): void {
+  if (input.emit === undefined) return;
+  const overriddenRole = rejectionFeedback?.rejectingRole ?? 'reviewer';
+  const taskText = scrubActivityText(task.text);
+  const rationale = scrubActivityText(acceptance.rationale);
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'pm-acceptance',
+        taskId: task.id,
+        taskText,
+        actor: acceptance.actor,
+        overriddenRole,
+        rationale,
+        line: `${acceptance.actor} accepted "${taskText}" over ${overriddenRole}'s dissent · ` +
+          rationale,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function scrubActivityText(value: string): string {
+  return redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(value)));
+}
+
 function emitRoleVerdict(
   input: TeamTaskRunInput,
   event: {
@@ -2306,6 +3044,7 @@ function emitRoleVerdict(
     gate: GateRejectedArtifact;
     verdict: 'pass' | 'fail';
     summary: string;
+    adjudicatorBinding?: 'base' | 'escalation';
   },
 ): void {
   if (input.emit === undefined) return;
@@ -2318,6 +3057,9 @@ function emitRoleVerdict(
         role: event.role,
         gate: event.gate,
         verdict: event.verdict,
+        ...(event.adjudicatorBinding !== undefined
+          ? { adjudicatorBinding: event.adjudicatorBinding }
+          : {}),
         summary,
         line: `${event.role}: ${event.gate} ${event.verdict} - ${summary}`,
       },

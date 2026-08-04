@@ -57,6 +57,8 @@ import {
   ValidationProfileUnavailableError,
   runTeamTaskWorkflow,
   SELF_REVIEW_NOTE_MAX_CHARS,
+  type AcceptWithRationaleResult,
+  type AdjudicationRuling,
   type ObjectionClass,
   type ObjectionFinding,
   type ObjectionSeverity,
@@ -157,7 +159,7 @@ const NOTE_MAX_CHARS = 2_000;
 // Role-model resolution (Phase 8 model map)
 // ---------------------------------------------------------------------------
 
-/** The six product-team roles' resolved model bindings. `reviewer` is null
+/** The seven product-team roles' resolved model bindings. `reviewer` is null
  *  when no distinct-provider reviewer can be resolved — the fail-closed
  *  independence signal the workflow blocks on. */
 export interface TeamRoleModels {
@@ -167,13 +169,19 @@ export interface TeamRoleModels {
   coder: RoleModelBinding;
   reviewer: RoleModelBinding | null;
   designer: RoleModelBinding;
+  /** Split-verdict tie-breaker. Null when the `adjudicator` policy entry is
+   *  missing or unresolvable — the workflow then falls back to today's blocking
+   *  behavior rather than to a silent pass. */
+  adjudicator: RoleModelBinding | null;
+  /** Distinct declared binding for repeat adjudication; null/absent fails closed. */
+  adjudicatorEscalation?: RoleModelBinding | null;
 }
 
 const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
 const SUPPORTED_FORMATS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 /**
- * Resolve all six roles through the model-policy resolver (pin → role-default
+ * Resolve all seven roles through the model-policy resolver (pin → role-default
  * → global-fallback). The REVIEWER is resolved with `distinctFromProvider:
  * coder.provider`; a resolver throw (no distinct-provider model registered)
  * maps to a null binding rather than a same-provider downgrade. Any other
@@ -206,7 +214,81 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     });
   }
 
-  return { pm, techLead, qa, coder, reviewer, designer };
+  // The adjudicator is declaration-only. Unlike ordinary roles, a missing
+  // roleDefault must not fall through to the global fallback, which could be
+  // one of the disputants' own models.
+  let adjudicator: RoleModelBinding | null = null;
+  const adjudicatorAlias = policy.roleDefaults['adjudicator'];
+  try {
+    if (adjudicatorAlias === undefined) throw new Error('missing adjudicator role default');
+    const entry = policy.models.find((model) => model.alias === adjudicatorAlias);
+    if (entry === undefined || entry.status === 'deprecated') {
+      throw new Error('adjudicator role default is unavailable');
+    }
+    if (!entry.capabilities.includes('coding')) {
+      throw new Error('adjudicator role default lacks coding capability');
+    }
+    adjudicator = toBinding(adjudicatorAlias, policy, 'adjudicator');
+    if (adjudicator.alias === reviewer?.alias || adjudicator.alias === techLead.alias) {
+      throw new Error('adjudicator resolves to a disputing role model');
+    }
+  } catch (err) {
+    adjudicator = null;
+    log.warn('resolveTeamRoleModels: no adjudicator — split verdicts fail closed', {
+      error: (err as Error).message,
+    });
+  }
+
+  let adjudicatorEscalation: RoleModelBinding | null = null;
+  const escalationAlias = policy.roleEscalations?.['adjudicator'];
+  try {
+    if (adjudicator === null) throw new Error('base adjudicator is unavailable');
+    if (escalationAlias === undefined) throw new Error('missing adjudicator escalation binding');
+    const entry = policy.models.find((model) => model.alias === escalationAlias);
+    if (entry === undefined || entry.status === 'deprecated') {
+      throw new Error('adjudicator escalation binding is unavailable');
+    }
+    if (!entry.capabilities.includes('deep-reasoning')) {
+      throw new Error('adjudicator escalation binding lacks deep-reasoning');
+    }
+    adjudicatorEscalation = toBinding(escalationAlias, policy, 'adjudicator escalation');
+    // Distinct from the base binding, from both disputants, AND from the coder.
+    // The coder exclusion is the load-bearing one: escalation is reserved for an
+    // objection that already survived a coder retry, so binding it to the
+    // coder's own model would have the artifact's author cast the deciding vote
+    // on whether the artifact is defective — the same independence failure that
+    // justifies resolving the reviewer with `distinctFromProvider: coder`.
+    // Sharing a provider with the coder is accepted by design (both disputants
+    // are anthropic, so the adjudicator sits on the openai side); sharing the
+    // exact model is not.
+    if (
+      adjudicatorEscalation.alias === adjudicator.alias ||
+      adjudicatorEscalation.alias === reviewer?.alias ||
+      adjudicatorEscalation.alias === techLead.alias ||
+      adjudicatorEscalation.alias === coder.alias
+    ) {
+      throw new Error(
+        'adjudicator escalation must use a model distinct from the base adjudicator, ' +
+          'both disputants, and the coder',
+      );
+    }
+  } catch (err) {
+    adjudicatorEscalation = null;
+    log.warn('resolveTeamRoleModels: no adjudicator escalation — repeats fail closed', {
+      error: (err as Error).message,
+    });
+  }
+
+  return {
+    pm,
+    techLead,
+    qa,
+    coder,
+    reviewer,
+    designer,
+    adjudicator,
+    adjudicatorEscalation,
+  };
 }
 
 /** Join a resolution alias back to its registry entry and narrow provider /
@@ -466,6 +548,17 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   'sandbox cannot run, or a demonstrated flake. Unjustified deletion or',
   'weakening of a test is a fail outcome: name the test and require it restored.',
   '',
+  'Test integrity: you are the only gate on the tests after implementation, so',
+  'answer all three of these against the QA tests you reviewed before the coder',
+  'started. Any finding you raise from them MUST cite the offending test file.',
+  '1. Did this diff delete, weaken, or RETARGET a QA-authored test — including',
+  '   pointing an assertion at a different value, symbol, or code path so it',
+  '   passes against this implementation rather than the agreed contract?',
+  '2. Is there behavior in this diff that no test touches?',
+  '3. Does the implementation satisfy a test\'s SHAPE without its INTENT — for',
+  '   example special-casing the asserted input, or returning a literal that',
+  '   makes the assertion true without implementing the behavior?',
+  '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
   '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}], "notes": "<short reason>", "suggestedChange": "<concrete change for non-finding fail, omit when not needed>"}',
@@ -532,32 +625,85 @@ const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
   '```',
 ].join('\n');
 
-const QA_DIFF_REVALIDATION_INSTRUCTION = [
-  'You are QA. Re-evaluate the existing test intent against the coder\'s',
-  'self-reviewed complete task implementation before downstream code review starts.',
+const PM_ACCEPTANCE_INSTRUCTION = [
+  'You are the product manager. The team hit the round cap on this task and one',
+  'role still withholds its approval. Decide whether the current state satisfies',
+  'the product intent well enough to ship (accept) or genuinely needs a human',
+  '(decline).',
   '',
-  'Approve only when the existing tests or no-code-test rationale still pin the',
-  'behavior represented by the full-task diff relative to the durable task base.',
-  'The artifact includes every task-owned change even if an earlier coder round',
-  'or role-created commit advanced HEAD. Therefore, absence from this artifact is',
-  'a genuine missing-implementation signal. If the self-review changed behavior',
-  'outside the agreed test intent, reject with a concrete note.',
+  'This is the wrap-up call your charter gives you, and it is the difference',
+  'between the project continuing and it stopping until a human intervenes. Do',
+  'not decline reflexively — declining is correct only when shipping this would',
+  'mean shipping something you would not defend to the user.',
   '',
-  'Respond with EXACTLY ONE fenced ```qa-diff-revalidation block containing JSON:',
-  '```qa-diff-revalidation',
-  '{"approved": true, "notes": "<short reason>"}',
+  'Your authority has a hard edge. You CANNOT clear an irreversible finding, and',
+  'you CANNOT clear a medium-or-worse objection-class finding — Rune withholds',
+  'those from you entirely, so anything you see here is reversible and minor. If',
+  'the dissent below reads as more serious than that, decline: it means the',
+  'disagreement is not the kind you are allowed to settle.',
+  '',
+  'If you accept, `rationale` is REQUIRED and must say what you are accepting and',
+  'why it is acceptable for the user — not that the budget ran out. It is',
+  'recorded permanently against this task and filed as a follow-up item, so write',
+  'it for the human who reads it in three months.',
+  '',
+  'Respond with EXACTLY ONE fenced ```pm-acceptance block containing JSON:',
+  '```pm-acceptance',
+  '{"accepted": true, "rationale": "<required non-empty when accepted is true>", "notes": "<short reason when accepted is false>"}',
   '```',
 ].join('\n');
 
-const PM_WRAPUP_INSTRUCTION = [
-  'You are the product manager. The team hit the round cap on this task with',
-  'non-objection disagreement. Decide whether the current state satisfies the',
-  'product intent (resolve) or needs a human (leave unresolved). You CANNOT',
-  'clear objection-class findings — those never reach you.',
+const ADJUDICATOR_INSTRUCTION = [
+  'Two roles read the same diff and reached opposite verdicts. Rule on which',
+  'verdict the artifacts support. Your ruling is DECISIVE for this round — no',
+  'human sees it before it takes effect.',
   '',
-  'Respond with EXACTLY ONE fenced ```pm-wrapup block containing JSON:',
-  '```pm-wrapup',
-  '{"resolved": true, "rationale": "<required non-empty if resolved true>", "notes": "<short reason if resolved false>"}',
+  'You have NO tools and NO repository access. You see ONLY the artifacts below:',
+  'the diff, the spec, the tests, and each role\'s verdict text. You never see the',
+  'coder\'s reasoning or any earlier round. Never claim to have read, grepped, or',
+  'verified anything on disk — you cannot, and doing so invalidates your ruling.',
+  '',
+  'Rule on the DISPUTED CLAIM, not on the diff as a whole. Do not look for new',
+  'problems. Do not split the difference — there is no third outcome.',
+  '',
+  'Weigh evidence over assertion: a verdict anchored to a file and line with a',
+  'described failure mechanism outweighs a confident sentence. If the failing',
+  'verdict cannot point at anything in the diff, it does not stand.',
+  '',
+  'If the artifacts genuinely do not settle it, set upholds to "unresolved". That',
+  'is an honest answer and Rune fails closed to a human on it. A confident guess',
+  'is worse.',
+  '',
+  'When you uphold the FAIL you MUST include `finding` — the objection restated',
+  'with a concrete location, so the coder knows exactly what to change.',
+  '',
+  'Respond with EXACTLY ONE fenced ```adjudication block containing JSON:',
+  '```adjudication',
+  '{"upholds": "pass", "rationale": "<why the artifacts settle it this way>", "finding": {"class": "concurrency", "severity": "high", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change>", "reversible": true}}',
+  '```',
+].join('\n');
+
+const EVIDENCE_REPROMPT_INSTRUCTION = [
+  'You raised one or more BLOCKING findings that do not carry the evidence their',
+  'objection class requires. Supply that evidence now — this is your only',
+  'opportunity. A finding you cannot ground is downgraded to a non-blocking',
+  'observation and filed as a follow-up item; it will not block the task.',
+  '',
+  'For each finding below, return the SAME finding with the missing piece filled',
+  'in:',
+  '- location: the file (with extension) and, where you can, the line —',
+  '  `src/lease.ts:42`. Never "unknown", "various", or "multiple files".',
+  '- rationale: the concrete failure scenario. What sequence of events produces',
+  '  the wrong outcome, and what IS the wrong outcome? Not the name of the risk.',
+  '',
+  'This is not a second review. Do NOT add findings, do NOT raise a severity, and',
+  'do NOT re-argue a finding you cannot locate in the diff — withdraw it by',
+  'omitting it. If the evidence is not in the artifacts you were given, say so by',
+  'returning an empty findings array.',
+  '',
+  'Respond with EXACTLY ONE fenced ```finding-evidence block containing JSON:',
+  '```finding-evidence',
+  '{"findings": [{"class": "concurrency", "severity": "high", "location": "<file:line>", "rationale": "<concrete failure scenario>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}]}',
   '```',
 ].join('\n');
 
@@ -628,7 +774,7 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
 
 function hasAggregateFixtureFences(text: string): boolean {
   return text.includes('```tl-test-review') || text.includes('```tl-diff-review') ||
-    text.includes('```designer-review') || text.includes('```pm-wrapup');
+    text.includes('```designer-review') || text.includes('```pm-acceptance');
 }
 
 function parseFindings(v: Record<string, unknown>): {
@@ -791,18 +937,45 @@ function parseFlagVerdict(
   };
 }
 
-function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } {
-  const parsed = extractFencedJson(text, 'pm-wrapup');
+/** Fail-closed adjudication parser. Anything it cannot read as a complete,
+ *  decisive ruling comes back as an upheld FAIL with an empty rationale, which
+ *  the workflow rejects as inadmissible and treats as a block — never a pass. */
+function parseAdjudication(text: string): AdjudicationRuling {
+  const parsed = extractFencedJson(text, 'adjudication');
   if (!parsed || typeof parsed !== 'object') {
-    return { resolved: false };
+    return { upholds: 'fail', rationale: '' };
   }
   const v = parsed as Record<string, unknown>;
-  const resolved = v['resolved'] === true;
+  const upholds = v['upholds'];
+  if (upholds !== 'pass' && upholds !== 'fail') {
+    // Includes the deliberate "unresolved" escape hatch.
+    return { upholds: 'fail', rationale: '' };
+  }
+  const rationale = typeof v['rationale'] === 'string'
+    ? v['rationale'].slice(0, NOTE_MAX_CHARS)
+    : '';
+  const { findings } = parseFindings({ findings: v['finding'] === undefined ? [] : [v['finding']] });
+  return {
+    upholds,
+    rationale,
+    ...(findings[0] !== undefined ? { finding: findings[0] } : {}),
+  };
+}
+
+/** Fail-closed acceptance parser. Anything unreadable is a REFUSAL, so an
+ *  unparseable reply leaves the task blocked rather than shipping it. */
+function parsePmAcceptance(text: string): AcceptWithRationaleResult {
+  const parsed = extractFencedJson(text, 'pm-acceptance');
+  if (!parsed || typeof parsed !== 'object') {
+    return { accepted: false, actor: 'pm' };
+  }
+  const v = parsed as Record<string, unknown>;
   const rationale = typeof v['rationale'] === 'string'
     ? v['rationale'].slice(0, NOTE_MAX_CHARS)
     : undefined;
   return {
-    resolved,
+    accepted: v['accepted'] === true,
+    actor: 'pm',
     ...(rationale !== undefined ? { rationale } : {}),
   };
 }
@@ -1023,11 +1196,6 @@ function judgmentBatchCheckpoint(
   }
   const members = [
     {
-      role: 'qa',
-      binding: models.qa,
-      workflowStage: 'qa-diff-revalidation',
-    },
-    {
       role: 'reviewer',
       binding: models.reviewer,
       workflowStage: 'reviewer-review',
@@ -1048,9 +1216,9 @@ function judgmentBatchCheckpoint(
   return {
     taskId: task.id,
     role: 'judgment-batch',
-    provider: models.qa.provider,
-    format: models.qa.format,
-    model: models.qa.alias,
+    provider: models.reviewer.provider,
+    format: models.reviewer.format,
+    model: models.reviewer.alias,
     workflowStage: 'post-coder-judgments',
     checkpointedAt: new Date().toISOString(),
     judgmentBatch: {
@@ -1165,11 +1333,10 @@ function filesFromDiff(diff: string): string[] {
   return [...files];
 }
 
-/** The one place the full-task artifact header is rendered. Every judgment role
- * (QA revalidation, reviewer, tech lead, designer) must see byte-identical
- * base/current/hash identities for a given pass, so they cannot be hand-built
- * per call site. QA additionally gets a `pass:` line — it is the only role that
- * distinguishes a first-pass artifact from a retry-derived one. */
+/** The one place the full-task artifact header is rendered. Every downstream
+ * judgment consumer (reviewer, tech lead, designer, PM, and adjudicator) must
+ * see byte-identical base/current/hash identities for a given pass, so they
+ * cannot be hand-built per call site. */
 function formatFullTaskReviewArtifact(
   diff: string,
   reviewState?: Omit<CanonicalReviewState, 'diff'>,
@@ -1710,9 +1877,10 @@ export function buildProductionTeamTaskDeps(
           };
         }
 
-        // 6. Land the repair in the seam state: the re-review and
-        //    qaRevalidateDiff read `lastQaDiff`, so it must reflect the
-        //    patched tests (same capture + scrubbing as the execution agent).
+        // 6. Land the repair in the seam state: techLeadReviewTests's re-review
+        //    and this seam's own next call read `lastQaDiff`, so it must
+        //    reflect the patched tests (same capture + scrubbing as the
+        //    execution agent).
         const diffResult = await git(['diff', 'HEAD']);
         lastQaDiff = redactSecrets(scrubPathsInText(diffResult.stdout));
         lastRepairRedCheck = redCheck;
@@ -2104,58 +2272,6 @@ export function buildProductionTeamTaskDeps(
       }
     },
 
-    qaRevalidateDiff: async ({
-      task,
-      qa,
-      diff,
-      spec,
-      context,
-      reviewState,
-      artifactPass,
-      judgmentContext,
-      judgmentBatchId,
-    }) => {
-      const qaBlock = qa.kind === 'tests-written'
-        ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
-        : `## QA no-code-test rationale\n\n${qa.rationale}`;
-      const body = [
-        `## Task\n\n${task.text}`,
-        '',
-        `## Spec\n\n${spec}`,
-        '',
-        qaBlock,
-        '',
-        formatFullTaskReviewArtifact(diff, reviewState, artifactPass ?? 'first-pass'),
-        '',
-        `## Project context\n\n${scrubPathsInText(context)}`,
-        ...(judgmentContext?.coderHandoffNotes.length
-          ? ['', formatCoderHandoffNotes([...judgmentContext.coderHandoffNotes])]
-          : []),
-        ...(judgmentContext?.findingsLedger.length
-          ? ['', formatFindingsLedger(judgmentContext.findingsLedger)]
-          : []),
-      ].join('\n');
-      return judge(
-        'qa',
-        models.qa,
-        QA_DIFF_REVALIDATION_INSTRUCTION,
-        body,
-        task.id,
-        'qa-diff-revalidation',
-        judgmentBatchId,
-        (reply) => {
-          requireFlagVerdict(reply, 'qa-diff-revalidation', 'approved');
-          const { value, notes } = parseFlagVerdict(
-            reply,
-            'qa-diff-revalidation',
-            'approved',
-          );
-          return { approved: value, ...(notes !== undefined ? { notes } : {}) };
-        },
-        getJudgmentBatchCheckpoint(task, judgmentBatchId),
-      );
-    },
-
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
     // provider identity is baked into `models.reviewer` at construction time
     // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
@@ -2168,6 +2284,7 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
@@ -2182,7 +2299,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         '',
         `## Spec\n\n${spec}`,
         '',
@@ -2216,6 +2333,7 @@ export function buildProductionTeamTaskDeps(
       findingsLedger,
       coderHandoffNotes,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2223,7 +2341,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
@@ -2254,6 +2372,7 @@ export function buildProductionTeamTaskDeps(
       coderHandoffNotes,
       findingsLedger,
       reviewState,
+      judgmentContext,
       judgmentBatchId,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2262,7 +2381,7 @@ export function buildProductionTeamTaskDeps(
       const body = [
         `## Task\n\n${task.text}`,
         '',
-        formatFullTaskReviewArtifact(diff, reviewState),
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(testsBlock !== undefined ? ['', `## Tests\n\n${testsBlock}`] : []),
         ...(context !== undefined
@@ -2287,10 +2406,196 @@ export function buildProductionTeamTaskDeps(
       );
     },
 
-    pmWrapup: async ({ task, reason }) => {
-      const body = [`## Task\n\n${task.text}`, '', `## Situation\n\n${reason}`].join('\n');
-      const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body, task.id, 'pm-wrapup');
-      return parsePmWrapup(reply);
+    acceptWithRationale: async ({
+      task,
+      spec,
+      reason,
+      dissentingRole,
+      dissentingVerdict,
+      rejectionFeedback,
+      findingsLedger,
+      judgmentContext,
+    }) => {
+      const tests = judgmentContext === undefined
+        ? undefined
+        : Array.isArray(judgmentContext.tests)
+          ? judgmentContext.tests.join('\n')
+          : judgmentContext.tests;
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Spec\n\n${spec}`,
+        ...(judgmentContext !== undefined
+          ? [
+              '',
+              formatFullTaskReviewArtifact(
+                judgmentContext.diff,
+                judgmentContext.reviewState,
+                judgmentContext.artifactPass,
+              ),
+            ]
+          : []),
+        ...(tests !== undefined ? ['', `## Tests\n\n${tests}`] : []),
+        ...(findingsLedger.length > 0
+          ? ['', formatFindingsLedger(findingsLedger)]
+          : ['', '## Full findings ledger\n\n(none)']),
+        '',
+        `## Why the task did not close\n\n${reason}`,
+        '',
+        `## The dissenting role\n\n${dissentingRole} rejected the ` +
+          `${rejectionFeedback.rejectedArtifact}: ${rejectionFeedback.whatFailed}`,
+        ...(rejectionFeedback.actionableNotes.length > 0
+          ? ['', `## What they asked for\n\n${rejectionFeedback.actionableNotes.join('\n')}`]
+          : []),
+        '',
+        '## Their verdict',
+        '',
+        formatVerdictForAdjudication(dissentingVerdict),
+      ].join('\n');
+      const reply = await judge(
+        'pm',
+        models.pm,
+        PM_ACCEPTANCE_INSTRUCTION,
+        body,
+        task.id,
+        'pm-cap-acceptance',
+      );
+      return parsePmAcceptance(reply);
+    },
+
+    // Tie-break a split that would otherwise end the task. Fresh context by
+    // construction — `judge` opens a throwaway session per invocation, and the
+    // body carries only artifacts plus the two verdict texts, never the coder's
+    // reasoning or any earlier round. A null base binding leaves the seam
+    // absent for pure/legacy callers; the production runner rejects a missing
+    // BASE binding before preflight, so live orchestration never reaches that
+    // compatibility path. A missing ESCALATION binding is not rejected up front
+    // — it throws here, on the repeat that actually needs it, and the workflow
+    // records that as the round's fail-closed reason.
+    ...(models.adjudicator === null ? {} : {
+      adjudicateSplit: async ({
+        task,
+        dissentingRole,
+        concurringRole,
+        dissentingVerdict,
+        concurringVerdict,
+        escalate,
+        judgmentContext,
+      }) => {
+        const binding = escalate
+          ? models.adjudicatorEscalation
+          : models.adjudicator;
+        if (binding === null || binding === undefined) {
+          throw new Error(
+            escalate
+              ? 'adjudicator escalation binding is unavailable'
+              : 'adjudicator binding is unavailable',
+          );
+        }
+        const body = [
+          `## Task\n\n${task.text}`,
+          '',
+          ...(judgmentContext !== undefined
+            ? [
+                formatFullTaskReviewArtifact(
+                  judgmentContext.diff,
+                  judgmentContext.reviewState,
+                  judgmentContext.artifactPass,
+                ),
+                '',
+                `## Spec\n\n${judgmentContext.spec}`,
+                '',
+                `## Tests\n\n${
+                  Array.isArray(judgmentContext.tests)
+                    ? judgmentContext.tests.join('\n')
+                    : judgmentContext.tests
+                }`,
+                '',
+              ]
+            : []),
+          `## The disputed verdict — ${dissentingRole} FAILED this diff`,
+          '',
+          formatVerdictForAdjudication(dissentingVerdict),
+          '',
+          `## The opposing verdict — ${concurringRole} PASSED this diff`,
+          '',
+          formatVerdictForAdjudication(concurringVerdict),
+          ...(escalate
+            ? [
+                '',
+                '## Note',
+                '',
+                'This exact objection was raised in an earlier round of this task,',
+                'and the coder round did not settle it. Read the diff for',
+                'what actually changed since, and rule decisively.',
+              ]
+            : []),
+        ].join('\n');
+        const ruling = await judge<AdjudicationRuling>(
+          'adjudicator',
+          binding,
+          ADJUDICATOR_INSTRUCTION,
+          body,
+          task.id,
+          'adjudicator-split',
+          undefined,
+          parseAdjudication,
+        );
+        return {
+          ...ruling,
+          execution: {
+            modelAlias: binding.alias,
+            provider: binding.provider,
+          },
+        };
+      },
+    }),
+
+    // The role gets ONE bounded chance to ground its own blocking findings, on
+    // its own model, seeing only the findings it already raised. Never a second
+    // review: the parser drops anything whose class it did not already object
+    // to, and the workflow independently refuses a raised severity.
+    requestFindingEvidence: async ({ role, task, gaps, judgmentContext }) => {
+      const binding = bindingForRole(models, role);
+      if (binding === null) return [];
+      const raisedClasses = new Set(gaps.map(({ finding }) => finding.class));
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        ...(judgmentContext !== undefined
+          ? [
+              formatFullTaskReviewArtifact(
+                judgmentContext.diff,
+                judgmentContext.reviewState,
+                judgmentContext.artifactPass,
+              ),
+              '',
+            ]
+          : []),
+        '## Findings missing required evidence',
+        '',
+        ...gaps.flatMap(({ finding, ask }) => [
+          `- class: ${finding.class} · severity: ${finding.severity}`,
+          `  location: ${finding.location || '(none given)'}`,
+          `  rationale: ${finding.rationale}`,
+          `  you must supply: ${ask}`,
+        ]),
+      ].join('\n');
+      return judge(
+        role,
+        binding,
+        EVIDENCE_REPROMPT_INSTRUCTION,
+        body,
+        task.id,
+        `${role}-finding-evidence`,
+        undefined,
+        (reply) => {
+          const parsed = extractFencedJson(reply, 'finding-evidence');
+          if (!parsed || typeof parsed !== 'object') return [];
+          const { findings } = parseFindings(parsed as Record<string, unknown>);
+          return findings.filter((finding) => raisedClasses.has(finding.class));
+        },
+      );
     },
 
     onGateRejection: learnFromGateRejection,
@@ -2424,6 +2729,28 @@ function manualLiveGateEvidence(task: SelectedTask): TaskEvidence {
   );
 }
 
+/** Render one verdict for the adjudicator: outcome, notes, and each finding with
+ *  its anchor, so the ruling can weigh evidence against assertion. */
+function formatVerdictForAdjudication(verdict: GateVerdict): string {
+  const lines = [`outcome: ${verdict.outcome}`];
+  if (verdict.notes?.trim()) lines.push(`notes: ${verdict.notes.trim()}`);
+  if (verdict.suggestedChange?.trim()) {
+    lines.push(`suggested change: ${verdict.suggestedChange.trim()}`);
+  }
+  if (verdict.findings.length === 0) {
+    lines.push('findings: (none — this verdict cites no specific defect)');
+  } else {
+    lines.push('findings:');
+    for (const finding of verdict.findings) {
+      lines.push(
+        `- ${finding.class} / ${finding.severity} at ${finding.location || '(no location given)'}`,
+        `  ${finding.rationale}`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
 function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding | null {
   switch (role) {
     case 'pm':
@@ -2438,6 +2765,8 @@ function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding 
       return models.reviewer;
     case 'designer':
       return models.designer;
+    case 'adjudicator':
+      return models.adjudicator;
     default:
       return null;
   }
@@ -2485,7 +2814,11 @@ function attributeWorkflowEvents(
 ): (event: WorkflowActivityEvent) => void {
   return (event) => {
     const role = typeof event.data?.['role'] === 'string' ? event.data['role'] : undefined;
-    const binding = role === undefined ? null : bindingForRole(models, role);
+    const binding = role === 'adjudicator' && event.data?.['adjudicatorBinding'] === 'escalation'
+      ? models.adjudicatorEscalation ?? null
+      : role === undefined
+        ? null
+        : bindingForRole(models, role);
     if (role === undefined || binding === null) {
       emit(event);
       return;
@@ -2599,6 +2932,21 @@ export function createProductionTaskWorkflowRunner(
     } catch (err) {
       return blockedEvidence(task, `role model resolution failed: ${(err as Error).message}`);
     }
+    if (models.adjudicator === null) {
+      return blockedEvidence(
+        task,
+        'role model resolution failed: required adjudicator binding is unavailable',
+      );
+    }
+    // The ESCALATION binding is deliberately not required here. It is spent only
+    // on a repeat split — an objection that already survived a coder retry — so
+    // blocking every task on it made the blast radius of one unsatisfiable
+    // policy constraint the entire orchestration surface. It now fails closed
+    // where it is actually needed: the `adjudicateSplit` seam throws when a
+    // repeat has no escalation binding, and the workflow turns that into a
+    // block, which is the same terminal outcome this check produced but only
+    // for the tasks that genuinely reach it. The BASE binding stays required
+    // above because every split needs it.
 
     if (!preflightPassed) {
       if (pendingPreflight === null) {

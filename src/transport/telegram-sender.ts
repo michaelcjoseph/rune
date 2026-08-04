@@ -4,6 +4,11 @@ import type { MessageSender, SendOpts } from './sender.js';
 import type { BusMutationEvent, BusOpEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
 import { isGateValidationReceipt } from '../intent/full-suite-attestation.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('telegram-sender');
 
@@ -14,6 +19,26 @@ interface TrackerEntry {
 }
 
 const TRACKER_EDIT_THROTTLE_MS = 10_000;
+
+/** Notification class carried on the delivery record. `message` covers a chat
+ *  reply and every bus-published job alert (nightly summary, MCP watchdog,
+ *  stall/parked nudge, Whoop); the rest name a mutation-event notification
+ *  path. */
+type TelegramSendKind =
+  | 'message'
+  | 'work-run-start'
+  | 'work-run-progress'
+  | 'orchestrated-progress'
+  | 'terminal';
+
+/** Context stamped on the success record so "did Rune actually tell me?" is
+ *  answerable from `logs/rune.log` alone, without tracing emit site → publication
+ *  ledger → drain loop → bus → sender. */
+interface SendTelemetry {
+  kind: TelegramSendKind;
+  mutationId?: string;
+  mutationKind?: string;
+}
 
 /** Short mutation-id suffix surfaced in C5 messages so the user can correlate
  *  a Telegram notification with the cockpit/log entry. The full id is a
@@ -252,6 +277,31 @@ function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
   return parts.length > 1 ? parts.join(' · ') : null;
 }
 
+/** An acceptance that overrode a role's dissent at the round cap. Surfaced to
+ *  the operator as it happens: the machine decided to ship something a gate
+ *  objected to, which is exactly the kind of call a human wants to see the same
+ *  day rather than find in a run record later. */
+function formatPmAcceptanceProgress(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (data['event'] !== 'pm-acceptance') return null;
+  const taskText = typeof data['taskText'] === 'string'
+    ? redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(data['taskText'])))
+    : '';
+  const actor = data['actor'] === 'human' ? 'human' : 'PM';
+  const overriddenRole = typeof data['overriddenRole'] === 'string'
+    ? data['overriddenRole']
+    : 'a role';
+  const rationale = typeof data['rationale'] === 'string'
+    ? redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(data['rationale'])))
+    : '';
+  const parts = [
+    `⚖️ ${actor} accepted over ${overriddenRole}'s dissent`,
+    taskText,
+    rationale,
+  ].filter((part) => part !== '');
+  return parts.length > 1 ? parts.join(' · ') : null;
+}
+
 /** Terminal message for a `writing` mutation (/blog, /writing-critique). The
  *  generic fallback would render "✅ /work --auto … finished" — wrong surface
  *  language for a writing run. Failure reasons arrive pre-scrubbed (the
@@ -302,6 +352,18 @@ export class TelegramSender implements MessageSender {
   constructor(private bot: TelegramBot) {}
 
   async send(userId: number, text: string, opts?: SendOpts): Promise<void> {
+    await this.deliver(userId, text, opts, { kind: 'message' });
+  }
+
+  /** The single Telegram delivery chokepoint. Every successful send lands one
+   *  structured record in `logs/rune.log`; a rejected send lands none and
+   *  surfaces through the caller's existing error log. */
+  private async deliver(
+    userId: number,
+    text: string,
+    opts: SendOpts | undefined,
+    telemetry: SendTelemetry,
+  ): Promise<void> {
     // Phase 6 C6.1: when the caller supplies an `approval` payload, render
     // it as a Telegram inline keyboard rather than a plain message. Each
     // option becomes one inline button whose `callback_data` carries the
@@ -321,9 +383,28 @@ export class TelegramSender implements MessageSender {
       await this.bot.sendMessage(userId, text, {
         reply_markup: { inline_keyboard: [buttons] },
       });
-      return;
+    } else {
+      await sendLongMessage(this.bot, userId, text);
     }
-    await sendLongMessage(this.bot, userId, text);
+    // Reached only once Telegram accepted the message — `sendLongMessage`
+    // rejects if ANY chunk fails, so a partially-delivered long message
+    // produces an error record and no success record.
+    //
+    // NEVER log `text`. It can carry vault content and the deliberately
+    // un-scrubbed `operatorWorktreePath` (formatWorkRunStart and the parked
+    // branch of formatWorkRunTerminal both embed it). The length answers
+    // "was it empty?" without carrying any of the body.
+    const deliveryRecord = {
+      kind: telemetry.kind,
+      ...(telemetry.mutationId !== undefined ? { mutationId: telemetry.mutationId } : {}),
+      ...(telemetry.mutationKind !== undefined ? { mutationKind: telemetry.mutationKind } : {}),
+      chatId: userId,
+      chars: text.length,
+    };
+    log.info('telegram send delivered', deliveryRecord, {
+      ...deliveryRecord,
+      chatId: '[private]',
+    });
   }
 
   startTyping(userId: number, _label?: string): void {
@@ -357,7 +438,11 @@ export class TelegramSender implements MessageSender {
     if (event.mutationKind === 'work-run' && event.subKind === 'start') {
       const start = formatWorkRunStart(event);
       if (start) {
-        void this.send(event.userId, start).catch((err: unknown) => {
+        void this.deliver(event.userId, start, undefined, {
+          kind: 'work-run-start',
+          mutationId: event.mutationId,
+          mutationKind: event.mutationKind,
+        }).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent start send failed', {
             error: err instanceof Error ? err.message : String(err),
           });
@@ -373,7 +458,11 @@ export class TelegramSender implements MessageSender {
       const data = event.data as Record<string, unknown> | undefined;
       const line = String(data?.['line'] ?? '');
       if (line) {
-        void this.send(event.userId, line).catch((err: unknown) => {
+        void this.deliver(event.userId, line, undefined, {
+          kind: 'work-run-progress',
+          mutationId: event.mutationId,
+          mutationKind: event.mutationKind,
+        }).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent progress send failed', {
             error: err instanceof Error ? err.message : String(err),
           });
@@ -382,9 +471,15 @@ export class TelegramSender implements MessageSender {
       return;
     }
     if (event.mutationKind === 'orchestrated-work' && event.subKind === 'progress') {
-      const text = formatMergeSuccessProgress(event) ?? formatCloseoutCommitProgress(event);
+      const text = formatMergeSuccessProgress(event)
+        ?? formatCloseoutCommitProgress(event)
+        ?? formatPmAcceptanceProgress(event);
       if (text) {
-        void this.send(event.userId, text).catch((err: unknown) => {
+        void this.deliver(event.userId, text, undefined, {
+          kind: 'orchestrated-progress',
+          mutationId: event.mutationId,
+          mutationKind: event.mutationKind,
+        }).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent orchestrated progress send failed', {
             error: err instanceof Error ? err.message : String(err),
           });
@@ -426,7 +521,11 @@ export class TelegramSender implements MessageSender {
         : event.mutationKind === 'work-run' && data['parked'] === true
         ? { approval: { prompt: 'Release this parked run?', options: [{ label: '🔓 Release', value: `work-run-release:${event.mutationId}` }] } }
         : undefined;
-    void this.send(event.userId, text, releaseApproval).catch((err: unknown) => {
+    void this.deliver(event.userId, text, releaseApproval, {
+      kind: 'terminal',
+      mutationId: event.mutationId,
+      mutationKind: event.mutationKind,
+    }).catch((err: unknown) => {
       log.error('TelegramSender.onMutationEvent send failed', { error: err instanceof Error ? err.message : String(err) });
     });
   }

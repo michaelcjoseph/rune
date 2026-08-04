@@ -312,7 +312,6 @@ describe('e2e-acceptance-four-behaviors', () => {
       'tech-lead-test-review',
       'coder-execution',
       'coder-self-review',
-      'qa-diff-revalidation',
       'reviewer-review',
       'tech-lead-diff-review',
     ]);
@@ -442,11 +441,12 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
       return ['```tl-test-review', '{"approved": true}', '```'].join('\n');
     }
 
-    if (role === 'qa' && message.includes('## Complete task implementation relative to durable task base')) {
-      order.push('qa-diff-revalidation');
-      expect(message).toContain(reviewedDiff);
-      return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
-    }
+    // QA is never dispatched against the implementation diff — its work ends
+    // when the coder starts. A QA judgment call on the full-task artifact would
+    // mean the removed post-implementation gate had come back.
+    expect(
+      role === 'qa' && message.includes('## Complete task implementation relative to durable task base'),
+    ).toBe(false);
 
     if (role === 'reviewer') {
       order.push('reviewer-review');
@@ -514,6 +514,7 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
     coder: binding('gpt-5.6-sol', 'openai', 'codex'),
     reviewer: binding('opus', 'anthropic', 'claude'),
     designer: binding('opus', 'anthropic', 'claude'),
+    adjudicator: binding('gpt-5.6-sol', 'openai', 'codex'),
   };
   const deps = buildProductionTeamTaskDeps(
     {

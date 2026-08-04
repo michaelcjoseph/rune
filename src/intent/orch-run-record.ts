@@ -16,6 +16,9 @@ import {
   SELF_REVIEW_NOTE_MAX_CHARS,
   SEVERITY_LOOP_HARD_BUDGET,
   type CoderSelfReviewRecord,
+  type AdjudicationRecord,
+  type DowngradedFinding,
+  type GateVerdict,
   type JudgmentOutcomeEvidence,
   type ObjectionFinding,
   type PmAcceptance,
@@ -32,6 +35,15 @@ import {
   type DurableValidationReceipt,
   type FullSuiteAttestation,
 } from './full-suite-attestation.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+
+/** One durable outcome per role the post-coder judgment batch can dispatch:
+ *  reviewer, tech lead, and designer when the task is sized for it. QA is not a
+ *  member — it authors tests and stops when the coder starts. */
+export const JUDGMENT_OUTCOMES_MAX = 3;
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -60,6 +72,10 @@ export interface TaskRunRecord {
   warnings?: ObjectionFinding[];
   /** Human/PM rationale for accepting non-objection disagreement. */
   acceptance?: PmAcceptance;
+  /** Durable tie-break rulings, bounded to the workflow round budget. */
+  adjudications?: AdjudicationRecord[];
+  /** Durable evidence-contract downgrades and their reasons. */
+  downgradedFindings?: DowngradedFinding[];
   /** Successful worktree coder self-reviews. Optional for historical JSONL. */
   coderSelfReviews?: CoderSelfReviewRecord[];
   /** Typed executor failure. Optional for successful and historical records. */
@@ -74,7 +90,7 @@ export interface TaskRunRecord {
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
   /** Stable pre-mutation task tree. Optional for historical JSONL. */
   taskBaseTree?: string;
-  /** Exact tree judged by QA and downstream reviewers. */
+  /** Exact tree judged by the downstream reviewer/tech-lead/designer gates. */
   currentReviewTree?: string;
   /** Hash of the full-task diff between the two review trees. */
   fullTaskReviewHash?: string;
@@ -107,7 +123,36 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       ? { warnings: input.warnings.map((warning) => ({ ...warning })) }
       : {}),
     ...(input.acceptance !== undefined
-      ? { acceptance: { ...input.acceptance } }
+      ? { acceptance: durableAcceptance(input.acceptance) }
+      : {}),
+    ...(input.adjudications !== undefined
+      ? {
+          adjudications: input.adjudications
+            .slice(0, SEVERITY_LOOP_HARD_BUDGET)
+            .map((record) => ({
+              ...record,
+              signature: durableText(record.signature),
+              rationale: durableText(record.rationale),
+              ...(record.executedModelAlias !== undefined
+                ? { executedModelAlias: durableText(record.executedModelAlias) }
+                : {}),
+              ...(record.failClosedReason !== undefined
+                ? { failClosedReason: durableText(record.failClosedReason) }
+                : {}),
+            })),
+        }
+      : {}),
+    ...(input.downgradedFindings !== undefined
+      ? {
+          downgradedFindings: input.downgradedFindings
+            .slice(0, SEVERITY_LOOP_HARD_BUDGET * JUDGMENT_OUTCOMES_MAX)
+            .map((record) => ({
+              ...record,
+              finding: durableFinding(record.finding),
+              gaps: [...record.gaps],
+              reason: durableText(record.reason),
+            })),
+        }
       : {}),
     ...(input.coderSelfReviews !== undefined
       ? {
@@ -141,7 +186,7 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(input.judgmentOutcomes !== undefined
       ? {
-          judgmentOutcomes: input.judgmentOutcomes.slice(0, 4).map((outcome) => ({
+          judgmentOutcomes: input.judgmentOutcomes.slice(0, JUDGMENT_OUTCOMES_MAX).map((outcome) => ({
             role: outcome.role,
             status: outcome.status,
             ...(outcome.summary !== undefined
@@ -162,5 +207,45 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },
     outcome: input.outcome,
+  };
+}
+
+function durableText(value: string): string {
+  return scrubGenericAbsolutePaths(scrubAbsolutePaths(value)).slice(0, 2_000);
+}
+
+function durableFinding(finding: ObjectionFinding): ObjectionFinding {
+  return {
+    ...finding,
+    location: durableText(finding.location),
+    rationale: durableText(finding.rationale),
+    ...(finding.suggestedChange !== undefined
+      ? { suggestedChange: durableText(finding.suggestedChange) }
+      : {}),
+  };
+}
+
+function durableGateVerdict(verdict: GateVerdict): GateVerdict {
+  return {
+    outcome: verdict.outcome,
+    findings: verdict.findings.map(durableFinding),
+    ...(verdict.notes !== undefined ? { notes: durableText(verdict.notes) } : {}),
+    ...(verdict.suggestedChange !== undefined
+      ? { suggestedChange: durableText(verdict.suggestedChange) }
+      : {}),
+  };
+}
+
+function durableAcceptance(acceptance: PmAcceptance): PmAcceptance {
+  return {
+    actor: acceptance.actor,
+    decision: acceptance.decision,
+    rationale: durableText(acceptance.rationale),
+    ...(acceptance.dissentingRole !== undefined
+      ? { dissentingRole: acceptance.dissentingRole }
+      : {}),
+    ...(acceptance.overriddenVerdict !== undefined
+      ? { overriddenVerdict: durableGateVerdict(acceptance.overriddenVerdict) }
+      : {}),
   };
 }

@@ -37,7 +37,9 @@ export function createSenders(
   const tg = new TelegramSender(bot);
   const webview = new WebviewSender();
 
-  // never log event.userId or event.text — contains PII
+  // never log event.text — contains PII. The chat id is a different case:
+  // TelegramSender's delivery record carries it deliberately, so "did Rune
+  // actually tell me, and on which chat?" is answerable from logs/rune.log.
   const handler = (event: BusMessageEvent) => {
     void tg.send(event.userId, event.text).catch((err: unknown) => {
       log.error('TelegramSender.send failed on bus message', { error: err instanceof Error ? err.message : String(err) });

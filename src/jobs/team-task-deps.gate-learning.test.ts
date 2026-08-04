@@ -150,6 +150,7 @@ const models: TeamRoleModels = {
   coder: openai,
   reviewer: anthropic,
   designer: anthropic,
+  adjudicator: openai,
 };
 
 function sandbox(): SandboxSpec {
@@ -269,7 +270,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
       if (role === 'qa') {
         return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
       }
-      return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
+      return ['```pm-acceptance', '{"accepted": true, "rationale": "fixture"}', '```'].join('\n');
     };
 
     let currentDiff = '';
@@ -351,7 +352,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
           if (call.role === 'reviewer') {
             return ['```reviewer-verdict', '{"pass": true, "objections": []}', '```'].join('\n');
           }
-          return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
+          return ['```pm-acceptance', '{"accepted": true, "rationale": "fixture"}', '```'].join('\n');
         },
         runExecution: async () => ({
           ok: true,
@@ -453,7 +454,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
         return ['```qa-diff-revalidation', '{"approved": true}', '```'].join('\n');
       }
 
-      return ['```pm-wrapup', '{"resolved": true}', '```'].join('\n');
+      return ['```pm-acceptance', '{"accepted": true, "rationale": "fixture"}', '```'].join('\n');
     };
 
     let currentDiff = '';

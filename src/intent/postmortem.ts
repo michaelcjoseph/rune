@@ -38,6 +38,7 @@ const ROLE_OWNERSHIP: Record<RoleName, string> = {
   coder: 'implementation of the selected task',
   reviewer: 'independent code review, weighted to objection classes usage cannot surface',
   designer: 'UX/UI/front-end review',
+  adjudicator: 'tie-break rulings on reviewer-vs-tech-lead splits over a diff',
 };
 
 /** Build the post-mortem prompt for one feedback record. Pure. Presents the record,

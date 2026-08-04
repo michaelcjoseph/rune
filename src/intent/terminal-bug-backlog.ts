@@ -29,17 +29,24 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/** Keep model-authored fields inert inside the Markdown bullet. */
+function markdownInline(text: string): string {
+  return oneLine(text).replace(/([\\`*\[\]<>#])/g, '\\$1');
+}
+
 /** The defect identity used for dedup — stable across runs and findingIds. The
  *  formatted bullet embeds this verbatim, so a substring scan of bugs.md finds a
  *  prior filing of the same defect. */
 export function terminalBugSignature(entry: OrchestrationTerminalBugEntry): string {
-  return `${entry.class}/${entry.severity} @ ${entry.location} — ${oneLine(entry.rationale)}`;
+  return `${entry.class}/${entry.severity} @ ${markdownInline(entry.location)} — ` +
+    markdownInline(entry.rationale);
 }
 
 /** The bug text (the part after `- [ ]`). Begins with the dedup signature so the
  *  signature scan matches, then carries provenance for a human triaging it. */
 export function formatTerminalBugLine(entry: OrchestrationTerminalBugEntry): string {
-  return `[team-loop] ${terminalBugSignature(entry)} (finding ${entry.findingId} · task ${entry.taskId})`;
+  return `[team-loop] ${terminalBugSignature(entry)} ` +
+    `(finding ${markdownInline(entry.findingId)} · task ${markdownInline(entry.taskId)})`;
 }
 
 /** Insert `bullet` as the LAST entry under a `## Loop-filed` section, creating

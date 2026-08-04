@@ -68,7 +68,11 @@ import {
   type MutationCancellationSource,
   type RevocableMutationCancellationSource,
 } from '../transport/mutations.js';
-import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 import {
   adjacentExecutionFailure,
   executionFailureSummary,
@@ -408,6 +412,11 @@ async function runProjectOrchestrationImpl(
           taskRecords,
         );
       }
+
+      // Announce an override of a role verdict before validation runs: the
+      // operator should learn that a dissent was accepted even if the task then
+      // fails its closeout checks.
+      emitPmAcceptance(deps, task, evidence);
 
       // Mechanical validation is a separate gate. Closeout itself is not
       // entered until validation and post-validation review-surface checks pass.
@@ -753,7 +762,10 @@ async function recordTerminalBugs(
   evidence: TaskEvidence,
   opts: { missingWriter: 'blocked' | 'ok' } = { missingWriter: 'blocked' },
 ): Promise<CheckpointResult> {
-  const entries = terminalBugEntries(deps.runId, evidence);
+  const entries = [
+    ...terminalBugEntries(deps.runId, evidence),
+    ...downgradedFindingEntries(deps.runId, evidence),
+  ];
   if (entries.length === 0) return { kind: 'ok' };
   if (deps.appendTerminalBugEntries === undefined) {
     if (opts.missingWriter === 'ok') return { kind: 'ok' };
@@ -799,6 +811,31 @@ function terminalBugEntries(
     });
   }
   return [...entriesById.values()];
+}
+
+/** Findings demoted by the evidence contract. They are FILED so the concern
+ *  survives closeout, but they are deliberately NOT part of
+ *  `terminalBugEntries` — that collector also drives the non-reversible-severe
+ *  run hold, and letting a downgraded finding hold the run would undo the
+ *  downgrade. The bullet carries the downgrade reason so a human triaging
+ *  bugs.md sees why it is a follow-up rather than a block. */
+function downgradedFindingEntries(
+  runId: string,
+  evidence: TaskEvidence,
+): OrchestrationTerminalBugEntry[] {
+  return (evidence.downgradedFindings ?? []).map((entry, index) => ({
+    runId,
+    taskId: evidence.taskId,
+    findingId: `downgraded-${entry.sourceGate}-r${entry.round}-${index + 1}`,
+    sourceGate: entry.sourceGate,
+    class: entry.finding.class,
+    severity: entry.finding.severity === 'low' ? 'medium' : entry.finding.severity,
+    location: entry.finding.location.trim() || 'unspecified',
+    rationale: `${entry.finding.rationale} [${entry.reason}]`,
+    // Never `false`: a false value here would make this entry indistinguishable
+    // from an irreversible blocking finding to any future consumer.
+    reversible: true,
+  }));
 }
 
 function hasNonReversibleSevereTerminalFinding(evidence: TaskEvidence): boolean {
@@ -985,6 +1022,42 @@ function emitCloseoutCommit(
   });
 }
 
+/** Operator notification for an acceptance that overrode a role's dissent.
+ *  Overriding a gate verdict is a decision the operator should hear about the
+ *  same day, not discover in a run record later. Mirrors `emitCloseoutCommit`'s
+ *  progress-event shape, so it reaches Telegram and the cockpit through the
+ *  existing channel. */
+function emitPmAcceptance(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  evidence: TaskEvidence,
+): void {
+  const acceptance = evidence.acceptance;
+  if (acceptance === undefined) return;
+  const overriddenRole = acceptance.dissentingRole ??
+    evidence.rejectionFeedback?.rejectingRole ??
+    'a role';
+  const taskText = redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(task.text)));
+  const rationale = redactSecrets(
+    scrubGenericAbsolutePaths(scrubAbsolutePaths(acceptance.rationale)),
+  );
+  deps.emit?.({
+    kind: 'progress',
+    data: {
+      event: 'pm-acceptance',
+      projectSlug: deps.project,
+      product: deps.product,
+      taskId: task.id,
+      taskText,
+      actor: acceptance.actor,
+      overriddenRole,
+      rationale,
+      line: `${acceptance.actor} accepted "${taskText}" over ${overriddenRole}'s dissent · ` +
+        rationale,
+    },
+  });
+}
+
 function attemptId(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: number): string {
   return `${deps.runId}-${task.id}-attempt-${attemptNumber}`;
 }
@@ -1060,19 +1133,31 @@ function taskRecordFromEvidence(
   if (evidence.outcome === 'cancelled') {
     throw new Error('cancelled task evidence cannot be persisted as a task run record');
   }
+  const adjudicatorModel = evidence.adjudications
+    ?.map((record) => record.executedModelAlias)
+    .reverse()
+    .find((alias) => alias !== undefined);
   return buildTaskRunRecord({
     taskId: task.id,
     taskText: task.text,
     attemptId: `${deps.runId}-${task.id}`,
     rolesInvoked: evidence.rolesInvoked,
     transcriptIds: [],
-    modelChoices: {},
+    modelChoices: adjudicatorModel === undefined
+      ? {}
+      : { adjudicator: adjudicatorModel },
     commitSha,
     verdicts: evidence.reviewerVerdict
       ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
       : {},
     ...warningsField(evidence),
     ...acceptanceField(evidence),
+    ...(evidence.adjudications !== undefined
+      ? { adjudications: evidence.adjudications }
+      : {}),
+    ...(evidence.downgradedFindings !== undefined
+      ? { downgradedFindings: evidence.downgradedFindings }
+      : {}),
     ...(evidence.coderSelfReviews !== undefined
       ? { coderSelfReviews: evidence.coderSelfReviews }
       : {}),

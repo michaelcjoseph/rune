@@ -27,10 +27,22 @@ import { fileURLToPath } from 'node:url';
 // its tests runnable without the app's env vars.
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** The six product-team roles. Closed union — the loader never reads a role dir
+/** The product-team roles. Closed union — the loader never reads a role dir
  *  outside this set, so an attacker-controlled role string can't traverse out of
- *  `agents/`. Slugs match the `agents/<slug>/` directory names. */
-export type RoleName = 'pm' | 'tech-lead' | 'qa' | 'coder' | 'reviewer' | 'designer';
+ *  `agents/`. Slugs match the `agents/<slug>/` directory names.
+ *
+ *  `adjudicator` is the tie-break judge, not a seventh team member: it is
+ *  dispatched only when the reviewer and tech lead split on a diff in a way that
+ *  would otherwise end the task, and it rules on which verdict the artifacts
+ *  support. It never authors, implements, or reviews on its own initiative. */
+export type RoleName =
+  | 'pm'
+  | 'tech-lead'
+  | 'qa'
+  | 'coder'
+  | 'reviewer'
+  | 'designer'
+  | 'adjudicator';
 
 /** Canonical role inventory, the spec's ownership table in slug form. */
 export const ROLE_NAMES: readonly RoleName[] = [
@@ -40,6 +52,7 @@ export const ROLE_NAMES: readonly RoleName[] = [
   'coder',
   'reviewer',
   'designer',
+  'adjudicator',
 ] as const;
 
 /** Root holding every role's `<role>/{SOUL.md,memory.md}`, in the rune repo. */

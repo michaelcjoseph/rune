@@ -57,6 +57,33 @@ describe('createLogger', () => {
     spy.mockRestore();
   });
 
+  it('can keep private file data out of the console record', async () => {
+    vi.resetModules();
+    const root = join(tmpdir(), `rune-private-logger-${process.pid}-${Date.now()}`);
+    delete process.env.VITEST;
+    process.env.RUNE_LOGS_DIR = root;
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { createLogger: createLiveLogger, flushLogger } = await import('./logger.js');
+      createLiveLogger('private').info(
+        'delivered',
+        { chatId: 123, kind: 'message' },
+        { chatId: '[private]', kind: 'message' },
+      );
+      await flushLogger();
+
+      const consoleEntry = JSON.parse(spy.mock.calls[0]![0] as string);
+      expect(consoleEntry.data).toEqual({ chatId: '[private]', kind: 'message' });
+      const written = readdirSync(root)
+        .map((file) => readFileSync(join(root, file), 'utf8'))
+        .join('\n');
+      expect(written).toContain('"chatId":123');
+    } finally {
+      spy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('omits data field when not provided', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const log = createLogger('test');

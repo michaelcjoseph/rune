@@ -27,6 +27,31 @@ export function scrubAbsolutePaths(raw: string): string {
   return s;
 }
 
+/** Replace remaining host-shaped Unix/Windows paths that are not one of Rune's
+ * configured roots. The Unix prefixes are deliberately bounded so product
+ * routes such as `/api/users` survive in model-authored prose.
+ *
+ * The `(?=\/|terminator|$)` lookahead after the prefix alternation is
+ * load-bearing, not decoration. Without it the trailing `(?:\/…)?` group is
+ * optional, so the engine happily matches a bare *prefix* of a longer segment
+ * and stops: `/homelab/private-notes/secret.md` became
+ * `<path>lab/private-notes/secret.md`, splicing the placeholder mid-word and
+ * letting the rest of the path through. That is strictly worse than no
+ * scrubbing at all, because the output *looks* redacted and so defeats visual
+ * inspection. The lookahead forces the keyword to be a complete path segment;
+ * ordered alternation still backtracks `repo` → `repos` when the longer
+ * alternative is the real segment. A first segment that merely starts with a
+ * reserved word (`/homelab`, `/repository`, `/etcd`) is not a host root and is
+ * left alone, exactly like `/api/users`. */
+export function scrubGenericAbsolutePaths(raw: string): string {
+  return raw
+    .replace(
+      /(^|[\s([{:="'`,;])(?:file:\/\/\/[A-Za-z0-9._-]+(?:\/[^\s)\]}>,”,"'`;]*)?|\/(?:Users|home|private|tmp|var|opt|Volumes|Applications|usr|etc|workspace|workspaces|repo|repos)(?=\/|[\s)\]}>,”"'`;]|$)(?:\/[^\s)\]}>,”,"'`;]*)?)/g,
+      '$1<path>',
+    )
+    .replace(/\b[A-Za-z]:\\[^\\\s]+(?:\\[^\s]*)?/g, '<path>');
+}
+
 function projectPathScrubCandidates(): string[] {
   const candidates = new Set<string>();
   if (PROJECT_ROOT) {

@@ -66,31 +66,47 @@ export function flushLogger(): Promise<void> {
   });
 }
 
-function log(level: Level, component: string, message: string, data?: Record<string, unknown>) {
-  const entry = {
+function log(
+  level: Level,
+  component: string,
+  message: string,
+  data?: Record<string, unknown>,
+  consoleData?: Record<string, unknown>,
+) {
+  const base = {
     time: new Date().toISOString(),
     level,
     component,
     message,
-    ...(data ? { data } : {}),
   };
-  const line = JSON.stringify(entry);
+  const consoleLine = JSON.stringify({
+    ...base,
+    ...(consoleData ?? data ? { data: consoleData ?? data } : {}),
+  });
+  const fileLine = JSON.stringify({
+    ...base,
+    ...(data ? { data } : {}),
+  });
 
   if (level === 'error') {
-    console.error(line);
+    console.error(consoleLine);
   } else if (level === 'warn') {
-    console.warn(line);
+    console.warn(consoleLine);
   } else {
-    console.log(line);
+    console.log(consoleLine);
   }
 
   const stream = getFileStream();
-  if (stream) stream.write(`${line}\n`);
+  if (stream) stream.write(`${fileLine}\n`);
 }
 
 export function createLogger(component: string) {
   return {
-    info: (message: string, data?: Record<string, unknown>) => log('info', component, message, data),
+    info: (
+      message: string,
+      data?: Record<string, unknown>,
+      consoleData?: Record<string, unknown>,
+    ) => log('info', component, message, data, consoleData),
     warn: (message: string, data?: Record<string, unknown>) => log('warn', component, message, data),
     error: (message: string, data?: Record<string, unknown>) => log('error', component, message, data),
     debug: (message: string, data?: Record<string, unknown>) => log('debug', component, message, data),
