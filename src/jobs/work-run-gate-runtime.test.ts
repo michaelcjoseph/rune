@@ -59,6 +59,9 @@ import {
   RELATED_TEST_SELECTED_PATHS_MAX,
 } from '../intent/related-test-diagnostic.js';
 
+const ATTESTATION_COMMAND_TIMEOUT_MS = 30_000;
+const ATTESTATION_TEST_TIMEOUT_MS = 90_000;
+
 /** A stand-in broker carrying a REAL launcher capability, so a test double
  *  still satisfies the same grant check production callers must pass. */
 function fakeBroker(
@@ -543,7 +546,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
       },
     });
     expect(existsSync(integrationWorktree)).toBe(false);
-  }, 30_000);
+  }, 90_000);
 
   it('runs final gate commands from integrationWorktree/validationCwd', async () => {
     git(repoPath, 'checkout', '-q', BRANCH);
@@ -669,6 +672,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
       const result = await runGate(gateOpts({
         validationCommands: [command],
         validationCommandProfiles: [{ command, profile: 'sandbox-integration' }],
+        commandTimeoutMs: 30_000,
       }));
 
       expect(result.ok).toBe(true);
@@ -677,7 +681,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
         commands: [{ command, outcome: 'passed' }],
       });
     },
-    30_000,
+    90_000,
   );
 });
 
@@ -940,7 +944,7 @@ describe('runValidationCommands', () => {
     expect(full.exitCode).toBe(0);
     expect(existsSync(join(fixture, 'alpha-ran'))).toBe(true);
     expect(existsSync(join(fixture, 'beta-ran'))).toBe(true);
-  }, 60_000);
+  }, 90_000);
 
   it('isolates cache state across concurrent Vitest validations', async () => {
     const makeFixture = (name: string): string => {
@@ -1322,7 +1326,7 @@ describe('runValidationCommands', () => {
       // ps exits non-zero once the reaped process has disappeared entirely.
     }
     expect(state === '' || state.startsWith('Z')).toBe(true);
-  }, 15_000);
+  }, 90_000);
 
   it.runIf(process.platform === 'darwin')(
     'detects and reaps a detached new-session descendant by its private launch nonce',
@@ -1453,7 +1457,7 @@ describe('runValidationCommands', () => {
     } finally {
       clearTimeout(trigger);
     }
-  });
+  }, 90_000);
 
   it('captures a durable diagnostic report before reaping a silent startup wedge', async () => {
     const diagnosticsDir = join(tmpRoot, 'validation-diagnostics');
@@ -1491,6 +1495,15 @@ describe('runValidationCommands', () => {
 });
 
 describe('runFullSuiteValidation — canonical attestation launcher', () => {
+  const attestationSentinel = join(
+    PROJECT_ROOT,
+    `.rune-attestation-sentinel-${process.pid}`,
+  );
+
+  afterEach(() => {
+    rmSync(attestationSentinel, { force: true });
+  });
+
   const completeManifest = (tests = 7) => ({
     version: 1 as const,
     runner: 'vitest' as const,
@@ -1531,7 +1544,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       validationCwd: '.',
       expectedTreeOid,
       fullTaskReviewHash: 'a'.repeat(64),
-      timeoutMs: 30_000,
+      timeoutMs: ATTESTATION_COMMAND_TIMEOUT_MS,
       diagnosticDir: join(tmpRoot, 'validation-diagnostics'),
     };
   }
@@ -1550,6 +1563,12 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       trustedProfileAdmission: true,
     };
   }
+
+  it('keeps the enclosing test timeout above the command deadline with reaping headroom', () => {
+    expect(ATTESTATION_TEST_TIMEOUT_MS).toBeGreaterThan(ATTESTATION_COMMAND_TIMEOUT_MS);
+    expect(ATTESTATION_TEST_TIMEOUT_MS - ATTESTATION_COMMAND_TIMEOUT_MS)
+      .toBeGreaterThanOrEqual(60_000);
+  });
 
   it('keeps private reporter material on the trusted observer call only', async () => {
     const { expectedTreeOid } = prepareAttestationFixture();
@@ -1609,46 +1628,42 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
         expect(result).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
         return;
       }
-      const sentinel = join(PROJECT_ROOT, `.rune-attestation-sentinel-${process.pid}`);
-      writeFileSync(sentinel, 'trusted\n', { mode: 0o600 });
-      try {
-        writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
-        writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
-          name: 'runtime-tamper-adversary',
-          private: true,
-          scripts: { test: 'vitest run' },
-        }));
-        writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
-          name: 'runtime-tamper-adversary',
-          lockfileVersion: 3,
-        }));
-        writeFileSync(
-          join(repoPath, 'vitest.config.cjs'),
-          [
-            "const escapedProcess = require.constructor('return process')();",
-            "const fs = escapedProcess.getBuiltinModule('node:fs');",
-            `try { fs.appendFileSync(${JSON.stringify(sentinel)}, 'tampered\\n'); } catch {}`,
-            'module.exports = {};',
-            '',
-          ].join('\n'),
-        );
-        writeFileSync(
-          join(repoPath, 'attested.test.js'),
-          "import { it } from 'vitest'; it('passes', () => {});\n",
-        );
-        symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
-        git(repoPath, 'add', '-A');
-        const expectedTreeOid = git(repoPath, 'write-tree');
+      writeFileSync(attestationSentinel, 'trusted\n', { mode: 0o600 });
+      writeFileSync(join(repoPath, '.gitignore'), 'node_modules\n');
+      writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+        name: 'runtime-tamper-adversary',
+        private: true,
+        scripts: { test: 'vitest run' },
+      }));
+      writeFileSync(join(repoPath, 'package-lock.json'), JSON.stringify({
+        name: 'runtime-tamper-adversary',
+        lockfileVersion: 3,
+      }));
+      writeFileSync(
+        join(repoPath, 'vitest.config.cjs'),
+        [
+          "const escapedProcess = require.constructor('return process')();",
+          "const fs = escapedProcess.getBuiltinModule('node:fs');",
+          `try { fs.appendFileSync(${JSON.stringify(attestationSentinel)}, 'tampered\\n'); } catch {}`,
+          'module.exports = {};',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(repoPath, 'attested.test.js'),
+        "import { it } from 'vitest'; it('passes', () => {});\n",
+      );
+      symlinkSync(join(PROJECT_ROOT, 'node_modules'), join(repoPath, 'node_modules'), 'dir');
+      git(repoPath, 'add', '-A');
+      const expectedTreeOid = git(repoPath, 'write-tree');
 
-        const result = await runFullSuiteValidation(opts(expectedTreeOid));
+      const result = await runFullSuiteValidation(opts(expectedTreeOid));
 
-        expect(result).toMatchObject({ ok: true, coverageComplete: true });
-        expect(readFileSync(sentinel, 'utf8')).toBe('trusted\n');
-      } finally {
-        rmSync(sentinel, { force: true });
-      }
+      expect(result, JSON.stringify(result, null, 2))
+        .toMatchObject({ ok: true, coverageComplete: true });
+      expect(readFileSync(attestationSentinel, 'utf8')).toBe('trusted\n');
     },
-    30_000,
+    ATTESTATION_TEST_TIMEOUT_MS,
   );
 
   it('fails closed when product config imports the trusted reporter as a signing oracle', async () => {
@@ -1793,7 +1808,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       'npm test',
       ['npm', 'test'],
       repoPath,
-      30_000,
+      ATTESTATION_COMMAND_TIMEOUT_MS,
       join(tmpRoot, 'validation-diagnostics'),
       {
         deniedWriteRoots: [PROJECT_ROOT],
@@ -1841,7 +1856,7 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       'npm test',
       ['npm', 'test'],
       repoPath,
-      30_000,
+      ATTESTATION_COMMAND_TIMEOUT_MS,
       join(tmpRoot, 'validation-diagnostics'),
       {
         deniedWriteRoots: [PROJECT_ROOT],

@@ -4,6 +4,7 @@ logs/
 coverage/
 .worktrees/
 .rune/
+.rune-attestation-sentinel-*
 .claude/scheduled_tasks.lock
 
 .env
