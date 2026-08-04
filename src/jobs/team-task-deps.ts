@@ -252,12 +252,25 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
       throw new Error('adjudicator escalation binding lacks deep-reasoning');
     }
     adjudicatorEscalation = toBinding(escalationAlias, policy, 'adjudicator escalation');
+    // Distinct from the base binding, from both disputants, AND from the coder.
+    // The coder exclusion is the load-bearing one: escalation is reserved for an
+    // objection that already survived a coder retry, so binding it to the
+    // coder's own model would have the artifact's author cast the deciding vote
+    // on whether the artifact is defective — the same independence failure that
+    // justifies resolving the reviewer with `distinctFromProvider: coder`.
+    // Sharing a provider with the coder is accepted by design (both disputants
+    // are anthropic, so the adjudicator sits on the openai side); sharing the
+    // exact model is not.
     if (
       adjudicatorEscalation.alias === adjudicator.alias ||
       adjudicatorEscalation.alias === reviewer?.alias ||
-      adjudicatorEscalation.alias === techLead.alias
+      adjudicatorEscalation.alias === techLead.alias ||
+      adjudicatorEscalation.alias === coder.alias
     ) {
-      throw new Error('adjudicator escalation must use a distinct non-disputant model');
+      throw new Error(
+        'adjudicator escalation must use a model distinct from the base adjudicator, ' +
+          'both disputants, and the coder',
+      );
     }
   } catch (err) {
     adjudicatorEscalation = null;
@@ -1864,9 +1877,10 @@ export function buildProductionTeamTaskDeps(
           };
         }
 
-        // 6. Land the repair in the seam state: the re-review and
-        //    qaRevalidateDiff read `lastQaDiff`, so it must reflect the
-        //    patched tests (same capture + scrubbing as the execution agent).
+        // 6. Land the repair in the seam state: techLeadReviewTests's re-review
+        //    and this seam's own next call read `lastQaDiff`, so it must
+        //    reflect the patched tests (same capture + scrubbing as the
+        //    execution agent).
         const diffResult = await git(['diff', 'HEAD']);
         lastQaDiff = redactSecrets(scrubPathsInText(diffResult.stdout));
         lastRepairRedCheck = redCheck;
@@ -2453,9 +2467,11 @@ export function buildProductionTeamTaskDeps(
     // construction — `judge` opens a throwaway session per invocation, and the
     // body carries only artifacts plus the two verdict texts, never the coder's
     // reasoning or any earlier round. A null base binding leaves the seam
-    // absent for pure/legacy callers. The production runner rejects either
-    // missing adjudicator binding before preflight, so live orchestration never
-    // reaches that compatibility path.
+    // absent for pure/legacy callers; the production runner rejects a missing
+    // BASE binding before preflight, so live orchestration never reaches that
+    // compatibility path. A missing ESCALATION binding is not rejected up front
+    // — it throws here, on the repeat that actually needs it, and the workflow
+    // records that as the round's fail-closed reason.
     ...(models.adjudicator === null ? {} : {
       adjudicateSplit: async ({
         task,
@@ -2922,12 +2938,15 @@ export function createProductionTaskWorkflowRunner(
         'role model resolution failed: required adjudicator binding is unavailable',
       );
     }
-    if (models.adjudicatorEscalation === null || models.adjudicatorEscalation === undefined) {
-      return blockedEvidence(
-        task,
-        'role model resolution failed: required adjudicator escalation binding is unavailable',
-      );
-    }
+    // The ESCALATION binding is deliberately not required here. It is spent only
+    // on a repeat split — an objection that already survived a coder retry — so
+    // blocking every task on it made the blast radius of one unsatisfiable
+    // policy constraint the entire orchestration surface. It now fails closed
+    // where it is actually needed: the `adjudicateSplit` seam throws when a
+    // repeat has no escalation binding, and the workflow turns that into a
+    // block, which is the same terminal outcome this check produced but only
+    // for the tasks that genuinely reach it. The BASE binding stays required
+    // above because every split needs it.
 
     if (!preflightPassed) {
       if (pendingPreflight === null) {

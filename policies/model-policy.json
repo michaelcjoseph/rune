@@ -51,7 +51,7 @@
     }
   ],
   "globalFallback": "opus",
-  "_roleEscalations_comment": "A repeat adjudication must move to a separately declared model rather than silently reusing the first binding. Keep it distinct from the base adjudicator and both disputing role aliases.",
+  "_roleEscalations_comment": "A repeat adjudication must move to a separately declared model rather than silently reusing the first binding. It must be deep-reasoning capable AND distinct from the base adjudicator, both disputing role aliases (reviewer, tech-lead), and the CODER — escalation judges an objection that already survived a coder retry, so the artifact's own author must not cast the deciding vote on whether the artifact is defective. NOTE: no alias in the registry currently satisfies all of those at once. The deep-reasoning models are opus (reviewer), fable (tech-lead), and gpt-5.6-sol (coder), so the value below is rejected by resolveTeamRoleModels and repeat adjudication fails closed to a block at the split that needs it. This is deliberate and recorded rather than silently relaxed: register a distinct deep-reasoning model (an openai one keeps the by-design provider split) and escalation starts working with no code change. The value is kept, not deleted, so the intended binding stays visible next to the reason it is currently inadmissible.",
   "roleEscalations": {
     "adjudicator": "gpt-5.6-sol"
   },
