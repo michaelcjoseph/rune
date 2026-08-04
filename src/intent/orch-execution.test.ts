@@ -227,6 +227,55 @@ describe('orch-run-record — required fields', () => {
     })).not.toContain('/Users/operator');
   });
 
+  it('scrubs and defensively copies the accepted-with-rationale overridden verdict', () => {
+    const acceptance = {
+      actor: 'pm' as const,
+      decision: 'accepted-with-rationale' as const,
+      rationale: 'Accepted at /Users/operator/private/decision.md because the risk is low.',
+      dissentingRole: 'tech-lead' as const,
+      overriddenVerdict: {
+        outcome: 'fail' as const,
+        findings: [{
+          class: 'cost-perf' as const,
+          severity: 'low' as const,
+          location: '/Users/operator/private/store.ts:12',
+          rationale: 'Extra churn seen at /Users/operator/private/store.ts:12',
+          suggestedChange: 'Batch the write at /Users/operator/private/store.ts:12',
+        }],
+        notes: 'Dissent recorded at /Users/operator/private/store.ts:12',
+        suggestedChange: 'See /Users/operator/private/store.ts:12',
+      },
+    };
+
+    const rec = buildTaskRunRecord({
+      taskId: 'overridden-verdict',
+      taskText: 'Persist the overridden verdict',
+      attemptId: 'a-overridden',
+      rolesInvoked: ['tech-lead', 'pm'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: 'abc9999',
+      verdicts: { reviewer: 'pass' },
+      acceptance,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.acceptance?.dissentingRole).toBe('tech-lead');
+    expect(rec.acceptance?.overriddenVerdict).not.toBe(acceptance.overriddenVerdict);
+    expect(rec.acceptance?.overriddenVerdict?.findings).not.toBe(acceptance.overriddenVerdict.findings);
+    expect(rec.acceptance?.overriddenVerdict?.findings[0]).not.toBe(acceptance.overriddenVerdict.findings[0]);
+    expect(rec.acceptance?.overriddenVerdict).toMatchObject({
+      outcome: 'fail',
+      findings: [expect.objectContaining({ class: 'cost-perf', severity: 'low' })],
+    });
+
+    const serialized = JSON.stringify(rec.acceptance);
+    expect(serialized).not.toContain('/Users/operator');
+    expect(serialized).toContain('<path>');
+  });
+
   it('bounds coderSelfReviews to at most 4 rounds and truncates notes/changedPaths for durable evidence', () => {
     const manyPaths = Array.from({ length: 250 }, (_, i) => `src/file-${i}.ts`);
     const longNotes = 'x'.repeat(2_500);

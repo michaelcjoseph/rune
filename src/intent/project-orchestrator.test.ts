@@ -2073,6 +2073,159 @@ describe('project-orchestrator — durable run state', () => {
     ]);
   });
 
+  it('emits a pm-acceptance progress event, even when closeout checks subsequently fail', async () => {
+    const acceptance = {
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale: 'Accepted at /Users/operator/private/notes.md because behavior is correct.',
+      dissentingRole: 'reviewer',
+      overriddenVerdict: {
+        outcome: 'fail',
+        findings: [],
+        notes: 'reviewer wanted a rename',
+      },
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'pm'],
+        reviewerVerdict: { outcome: 'fail', objections: [], notes: 'reviewer wanted a rename' },
+        findingsLedger: [],
+        loopExitReason: 'all-low',
+        objectionOpen: false,
+        handoffNotes: ['PM accepted over reviewer dissent'],
+        acceptance,
+      } as TaskEvidence),
+      // Even when validation subsequently fails, the operator must already
+      // have been told about the override — the emit happens before this call.
+      runCloseoutChecks: async () => redCloseout(),
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Rename the widget',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    const raw = res as unknown as Record<string, unknown>;
+    expect(raw['kind']).toBe('held');
+
+    const events = eventsByName(h.state.events, 'pm-acceptance');
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events[0]).toMatchObject({
+      kind: 'progress',
+      data: {
+        event: 'pm-acceptance',
+        projectSlug: '14-x',
+        product: 'aura',
+        taskId: 'rename-the-widget',
+        taskText: 'Rename the widget',
+        actor: 'pm',
+        overriddenRole: 'reviewer',
+        rationale: expect.stringContaining('because behavior is correct'),
+      },
+    });
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('/Users/operator');
+  });
+
+  it('does not emit a pm-acceptance event when the task closes out without an override', async () => {
+    const h = makeHarness();
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(eventsByName(h.state.events, 'pm-acceptance')).toEqual([]);
+  });
+
+  it('files a downgraded finding as a bugs.md follow-up without holding the run or double-counting severity', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: { outcome: 'pass', findings: [], objections: [] },
+        findingsLedger: [],
+        loopExitReason: 'all-low',
+        objectionOpen: false,
+        handoffNotes: ['shipped after a downgraded finding'],
+        downgradedFindings: [
+          {
+            finding: {
+              class: 'security',
+              severity: 'high',
+              location: 'unknown',
+              rationale: 'a plausible-sounding security concern with no anchor',
+            },
+            sourceGate: 'reviewer',
+            round: 1,
+            gaps: ['location'],
+            reason: 'downgraded to a non-blocking observation: a blocking security finding ' +
+              'requires a concrete location',
+            rePrompted: true,
+          },
+          {
+            finding: {
+              class: 'concurrency',
+              severity: 'low',
+              location: 'src/lease.ts:9',
+              rationale: 'a low-severity finding that is never blocking to begin with',
+            },
+            sourceGate: 'tech-lead',
+            round: 2,
+            gaps: [],
+            reason: 'adjudicator upheld the pass',
+            rePrompted: false,
+          },
+        ],
+      } as TaskEvidence),
+      appendTerminalBugEntries: async (entries) => {
+        bugEntries.push(...entries);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Ship with a downgraded finding',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(bugEntries).toEqual([
+      {
+        runId: 'run-1',
+        taskId: 'ship-with-a-downgraded-finding',
+        findingId: 'downgraded-reviewer-r1-1',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'high',
+        location: 'unknown',
+        rationale: 'a plausible-sounding security concern with no anchor ' +
+          '[downgraded to a non-blocking observation: a blocking security finding ' +
+          'requires a concrete location]',
+        reversible: true,
+      },
+      {
+        runId: 'run-1',
+        taskId: 'ship-with-a-downgraded-finding',
+        findingId: 'downgraded-tech-lead-r2-2',
+        sourceGate: 'tech-lead',
+        class: 'concurrency',
+        // A downgraded `low` finding is bumped to `medium` so it is never
+        // indistinguishable from an ordinary non-blocking low finding.
+        severity: 'medium',
+        location: 'src/lease.ts:9',
+        rationale: 'a low-severity finding that is never blocking to begin with ' +
+          '[adjudicator upheld the pass]',
+        reversible: true,
+      },
+    ]);
+  });
+
   it('holds as an operational terminal when warning recording fails, without re-running the coder workflow', async () => {
     const worktreePath = '/tmp/rune-worktrees/aura/14-recording-failure';
     const warningFinding = {

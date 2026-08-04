@@ -166,6 +166,21 @@ describe('model selection policy — updating as models change (test-plan §5)',
       roleEscalations: ['codex'],
     }))).toThrow(/roleEscalations.*object/i);
   });
+
+  it('rejects a non-string or empty role escalation alias', () => {
+    expect(() => parsePolicy(JSON.stringify({
+      ...samplePolicy(),
+      roleEscalations: { adjudicator: 7 },
+    }))).toThrow(/roleEscalations.*model alias string/i);
+    expect(() => parsePolicy(JSON.stringify({
+      ...samplePolicy(),
+      roleEscalations: { adjudicator: '' },
+    }))).toThrow(/roleEscalations.*model alias string/i);
+    expect(() => parsePolicy(JSON.stringify({
+      ...samplePolicy(),
+      roleEscalations: null,
+    }))).toThrow(/roleEscalations.*object/i);
+  });
 });
 
 describe('model selection policy — cross-model adjudication constraint (test-plan §5)', () => {

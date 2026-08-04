@@ -661,6 +661,43 @@ describe('readWorkRunSummaryResult', () => {
 
     expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
   });
+
+  it('accepts a legacy persisted "qa" judgment outcome but drops it, keeping reviewer/tech-lead evidence', () => {
+    // Runs recorded before QA's post-implementation diff-revalidation gate was
+    // removed carry a `qa` entry in judgmentOutcomes. The role is no longer a
+    // valid JudgmentRole, but the row as a whole must still be accepted so the
+    // reviewer/tech-lead evidence beside it survives a restart/read.
+    const id = 'legacy-qa-judgment-run';
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      judgmentOutcomes: [
+        { role: 'qa', status: 'reject', summary: 'legacy diff-revalidation reject' },
+        { role: 'reviewer', status: 'pass' },
+        { role: 'tech-lead', status: 'reject', summary: 'still rejecting' },
+      ],
+    }));
+
+    const result = readWorkRunSummaryResult(tmpDir, id);
+    expect(result.status).toBe('found');
+    expect(result.status === 'found' ? result.summary.judgmentOutcomes : undefined).toEqual([
+      { role: 'reviewer', status: 'pass' },
+      { role: 'tech-lead', status: 'reject', summary: 'still rejecting' },
+    ]);
+  });
+
+  it('rejects judgmentOutcomes carrying an unrecognized role entirely', () => {
+    const id = 'unknown-role-judgment-run';
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      judgmentOutcomes: [{ role: 'coder', status: 'pass' }],
+    }));
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
 });
 
 describe('merge-gate validation receipt', () => {
