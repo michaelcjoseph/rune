@@ -344,27 +344,13 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
     expect(models.adjudicator?.alias).toBe(policy.roleDefaults['adjudicator']);
   });
 
-  // The shipped registry has exactly three deep-reasoning aliases and every one
-  // of them is spoken for: opus is the reviewer, fable the tech lead, and
-  // gpt-5.6-sol the coder. So the declared escalation is currently inadmissible
-  // and repeat adjudication fails closed. Asserted explicitly rather than left
-  // implicit, so registering a fourth deep-reasoning model turns this test red
-  // and prompts a deliberate re-read of the constraint set.
-  it('rejects an escalation binding that collapses onto the coder', () => {
+  // Pins the shipped policy: escalation must actually resolve, and must clear
+  // every distinctness constraint at once. A future model swap that collapses
+  // it onto any of the four turns this red instead of silently disabling
+  // repeat adjudication.
+  it('resolves the shipped escalation binding against every distinctness rule', () => {
     const policy = loadRealPolicy();
     const models = resolveTeamRoleModels(policy);
-    expect(policy.roleEscalations?.['adjudicator']).toBe(models.coder.alias);
-    expect(models.adjudicatorEscalation ?? null).toBeNull();
-  });
-
-  it('accepts an escalation binding distinct from the coder and both disputants', () => {
-    const policy = loadRealPolicy();
-    // Move the coder off the deep-reasoning alias so the declared escalation
-    // satisfies every constraint; the binding must then resolve.
-    const models = resolveTeamRoleModels({
-      ...policy,
-      roleDefaults: { ...policy.roleDefaults, coder: 'gpt-5.6-terra' },
-    });
     expect(models.adjudicatorEscalation?.alias).toBe(policy.roleEscalations?.['adjudicator']);
     expect(models.adjudicatorEscalation?.alias).not.toBe(models.adjudicator?.alias);
     expect(models.adjudicatorEscalation?.alias).not.toBe(models.coder.alias);
@@ -374,6 +360,27 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
       (entry) => entry.alias === models.adjudicatorEscalation?.alias,
     );
     expect(escalation?.capabilities).toContain('deep-reasoning');
+  });
+
+  // The coder exclusion is the one this file exists to defend: escalation
+  // judges an objection that already survived a coder retry, so it must never
+  // land on the artifact author's own model.
+  it.each([
+    ['coder', (policy: ModelPolicy) => policy.roleDefaults['coder']],
+    ['base adjudicator', (policy: ModelPolicy) => policy.roleDefaults['adjudicator']],
+    ['reviewer', (policy: ModelPolicy) => policy.roleDefaults['reviewer']],
+    ['tech lead', (policy: ModelPolicy) => policy.roleDefaults['tech-lead']],
+  ])('rejects an escalation binding that collapses onto the %s', (_label, aliasFor) => {
+    const policy = loadRealPolicy();
+    const collidingAlias = aliasFor(policy);
+    // Guards the fixture itself: a renamed roleDefault would otherwise make
+    // this assert nothing while still passing.
+    expect(collidingAlias).toBeTypeOf('string');
+    const models = resolveTeamRoleModels({
+      ...policy,
+      roleEscalations: { ...policy.roleEscalations, adjudicator: collidingAlias as string },
+    });
+    expect(models.adjudicatorEscalation ?? null).toBeNull();
   });
 
   it('fails closed instead of falling back when the adjudicator default is absent', () => {
@@ -410,14 +417,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
 
   it('moves a repeated split adjudication to a different model', async () => {
     const models: string[] = [];
-    // The shipped policy's escalation alias is the coder's, so it resolves to
-    // null; move the coder off it to exercise the escalation path itself.
-    const realPolicy = loadRealPolicy();
-    const escalatablePolicy = {
-      ...realPolicy,
-      roleDefaults: { ...realPolicy.roleDefaults, coder: 'gpt-5.6-terra' },
-    };
-    const deps = buildDeps(resolveTeamRoleModels(escalatablePolicy), makeSeams({
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role, model }) => {
         if (role === 'adjudicator') models.push(model);
         return [
@@ -459,7 +459,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
   // runs normally, and only the repeat throws. The workflow turns that throw
   // into the round's failClosedReason and blocks.
   it('fails closed on the repeat, not the base, when escalation is unresolvable', async () => {
-    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+    // Strip the escalation declaration so only the repeat path is unbound; the
+    // base adjudicator still resolves and must keep working.
+    const policy = loadRealPolicy();
+    const deps = buildDeps(resolveTeamRoleModels({ ...policy, roleEscalations: {} }), makeSeams({
       judgmentCall: async () => [
         '```adjudication',
         '{"upholds":"pass","rationale":"The guarded path answers the disputed claim."}',
@@ -3018,24 +3021,11 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
 
   it('attributes a surviving split to the actual escalation binding', async () => {
     const events: AttributedActivityEvent[] = [];
-    // The shipped escalation alias is the coder's and so resolves to null.
-    // Move the coder off it in a temp policy to exercise attribution of a real
-    // escalation binding.
-    const dir = await mkdtemp(join(tmpdir(), 'escalation-attribution-'));
-    const policyPath = join(dir, 'model-policy.json');
-    const realPolicy = loadRealPolicy();
-    await writeFile(
-      policyPath,
-      JSON.stringify({
-        ...realPolicy,
-        roleDefaults: { ...realPolicy.roleDefaults, coder: 'gpt-5.6-terra' },
-      }),
-    );
     const run = createProductionTaskWorkflowRunner(
       {
         sandbox: makeSandbox(),
         productsConfigPath: '/nonexistent/products.json',
-        modelPolicyPath: policyPath,
+        modelPolicyPath: REAL_POLICY_PATH,
         emit: (event) => events.push(event),
         cap: 2,
       },
@@ -3069,22 +3059,18 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       }),
     );
 
-    try {
-      const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
 
-      expect(evidence.outcome).toBe('ready-for-closeout');
-      const adjudicatorEvents = events.filter((event) => event.data?.['role'] === 'adjudicator');
-      expect(adjudicatorEvents.length).toBeGreaterThanOrEqual(2);
-      const escalationAlias = realPolicy.roleEscalations?.['adjudicator'];
-      for (const event of adjudicatorEvents) {
-        expect(event.data).toMatchObject({
-          adjudicatorBinding: 'escalation',
-          provider: 'openai',
-          model: escalationAlias,
-        });
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const adjudicatorEvents = events.filter((event) => event.data?.['role'] === 'adjudicator');
+    expect(adjudicatorEvents.length).toBeGreaterThanOrEqual(2);
+    const escalationAlias = loadRealPolicy().roleEscalations?.['adjudicator'];
+    for (const event of adjudicatorEvents) {
+      expect(event.data).toMatchObject({
+        adjudicatorBinding: 'escalation',
+        provider: 'openai',
+        model: escalationAlias,
+      });
     }
   });
 
