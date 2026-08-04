@@ -6,7 +6,7 @@ Read this when you need to know **who owns a stage, who signs off on it, and wha
 
 ## Models at a glance
 
-Role→model bindings are policy-declared in `policies/model-policy.json` (`roleDefaults`); explicit repeat paths may use validated `roleEscalations` bindings (currently adjudicator only). A missing policy falls back to `def.model ?? config.AGENT_MODEL` for ordinary agent execution, while production adjudicator bindings are declaration-only and fail closed.
+Role→model bindings are policy-declared in `policies/model-policy.json` (`roleDefaults`). A missing policy falls back to `def.model ?? config.AGENT_MODEL` for ordinary agent execution, while the production adjudicator binding is declaration-only and fails closed.
 
 | Role | Model / provider | How it runs |
 |---|---|---|

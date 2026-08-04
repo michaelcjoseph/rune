@@ -1613,8 +1613,10 @@ async function runGated(
         }
         if (deps.adjudicateSplit !== undefined) {
           roles.add('adjudicator');
+          // One adjudicator model, so there is no binding to name. What is still
+          // worth surfacing is WHY this adjudication fired.
           emitRoleStage(input, 'adjudicator', 'split-adjudication', {
-            adjudicatorBinding: repeat ? 'escalation' : 'base',
+            trigger: repeat ? 'repeat-objection' : 'round-cap',
           });
         }
         let ruling: AdjudicationRuling | undefined;
@@ -1662,7 +1664,6 @@ async function runGated(
               `upheld the ${ruling!.upholds} of ${
                 ruling!.upholds === 'fail' ? split.dissentingRole : split.concurringRole
               }: ${ruling!.rationale}`,
-            adjudicatorBinding: repeat ? 'escalation' : 'base',
           });
         }
 
@@ -3044,7 +3045,6 @@ function emitRoleVerdict(
     gate: GateRejectedArtifact;
     verdict: 'pass' | 'fail';
     summary: string;
-    adjudicatorBinding?: 'base' | 'escalation';
   },
 ): void {
   if (input.emit === undefined) return;
@@ -3057,9 +3057,6 @@ function emitRoleVerdict(
         role: event.role,
         gate: event.gate,
         verdict: event.verdict,
-        ...(event.adjudicatorBinding !== undefined
-          ? { adjudicatorBinding: event.adjudicatorBinding }
-          : {}),
         summary,
         line: `${event.role}: ${event.gate} ${event.verdict} - ${summary}`,
       },

@@ -171,10 +171,15 @@ export interface TeamRoleModels {
   designer: RoleModelBinding;
   /** Split-verdict tie-breaker. Null when the `adjudicator` policy entry is
    *  missing or unresolvable — the workflow then falls back to today's blocking
-   *  behavior rather than to a silent pass. */
+   *  behavior rather than to a silent pass.
+   *
+   *  There is exactly ONE adjudicator binding. A task adjudicates at most once:
+   *  every adjudication branch returns a terminal outcome. The two ways in — an
+   *  objection that survived a coder retry, or the round cap — are both
+   *  last-call moments on a split that would otherwise end the task, so they
+   *  share a model. `escalate` still reaches the prompt, so the adjudicator
+   *  knows a coder round already failed to settle the objection. */
   adjudicator: RoleModelBinding | null;
-  /** Distinct declared binding for repeat adjudication; null/absent fails closed. */
-  adjudicatorEscalation?: RoleModelBinding | null;
 }
 
 const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
@@ -229,52 +234,24 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
       throw new Error('adjudicator role default lacks coding capability');
     }
     adjudicator = toBinding(adjudicatorAlias, policy, 'adjudicator');
-    if (adjudicator.alias === reviewer?.alias || adjudicator.alias === techLead.alias) {
-      throw new Error('adjudicator resolves to a disputing role model');
+    // Independence: distinct from both disputants AND from the coder. The coder
+    // exclusion is not about tie-breaking — the adjudicator rules on the coder's
+    // own artifact, so binding it to the coder's model would let the author cast
+    // the deciding vote on whether that artifact is defective. Same principle
+    // that resolves the reviewer with `distinctFromProvider: coder`. Sharing a
+    // PROVIDER with the coder is accepted by design (both disputants are
+    // anthropic, so the adjudicator sits on the openai side); sharing the exact
+    // model is not.
+    if (
+      adjudicator.alias === reviewer?.alias ||
+      adjudicator.alias === techLead.alias ||
+      adjudicator.alias === coder.alias
+    ) {
+      throw new Error('adjudicator must be distinct from both disputants and the coder');
     }
   } catch (err) {
     adjudicator = null;
     log.warn('resolveTeamRoleModels: no adjudicator — split verdicts fail closed', {
-      error: (err as Error).message,
-    });
-  }
-
-  let adjudicatorEscalation: RoleModelBinding | null = null;
-  const escalationAlias = policy.roleEscalations?.['adjudicator'];
-  try {
-    if (adjudicator === null) throw new Error('base adjudicator is unavailable');
-    if (escalationAlias === undefined) throw new Error('missing adjudicator escalation binding');
-    const entry = policy.models.find((model) => model.alias === escalationAlias);
-    if (entry === undefined || entry.status === 'deprecated') {
-      throw new Error('adjudicator escalation binding is unavailable');
-    }
-    if (!entry.capabilities.includes('deep-reasoning')) {
-      throw new Error('adjudicator escalation binding lacks deep-reasoning');
-    }
-    adjudicatorEscalation = toBinding(escalationAlias, policy, 'adjudicator escalation');
-    // Distinct from the base binding, from both disputants, AND from the coder.
-    // The coder exclusion is the load-bearing one: escalation is reserved for an
-    // objection that already survived a coder retry, so binding it to the
-    // coder's own model would have the artifact's author cast the deciding vote
-    // on whether the artifact is defective — the same independence failure that
-    // justifies resolving the reviewer with `distinctFromProvider: coder`.
-    // Sharing a provider with the coder is accepted by design (both disputants
-    // are anthropic, so the adjudicator sits on the openai side); sharing the
-    // exact model is not.
-    if (
-      adjudicatorEscalation.alias === adjudicator.alias ||
-      adjudicatorEscalation.alias === reviewer?.alias ||
-      adjudicatorEscalation.alias === techLead.alias ||
-      adjudicatorEscalation.alias === coder.alias
-    ) {
-      throw new Error(
-        'adjudicator escalation must use a model distinct from the base adjudicator, ' +
-          'both disputants, and the coder',
-      );
-    }
-  } catch (err) {
-    adjudicatorEscalation = null;
-    log.warn('resolveTeamRoleModels: no adjudicator escalation — repeats fail closed', {
       error: (err as Error).message,
     });
   }
@@ -287,7 +264,6 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     reviewer,
     designer,
     adjudicator,
-    adjudicatorEscalation,
   };
 }
 
@@ -2466,12 +2442,11 @@ export function buildProductionTeamTaskDeps(
     // Tie-break a split that would otherwise end the task. Fresh context by
     // construction — `judge` opens a throwaway session per invocation, and the
     // body carries only artifacts plus the two verdict texts, never the coder's
-    // reasoning or any earlier round. A null base binding leaves the seam
-    // absent for pure/legacy callers; the production runner rejects a missing
-    // BASE binding before preflight, so live orchestration never reaches that
-    // compatibility path. A missing ESCALATION binding is not rejected up front
-    // — it throws here, on the repeat that actually needs it, and the workflow
-    // records that as the round's fail-closed reason.
+    // reasoning or any earlier round. A null binding leaves the seam absent for
+    // pure/legacy callers; the production runner rejects a missing binding
+    // before preflight, so live orchestration never reaches that compatibility
+    // path. `escalate` no longer selects a model — it only tells the adjudicator
+    // in the prompt that a coder round already failed to settle this objection.
     ...(models.adjudicator === null ? {} : {
       adjudicateSplit: async ({
         task,
@@ -2482,16 +2457,8 @@ export function buildProductionTeamTaskDeps(
         escalate,
         judgmentContext,
       }) => {
-        const binding = escalate
-          ? models.adjudicatorEscalation
-          : models.adjudicator;
-        if (binding === null || binding === undefined) {
-          throw new Error(
-            escalate
-              ? 'adjudicator escalation binding is unavailable'
-              : 'adjudicator binding is unavailable',
-          );
-        }
+        const binding = models.adjudicator;
+        if (binding === null) throw new Error('adjudicator binding is unavailable');
         const body = [
           `## Task\n\n${task.text}`,
           '',
@@ -2814,11 +2781,7 @@ function attributeWorkflowEvents(
 ): (event: WorkflowActivityEvent) => void {
   return (event) => {
     const role = typeof event.data?.['role'] === 'string' ? event.data['role'] : undefined;
-    const binding = role === 'adjudicator' && event.data?.['adjudicatorBinding'] === 'escalation'
-      ? models.adjudicatorEscalation ?? null
-      : role === undefined
-        ? null
-        : bindingForRole(models, role);
+    const binding = role === undefined ? null : bindingForRole(models, role);
     if (role === undefined || binding === null) {
       emit(event);
       return;

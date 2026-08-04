@@ -344,36 +344,33 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
     expect(models.adjudicator?.alias).toBe(policy.roleDefaults['adjudicator']);
   });
 
-  // The shipped registry has exactly three deep-reasoning aliases and every one
-  // of them is spoken for: opus is the reviewer, fable the tech lead, and
-  // gpt-5.6-sol the coder. So the declared escalation is currently inadmissible
-  // and repeat adjudication fails closed. Asserted explicitly rather than left
-  // implicit, so registering a fourth deep-reasoning model turns this test red
-  // and prompts a deliberate re-read of the constraint set.
-  it('rejects an escalation binding that collapses onto the coder', () => {
-    const policy = loadRealPolicy();
-    const models = resolveTeamRoleModels(policy);
-    expect(policy.roleEscalations?.['adjudicator']).toBe(models.coder.alias);
-    expect(models.adjudicatorEscalation ?? null).toBeNull();
+  // There is ONE adjudicator binding. Independence is what the checks protect,
+  // and it applies to every adjudication: the adjudicator rules on the coder's
+  // own artifact, so it must never be the coder's model, and it must not be
+  // either disputant's.
+  it('keeps the single adjudicator distinct from the coder and both disputants', () => {
+    const models = resolveTeamRoleModels(loadRealPolicy());
+    expect(models.adjudicator).not.toBeNull();
+    expect(models.adjudicator?.alias).not.toBe(models.coder.alias);
+    expect(models.adjudicator?.alias).not.toBe(models.reviewer?.alias);
+    expect(models.adjudicator?.alias).not.toBe(models.techLead.alias);
   });
 
-  it('accepts an escalation binding distinct from the coder and both disputants', () => {
+  it.each([
+    ['coder', (policy: ModelPolicy) => policy.roleDefaults['coder']],
+    ['reviewer', (policy: ModelPolicy) => policy.roleDefaults['reviewer']],
+    ['tech lead', (policy: ModelPolicy) => policy.roleDefaults['tech-lead']],
+  ])('fails closed when the adjudicator collapses onto the %s', (_label, aliasFor) => {
     const policy = loadRealPolicy();
-    // Move the coder off the deep-reasoning alias so the declared escalation
-    // satisfies every constraint; the binding must then resolve.
+    const collidingAlias = aliasFor(policy);
+    // Guards the fixture itself: a renamed roleDefault would otherwise make
+    // this assert nothing while still passing.
+    expect(collidingAlias).toBeTypeOf('string');
     const models = resolveTeamRoleModels({
       ...policy,
-      roleDefaults: { ...policy.roleDefaults, coder: 'gpt-5.6-terra' },
+      roleDefaults: { ...policy.roleDefaults, adjudicator: collidingAlias as string },
     });
-    expect(models.adjudicatorEscalation?.alias).toBe(policy.roleEscalations?.['adjudicator']);
-    expect(models.adjudicatorEscalation?.alias).not.toBe(models.adjudicator?.alias);
-    expect(models.adjudicatorEscalation?.alias).not.toBe(models.coder.alias);
-    expect(models.adjudicatorEscalation?.alias).not.toBe(models.reviewer?.alias);
-    expect(models.adjudicatorEscalation?.alias).not.toBe(models.techLead.alias);
-    const escalation = policy.models.find(
-      (entry) => entry.alias === models.adjudicatorEscalation?.alias,
-    );
-    expect(escalation?.capabilities).toContain('deep-reasoning');
+    expect(models.adjudicator).toBeNull();
   });
 
   it('fails closed instead of falling back when the adjudicator default is absent', () => {
@@ -408,18 +405,18 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     }
   });
 
-  it('moves a repeated split adjudication to a different model', async () => {
+  // A repeat and a round-cap adjudication share ONE model. `escalate` no longer
+  // selects a binding; it only tells the adjudicator, in the prompt, that a
+  // coder round already failed to settle this objection.
+  it('uses the one adjudicator model for a repeat and for a round-cap split', async () => {
     const models: string[] = [];
-    // The shipped policy's escalation alias is the coder's, so it resolves to
-    // null; move the coder off it to exercise the escalation path itself.
-    const realPolicy = loadRealPolicy();
-    const escalatablePolicy = {
-      ...realPolicy,
-      roleDefaults: { ...realPolicy.roleDefaults, coder: 'gpt-5.6-terra' },
-    };
-    const deps = buildDeps(resolveTeamRoleModels(escalatablePolicy), makeSeams({
-      judgmentCall: async ({ role, model }) => {
-        if (role === 'adjudicator') models.push(model);
+    const prompts: string[] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, model, message }) => {
+        if (role === 'adjudicator') {
+          models.push(model);
+          prompts.push(message);
+        }
         return [
           '```adjudication',
           '{"upholds":"pass","rationale":"The guarded path answers the disputed claim."}',
@@ -439,51 +436,16 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       concurringVerdict: { outcome: 'pass' as const, findings: [] },
     };
 
-    const baseRuling = await deps.adjudicateSplit!({ ...input, escalate: false });
-    const escalatedRuling = await deps.adjudicateSplit!({ ...input, escalate: true });
+    const capRuling = await deps.adjudicateSplit!({ ...input, escalate: false });
+    const repeatRuling = await deps.adjudicateSplit!({ ...input, escalate: true });
 
     expect(models).toHaveLength(2);
-    expect(models[1]).not.toBe(models[0]);
-    expect(baseRuling.execution).toEqual({
-      modelAlias: models[0],
-      provider: 'openai',
-    });
-    expect(escalatedRuling.execution).toEqual({
-      modelAlias: models[1],
-      provider: 'openai',
-    });
-  });
-
-  // The escalation binding is no longer required at task admission, so this is
-  // where an unresolvable one has to fail closed: the base adjudication still
-  // runs normally, and only the repeat throws. The workflow turns that throw
-  // into the round's failClosedReason and blocks.
-  it('fails closed on the repeat, not the base, when escalation is unresolvable', async () => {
-    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
-      judgmentCall: async () => [
-        '```adjudication',
-        '{"upholds":"pass","rationale":"The guarded path answers the disputed claim."}',
-        '```',
-      ].join('\n'),
-    }));
-    const input = {
-      task: sizedTask,
-      dissentingRole: 'reviewer' as const,
-      concurringRole: 'tech-lead' as const,
-      dissentingVerdict: {
-        outcome: 'fail' as const,
-        findings: [],
-        notes: 'the release ordering is unsafe',
-      },
-      concurringVerdict: { outcome: 'pass' as const, findings: [] },
-    };
-
-    await expect(deps.adjudicateSplit!({ ...input, escalate: false })).resolves.toMatchObject({
-      upholds: 'pass',
-    });
-    await expect(deps.adjudicateSplit!({ ...input, escalate: true })).rejects.toThrow(
-      /escalation binding is unavailable/,
-    );
+    expect(models[1]).toBe(models[0]);
+    expect(capRuling.execution).toEqual(repeatRuling.execution);
+    expect(capRuling.execution).toEqual({ modelAlias: models[0], provider: 'openai' });
+    // Only the repeat prompt carries the "already raised" note.
+    expect(prompts[1]).toMatch(/raised in an earlier round/);
+    expect(prompts[0]).not.toMatch(/raised in an earlier round/);
   });
 
   it('gives PM the actual dissent, spec, review artifact, tests, and complete ledger', async () => {
@@ -3016,26 +2978,13 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
     }
   });
 
-  it('attributes a surviving split to the actual escalation binding', async () => {
+  it('attributes a surviving split to the one adjudicator binding', async () => {
     const events: AttributedActivityEvent[] = [];
-    // The shipped escalation alias is the coder's and so resolves to null.
-    // Move the coder off it in a temp policy to exercise attribution of a real
-    // escalation binding.
-    const dir = await mkdtemp(join(tmpdir(), 'escalation-attribution-'));
-    const policyPath = join(dir, 'model-policy.json');
-    const realPolicy = loadRealPolicy();
-    await writeFile(
-      policyPath,
-      JSON.stringify({
-        ...realPolicy,
-        roleDefaults: { ...realPolicy.roleDefaults, coder: 'gpt-5.6-terra' },
-      }),
-    );
     const run = createProductionTaskWorkflowRunner(
       {
         sandbox: makeSandbox(),
         productsConfigPath: '/nonexistent/products.json',
-        modelPolicyPath: policyPath,
+        modelPolicyPath: REAL_POLICY_PATH,
         emit: (event) => events.push(event),
         cap: 2,
       },
@@ -3069,23 +3018,19 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       }),
     );
 
-    try {
-      const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
 
-      expect(evidence.outcome).toBe('ready-for-closeout');
-      const adjudicatorEvents = events.filter((event) => event.data?.['role'] === 'adjudicator');
-      expect(adjudicatorEvents.length).toBeGreaterThanOrEqual(2);
-      const escalationAlias = realPolicy.roleEscalations?.['adjudicator'];
-      for (const event of adjudicatorEvents) {
-        expect(event.data).toMatchObject({
-          adjudicatorBinding: 'escalation',
-          provider: 'openai',
-          model: escalationAlias,
-        });
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const adjudicatorEvents = events.filter((event) => event.data?.['role'] === 'adjudicator');
+    expect(adjudicatorEvents.length).toBeGreaterThanOrEqual(2);
+    const adjudicatorAlias = loadRealPolicy().roleDefaults['adjudicator'];
+    for (const event of adjudicatorEvents) {
+      expect(event.data).toMatchObject({ provider: 'openai', model: adjudicatorAlias });
+      // The binding label is gone; the trigger reason replaces it.
+      expect(event.data).not.toHaveProperty('adjudicatorBinding');
     }
+    const stage = adjudicatorEvents.find((event) => event.data?.['event'] === 'role-stage');
+    expect(stage?.data).toMatchObject({ trigger: 'repeat-objection' });
   });
 
   it('forwards artifact executor output lines with the invoking role provider and model', async () => {
@@ -3564,44 +3509,6 @@ describe('no-stub regression (Phase 8)', () => {
       expect(evidence.rolesInvoked).toEqual([]);
       expect(evidence.blockedReason).toMatch(/required adjudicator.*unavailable/i);
       expect(preflightExecution).not.toHaveBeenCalled();
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  // The escalation binding is spent only on a repeat split, so gating task
-  // admission on it made one unsatisfiable policy constraint halt the entire
-  // orchestration surface. A task that never repeats a split must run to
-  // closeout with no escalation binding at all; the repeat itself still fails
-  // closed, which `buildProductionTeamTaskDeps` covers at the seam.
-  it('admits a task when only the adjudicator escalation declaration is missing', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'team-role-policy-no-escalation-'));
-    const policyPath = join(dir, 'model-policy.json');
-    const preflightExecution = vi.fn(async () => ({
-      status: 'success' as const,
-      bindings: [],
-      artifactMcp: 'not-required' as const,
-      artifactFormats: [],
-    }));
-    try {
-      await writeFile(
-        policyPath,
-        JSON.stringify({ ...loadRealPolicy(), roleEscalations: {} }),
-      );
-      const run = createProductionTaskWorkflowRunner(
-        {
-          sandbox: makeSandbox(),
-          productsConfigPath: '/nonexistent/products.json',
-          modelPolicyPath: policyPath,
-        },
-        makeSeams({ preflightExecution }),
-      );
-
-      const evidence = await run(selectedTask, { handoff: 'h', contextMd: 'c' });
-
-      expect(evidence.outcome).toBe('ready-for-closeout');
-      expect(evidence.blockedReason ?? '').not.toMatch(/escalation/i);
-      expect(preflightExecution).toHaveBeenCalled();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
