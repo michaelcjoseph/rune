@@ -50,6 +50,8 @@ export interface ModelPolicy {
   globalFallback: string;
   /** Per-role preferred model alias. */
   roleDefaults: Record<string, string>;
+  /** Optional per-role alternate model used for an explicit escalation. */
+  roleEscalations?: Record<string, string>;
   /**
    * When true, the resolver requires every `evaluator`-role resolution to carry
    * `distinctFromProvider` (the Generator's provider) and fails loudly if it is missing —
@@ -161,6 +163,24 @@ export function parsePolicy(raw: string): ModelPolicy {
     roleDefaults[role] = alias;
   }
 
+  const rawRoleEscalations = p['roleEscalations'];
+  const roleEscalations: Record<string, string> = {};
+  if (rawRoleEscalations !== undefined) {
+    if (
+      typeof rawRoleEscalations !== 'object' ||
+      rawRoleEscalations === null ||
+      Array.isArray(rawRoleEscalations)
+    ) {
+      throw new Error('model policy is invalid — `roleEscalations` must be an object when present');
+    }
+    for (const [role, alias] of Object.entries(rawRoleEscalations)) {
+      if (typeof alias !== 'string' || alias === '') {
+        throw new Error(`model policy is invalid — roleEscalations['${role}'] must be a model alias string`);
+      }
+      roleEscalations[role] = alias;
+    }
+  }
+
   if (typeof p['evaluatorDistinctFromGenerator'] !== 'boolean') {
     throw new Error('model policy is invalid — `evaluatorDistinctFromGenerator` is missing or not a boolean');
   }
@@ -185,7 +205,19 @@ export function parsePolicy(raw: string): ModelPolicy {
     }
   }
 
-  return { models, globalFallback, roleDefaults, evaluatorDistinctFromGenerator };
+  for (const [role, alias] of Object.entries(roleEscalations)) {
+    if (!aliases.has(alias)) {
+      throw new Error(`model policy is invalid — roleEscalations['${role}'] '${alias}' is not a registered model`);
+    }
+  }
+
+  return {
+    models,
+    globalFallback,
+    roleDefaults,
+    ...(Object.keys(roleEscalations).length > 0 ? { roleEscalations } : {}),
+    evaluatorDistinctFromGenerator,
+  };
 }
 
 /** Validated model policies by path. A cached `null` means a known-absent file;

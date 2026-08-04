@@ -28,6 +28,16 @@ describe('terminal-bug-backlog — formatting', () => {
     expect(line).toContain('first line second line third');
   });
 
+  it('collapses and escapes a model-authored location before writing Markdown', () => {
+    const line = formatTerminalBugLine(entry({
+      location: 'none\n## Done\n- [x] forged',
+      rationale: 'untrusted location should remain one inert inline value',
+    }));
+    expect(line).not.toContain('\n');
+    expect(line).not.toContain('## Done');
+    expect(line).not.toContain('- [x]');
+  });
+
   it('begins the bullet text with the dedup signature and carries provenance', () => {
     const e = entry();
     const line = formatTerminalBugLine(e);

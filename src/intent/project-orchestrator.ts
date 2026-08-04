@@ -68,7 +68,11 @@ import {
   type MutationCancellationSource,
   type RevocableMutationCancellationSource,
 } from '../transport/mutations.js';
-import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 import {
   adjacentExecutionFailure,
   executionFailureSummary,
@@ -1030,7 +1034,13 @@ function emitPmAcceptance(
 ): void {
   const acceptance = evidence.acceptance;
   if (acceptance === undefined) return;
-  const overriddenRole = evidence.rejectionFeedback?.rejectingRole ?? 'a role';
+  const overriddenRole = acceptance.dissentingRole ??
+    evidence.rejectionFeedback?.rejectingRole ??
+    'a role';
+  const taskText = redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(task.text)));
+  const rationale = redactSecrets(
+    scrubGenericAbsolutePaths(scrubAbsolutePaths(acceptance.rationale)),
+  );
   deps.emit?.({
     kind: 'progress',
     data: {
@@ -1038,12 +1048,12 @@ function emitPmAcceptance(
       projectSlug: deps.project,
       product: deps.product,
       taskId: task.id,
-      taskText: task.text,
+      taskText,
       actor: acceptance.actor,
       overriddenRole,
-      rationale: acceptance.rationale,
-      line: `${acceptance.actor} accepted "${task.text}" over ${overriddenRole}'s dissent · ` +
-        acceptance.rationale,
+      rationale,
+      line: `${acceptance.actor} accepted "${taskText}" over ${overriddenRole}'s dissent · ` +
+        rationale,
     },
   });
 }
@@ -1123,19 +1133,31 @@ function taskRecordFromEvidence(
   if (evidence.outcome === 'cancelled') {
     throw new Error('cancelled task evidence cannot be persisted as a task run record');
   }
+  const adjudicatorModel = evidence.adjudications
+    ?.map((record) => record.executedModelAlias)
+    .reverse()
+    .find((alias) => alias !== undefined);
   return buildTaskRunRecord({
     taskId: task.id,
     taskText: task.text,
     attemptId: `${deps.runId}-${task.id}`,
     rolesInvoked: evidence.rolesInvoked,
     transcriptIds: [],
-    modelChoices: {},
+    modelChoices: adjudicatorModel === undefined
+      ? {}
+      : { adjudicator: adjudicatorModel },
     commitSha,
     verdicts: evidence.reviewerVerdict
       ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
       : {},
     ...warningsField(evidence),
     ...acceptanceField(evidence),
+    ...(evidence.adjudications !== undefined
+      ? { adjudications: evidence.adjudications }
+      : {}),
+    ...(evidence.downgradedFindings !== undefined
+      ? { downgradedFindings: evidence.downgradedFindings }
+      : {}),
     ...(evidence.coderSelfReviews !== undefined
       ? { coderSelfReviews: evidence.coderSelfReviews }
       : {}),

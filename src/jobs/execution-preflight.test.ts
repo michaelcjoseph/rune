@@ -273,6 +273,22 @@ describe('preflightExecution', () => {
     ]));
   });
 
+  it('preflights both declared adjudicator bindings before workflow dispatch', async () => {
+    const seams = io();
+
+    const result = await preflightExecution(args(models({
+      adjudicator: codex('gpt-judge-primary'),
+      adjudicatorEscalation: codex('gpt-judge-alternate'),
+    })), seams);
+
+    expect(result).toMatchObject({ status: 'success' });
+    expect(seams.probeModel).toHaveBeenCalledTimes(4);
+    expect(result.status === 'success' ? result.bindings : []).toEqual(expect.arrayContaining([
+      expect.objectContaining({ model: 'gpt-judge-primary', roles: ['adjudicator'] }),
+      expect.objectContaining({ model: 'gpt-judge-alternate', roles: ['adjudicator'] }),
+    ]));
+  });
+
   it.each([
     'artifact sandbox preflight failed: invalid Seatbelt profile',
     'read-only MCP broker exited before ready',

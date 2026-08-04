@@ -159,7 +159,7 @@ const NOTE_MAX_CHARS = 2_000;
 // Role-model resolution (Phase 8 model map)
 // ---------------------------------------------------------------------------
 
-/** The six product-team roles' resolved model bindings. `reviewer` is null
+/** The seven product-team roles' resolved model bindings. `reviewer` is null
  *  when no distinct-provider reviewer can be resolved — the fail-closed
  *  independence signal the workflow blocks on. */
 export interface TeamRoleModels {
@@ -173,13 +173,15 @@ export interface TeamRoleModels {
    *  missing or unresolvable — the workflow then falls back to today's blocking
    *  behavior rather than to a silent pass. */
   adjudicator: RoleModelBinding | null;
+  /** Distinct declared binding for repeat adjudication; null/absent fails closed. */
+  adjudicatorEscalation?: RoleModelBinding | null;
 }
 
 const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
 const SUPPORTED_FORMATS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 /**
- * Resolve all six roles through the model-policy resolver (pin → role-default
+ * Resolve all seven roles through the model-policy resolver (pin → role-default
  * → global-fallback). The REVIEWER is resolved with `distinctFromProvider:
  * coder.provider`; a resolver throw (no distinct-provider model registered)
  * maps to a null binding rather than a same-provider downgrade. Any other
@@ -212,19 +214,68 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     });
   }
 
-  // The adjudicator's model is a DECLARED policy choice, not a runtime
-  // distinctness computation — no `distinctFromProvider` here. A missing or
-  // unresolvable entry yields null, and the workflow blocks as it does today.
+  // The adjudicator is declaration-only. Unlike ordinary roles, a missing
+  // roleDefault must not fall through to the global fallback, which could be
+  // one of the disputants' own models.
   let adjudicator: RoleModelBinding | null = null;
+  const adjudicatorAlias = policy.roleDefaults['adjudicator'];
   try {
-    adjudicator = resolveRole('adjudicator', ['deep-reasoning']);
+    if (adjudicatorAlias === undefined) throw new Error('missing adjudicator role default');
+    const entry = policy.models.find((model) => model.alias === adjudicatorAlias);
+    if (entry === undefined || entry.status === 'deprecated') {
+      throw new Error('adjudicator role default is unavailable');
+    }
+    if (!entry.capabilities.includes('coding')) {
+      throw new Error('adjudicator role default lacks coding capability');
+    }
+    adjudicator = toBinding(adjudicatorAlias, policy, 'adjudicator');
+    if (adjudicator.alias === reviewer?.alias || adjudicator.alias === techLead.alias) {
+      throw new Error('adjudicator resolves to a disputing role model');
+    }
   } catch (err) {
+    adjudicator = null;
     log.warn('resolveTeamRoleModels: no adjudicator — split verdicts fail closed', {
       error: (err as Error).message,
     });
   }
 
-  return { pm, techLead, qa, coder, reviewer, designer, adjudicator };
+  let adjudicatorEscalation: RoleModelBinding | null = null;
+  const escalationAlias = policy.roleEscalations?.['adjudicator'];
+  try {
+    if (adjudicator === null) throw new Error('base adjudicator is unavailable');
+    if (escalationAlias === undefined) throw new Error('missing adjudicator escalation binding');
+    const entry = policy.models.find((model) => model.alias === escalationAlias);
+    if (entry === undefined || entry.status === 'deprecated') {
+      throw new Error('adjudicator escalation binding is unavailable');
+    }
+    if (!entry.capabilities.includes('deep-reasoning')) {
+      throw new Error('adjudicator escalation binding lacks deep-reasoning');
+    }
+    adjudicatorEscalation = toBinding(escalationAlias, policy, 'adjudicator escalation');
+    if (
+      adjudicatorEscalation.alias === adjudicator.alias ||
+      adjudicatorEscalation.alias === reviewer?.alias ||
+      adjudicatorEscalation.alias === techLead.alias
+    ) {
+      throw new Error('adjudicator escalation must use a distinct non-disputant model');
+    }
+  } catch (err) {
+    adjudicatorEscalation = null;
+    log.warn('resolveTeamRoleModels: no adjudicator escalation — repeats fail closed', {
+      error: (err as Error).message,
+    });
+  }
+
+  return {
+    pm,
+    techLead,
+    qa,
+    coder,
+    reviewer,
+    designer,
+    adjudicator,
+    adjudicatorEscalation,
+  };
 }
 
 /** Join a resolution alias back to its registry entry and narrow provider /
@@ -1132,11 +1183,6 @@ function judgmentBatchCheckpoint(
   }
   const members = [
     {
-      role: 'qa',
-      binding: models.qa,
-      workflowStage: 'qa-diff-revalidation',
-    },
-    {
       role: 'reviewer',
       binding: models.reviewer,
       workflowStage: 'reviewer-review',
@@ -1157,9 +1203,9 @@ function judgmentBatchCheckpoint(
   return {
     taskId: task.id,
     role: 'judgment-batch',
-    provider: models.qa.provider,
-    format: models.qa.format,
-    model: models.qa.alias,
+    provider: models.reviewer.provider,
+    format: models.reviewer.format,
+    model: models.reviewer.alias,
     workflowStage: 'post-coder-judgments',
     checkpointedAt: new Date().toISOString(),
     judgmentBatch: {
@@ -1274,11 +1320,10 @@ function filesFromDiff(diff: string): string[] {
   return [...files];
 }
 
-/** The one place the full-task artifact header is rendered. Every judgment role
- * (QA revalidation, reviewer, tech lead, designer) must see byte-identical
- * base/current/hash identities for a given pass, so they cannot be hand-built
- * per call site. QA additionally gets a `pass:` line — it is the only role that
- * distinguishes a first-pass artifact from a retry-derived one. */
+/** The one place the full-task artifact header is rendered. Every downstream
+ * judgment consumer (reviewer, tech lead, designer, PM, and adjudicator) must
+ * see byte-identical base/current/hash identities for a given pass, so they
+ * cannot be hand-built per call site. */
 function formatFullTaskReviewArtifact(
   diff: string,
   reviewState?: Omit<CanonicalReviewState, 'diff'>,
@@ -2347,13 +2392,43 @@ export function buildProductionTeamTaskDeps(
       );
     },
 
-    acceptWithRationale: async ({ task, reason, reviewerVerdict, rejectionFeedback }) => {
+    acceptWithRationale: async ({
+      task,
+      spec,
+      reason,
+      dissentingRole,
+      dissentingVerdict,
+      rejectionFeedback,
+      findingsLedger,
+      judgmentContext,
+    }) => {
+      const tests = judgmentContext === undefined
+        ? undefined
+        : Array.isArray(judgmentContext.tests)
+          ? judgmentContext.tests.join('\n')
+          : judgmentContext.tests;
       const body = [
         `## Task\n\n${task.text}`,
         '',
+        `## Spec\n\n${spec}`,
+        ...(judgmentContext !== undefined
+          ? [
+              '',
+              formatFullTaskReviewArtifact(
+                judgmentContext.diff,
+                judgmentContext.reviewState,
+                judgmentContext.artifactPass,
+              ),
+            ]
+          : []),
+        ...(tests !== undefined ? ['', `## Tests\n\n${tests}`] : []),
+        ...(findingsLedger.length > 0
+          ? ['', formatFindingsLedger(findingsLedger)]
+          : ['', '## Full findings ledger\n\n(none)']),
+        '',
         `## Why the task did not close\n\n${reason}`,
         '',
-        `## The dissenting role\n\n${rejectionFeedback.rejectingRole} rejected the ` +
+        `## The dissenting role\n\n${dissentingRole} rejected the ` +
           `${rejectionFeedback.rejectedArtifact}: ${rejectionFeedback.whatFailed}`,
         ...(rejectionFeedback.actionableNotes.length > 0
           ? ['', `## What they asked for\n\n${rejectionFeedback.actionableNotes.join('\n')}`]
@@ -2361,7 +2436,7 @@ export function buildProductionTeamTaskDeps(
         '',
         '## Their verdict',
         '',
-        formatVerdictForAdjudication(reviewerVerdict),
+        formatVerdictForAdjudication(dissentingVerdict),
       ].join('\n');
       const reply = await judge(
         'pm',
@@ -2377,8 +2452,10 @@ export function buildProductionTeamTaskDeps(
     // Tie-break a split that would otherwise end the task. Fresh context by
     // construction — `judge` opens a throwaway session per invocation, and the
     // body carries only artifacts plus the two verdict texts, never the coder's
-    // reasoning or any earlier round. A null binding means the `adjudicator`
-    // policy entry is missing or unresolvable, and the workflow blocks.
+    // reasoning or any earlier round. A null base binding leaves the seam
+    // absent for pure/legacy callers. The production runner rejects either
+    // missing adjudicator binding before preflight, so live orchestration never
+    // reaches that compatibility path.
     ...(models.adjudicator === null ? {} : {
       adjudicateSplit: async ({
         task,
@@ -2390,8 +2467,15 @@ export function buildProductionTeamTaskDeps(
         judgmentContext,
       }) => {
         const binding = escalate
-          ? escalatedAdjudicatorBinding(models.adjudicator!)
-          : models.adjudicator!;
+          ? models.adjudicatorEscalation
+          : models.adjudicator;
+        if (binding === null || binding === undefined) {
+          throw new Error(
+            escalate
+              ? 'adjudicator escalation binding is unavailable'
+              : 'adjudicator binding is unavailable',
+          );
+        }
         const body = [
           `## Task\n\n${task.text}`,
           '',
@@ -2425,13 +2509,13 @@ export function buildProductionTeamTaskDeps(
                 '',
                 '## Note',
                 '',
-                'This exact objection was already adjudicated in an earlier round of',
-                'this task and the coder round did not settle it. Read the diff for',
+                'This exact objection was raised in an earlier round of this task,',
+                'and the coder round did not settle it. Read the diff for',
                 'what actually changed since, and rule decisively.',
               ]
             : []),
         ].join('\n');
-        return judge(
+        const ruling = await judge<AdjudicationRuling>(
           'adjudicator',
           binding,
           ADJUDICATOR_INSTRUCTION,
@@ -2441,6 +2525,13 @@ export function buildProductionTeamTaskDeps(
           undefined,
           parseAdjudication,
         );
+        return {
+          ...ruling,
+          execution: {
+            modelAlias: binding.alias,
+            provider: binding.provider,
+          },
+        };
       },
     }),
 
@@ -2644,28 +2735,6 @@ function formatVerdictForAdjudication(verdict: GateVerdict): string {
   return lines.join('\n');
 }
 
-/** Escalate the adjudicator when the same objection is adjudicated twice in one
- *  task: the first ruling did not settle it, so buy more reasoning. Prefers the
- *  policy's strongest deep-reasoning model on the SAME provider, so the declared
- *  cross-provider posture is preserved; falls back to the original binding when
- *  there is nothing stronger to move to. */
-function escalatedAdjudicatorBinding(binding: RoleModelBinding): RoleModelBinding {
-  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
-  const candidate = policy?.models.find(
-    (model) =>
-      model.provider === binding.provider &&
-      model.alias !== binding.alias &&
-      model.status === 'preferred' &&
-      model.capabilities.includes('deep-reasoning'),
-  );
-  if (candidate === undefined) return binding;
-  return {
-    alias: candidate.alias,
-    provider: candidate.provider as DispatchProvider,
-    format: candidate.format as RoleModelBinding['format'],
-  };
-}
-
 function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding | null {
   switch (role) {
     case 'pm':
@@ -2680,6 +2749,8 @@ function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding 
       return models.reviewer;
     case 'designer':
       return models.designer;
+    case 'adjudicator':
+      return models.adjudicator;
     default:
       return null;
   }
@@ -2727,7 +2798,11 @@ function attributeWorkflowEvents(
 ): (event: WorkflowActivityEvent) => void {
   return (event) => {
     const role = typeof event.data?.['role'] === 'string' ? event.data['role'] : undefined;
-    const binding = role === undefined ? null : bindingForRole(models, role);
+    const binding = role === 'adjudicator' && event.data?.['adjudicatorBinding'] === 'escalation'
+      ? models.adjudicatorEscalation ?? null
+      : role === undefined
+        ? null
+        : bindingForRole(models, role);
     if (role === undefined || binding === null) {
       emit(event);
       return;
@@ -2840,6 +2915,18 @@ export function createProductionTaskWorkflowRunner(
       models = resolveTeamRoleModels(policy);
     } catch (err) {
       return blockedEvidence(task, `role model resolution failed: ${(err as Error).message}`);
+    }
+    if (models.adjudicator === null) {
+      return blockedEvidence(
+        task,
+        'role model resolution failed: required adjudicator binding is unavailable',
+      );
+    }
+    if (models.adjudicatorEscalation === null || models.adjudicatorEscalation === undefined) {
+      return blockedEvidence(
+        task,
+        'role model resolution failed: required adjudicator escalation binding is unavailable',
+      );
     }
 
     if (!preflightPassed) {

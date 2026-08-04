@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 
 // Mock config before any module import that reads it
 vi.mock('../config.js', () => ({
+  PROJECT_ROOT: '/Users/tester/workspace/rune',
   default: {
     TG_MAX_MESSAGE_LENGTH: 4096,
     TELEGRAM_BOT_TOKEN: 'test-token',
@@ -859,6 +860,25 @@ describe('TelegramSender', () => {
       });
     });
 
+    it('scrubs absolute paths from pm-acceptance alerts before delivery', async () => {
+      sender.onMutationEvent(mutationEvent({
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: {
+          event: 'pm-acceptance',
+          taskText: 'Inspect /Users/operator/private/task.ts',
+          actor: 'pm',
+          overriddenRole: 'reviewer',
+          rationale: 'Accepted based on /Users/operator/private/review.ts:9.',
+        },
+      }));
+      await flush();
+
+      const sent = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(sent).not.toContain('/Users/operator');
+      expect(sent).toContain('<path>');
+    });
+
     it('records an orchestrated closeout-commit alert exactly once, naming the kind and target chat', async () => {
       sender.onMutationEvent(mutationEvent({
         mutationKind: 'orchestrated-work',
@@ -908,7 +928,7 @@ describe('TelegramSender', () => {
     it('records the work-run start and progress kinds distinctly', async () => {
       sender.onMutationEvent(mutationEvent({
         subKind: 'start',
-        data: { projectSlug: 'demo', runId: 'run-7', operatorWorktreePath: '/Users/jarvis/worktrees/rune/demo' },
+        data: { projectSlug: 'demo', runId: 'run-7', operatorWorktreePath: '/Users/tester/worktrees/rune/demo' },
       }));
       sender.onMutationEvent(mutationEvent({
         subKind: 'progress',
@@ -923,7 +943,7 @@ describe('TelegramSender', () => {
     });
 
     it('never carries the message body — no vault content, no un-scrubbed worktree path', async () => {
-      const worktree = '/Users/jarvis/workspace/.worktrees/rune/24-execution-profiles';
+      const worktree = '/Users/tester/workspace/.worktrees/rune/24-execution-profiles';
       sender.onMutationEvent(mutationEvent({
         data: {
           projectSlug: 'demo',

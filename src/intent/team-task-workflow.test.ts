@@ -885,6 +885,36 @@ describe('team-task-workflow — finding evidence contract', () => {
     expect(ev.downgradedFindings?.[0]?.finding.severity).toBe('medium');
   });
 
+  it('applies supplied evidence only to the same finding when a role raises two findings in one class', async () => {
+    const grounded: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:18',
+      rationale: 'the retry path skips authorization and exposes another user\'s record',
+    };
+    const missingAnchor: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: '',
+      rationale: 'the export path interpolates an untrusted filename into the shell command',
+    };
+    const supplemented: ObjectionFinding = {
+      ...missingAnchor,
+      location: 'src/export.ts:44',
+    };
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [grounded, missingAnchor] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      requestFindingEvidence: async ({ gaps }) => {
+        expect(gaps.map(({ finding }) => finding)).toEqual([missingAnchor]);
+        return [supplemented];
+      },
+    }));
+
+    expect(ev.reviewerVerdict?.findings).toEqual([grounded, supplemented]);
+  });
+
   it('never downgrades a finding backed by a reproducible failure', async () => {
     const reproducible: ObjectionFinding = {
       ...unanchored,
@@ -965,8 +995,51 @@ describe('team-task-workflow — PM acceptance at the cap', () => {
       actor: 'pm',
       decision: 'accepted-with-rationale',
       rationale: 'The helper shape is a style preference; the user-visible behavior is correct.',
+      dissentingRole: 'reviewer',
+      overriddenVerdict: expect.objectContaining({
+        outcome: 'fail',
+        notes: 'I would extract the helper before this lands',
+      }),
     });
     expect(ev.rolesInvoked).toContain('pm');
+  });
+
+  it('gives PM the actual dissenting verdict plus the complete review context', async () => {
+    let seen: Parameters<NonNullable<TeamTaskDeps['acceptWithRationale']>>[0] | undefined;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'pass', findings: [] }),
+      techLeadReviewDiff: async () => ({
+        pass: false,
+        notes: 'the implementation still misses the retry contract',
+      }),
+      acceptWithRationale: async (input) => {
+        seen = input;
+        return accept();
+      },
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(seen).toMatchObject({
+      spec: INPUT.spec,
+      rejectionFeedback: { rejectingRole: 'tech-lead' },
+      dissentingVerdict: {
+        outcome: 'fail',
+        notes: 'the implementation still misses the retry contract',
+      },
+      judgmentContext: {
+        spec: INPUT.spec,
+        diff: expect.stringContaining('diff --git'),
+        tests: expect.anything(),
+      },
+    });
+    expect(seen?.findingsLedger).toEqual([]);
+    expect(ev.acceptance).toMatchObject({
+      dissentingRole: 'tech-lead',
+      overriddenVerdict: {
+        outcome: 'fail',
+        notes: 'the implementation still misses the retry contract',
+      },
+    });
   });
 
   it('parks when no acceptance seam is wired — the pre-existing behavior', async () => {
@@ -1100,7 +1173,7 @@ describe('team-task-workflow — PM acceptance at the cap', () => {
 describe('team-task-workflow — split adjudication', () => {
   const disputed: ObjectionFinding = {
     class: 'concurrency',
-    severity: 'high',
+    severity: 'medium',
     location: 'src/lease.ts:42',
     rationale: 'withLease releases on holder abort while work may still run, ' +
       'allowing a later waiter into the same critical section',
@@ -1185,6 +1258,168 @@ describe('team-task-workflow — split adjudication', () => {
     expect(ev).not.toHaveProperty('adjudications');
   });
 
+  it('never lets adjudication override the required designer gate', async () => {
+    let called = false;
+    const ev = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'pass', findings: [] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      designer: async () => ({
+        pass: false,
+        findings: [{
+          class: 'cost-perf',
+          severity: 'medium',
+          location: 'src/card.css:18',
+          rationale: 'the compact viewport hides the primary action below the fold',
+        }],
+      }),
+      adjudicateSplit: async () => {
+        called = true;
+        return { upholds: 'pass', rationale: 'must not be consulted' };
+      },
+    }));
+
+    expect(called).toBe(false);
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toContain('designer review failed');
+  });
+
+  it.each([
+    { severity: 'high' as const, reversible: true },
+    { severity: 'critical' as const, reversible: true },
+    { severity: 'medium' as const, reversible: false },
+  ])('keeps $severity reversible=$reversible findings with a human instead of adjudicating', async ({ severity, reversible }) => {
+    let called = false;
+    const finding: ObjectionFinding = {
+      ...disputed,
+      severity,
+      reversible,
+    };
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({ outcome: 'fail', findings: [finding] }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async () => {
+        called = true;
+        return { upholds: 'pass', rationale: 'must not be consulted' };
+      },
+    }));
+
+    expect(called).toBe(false);
+    expect(ev.outcome).toBe('blocked');
+  });
+
+  it('cannot adjudicate away a protected finding left open by an earlier round', async () => {
+    let round = 0;
+    let adjudicatorCalls = 0;
+    const protectedFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:41',
+      rationale: 'a retry after token expiry bypasses the allow-list and reaches the protected route',
+      reversible: true,
+    };
+    const laterDispute: ObjectionFinding = {
+      ...disputed,
+      location: 'src/lease.ts:87',
+    };
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `diff ${round}`, handoffNotes: [] };
+      },
+      reviewer: async () => round === 1
+        ? { outcome: 'fail', findings: [protectedFinding] }
+        : { outcome: 'pass', findings: [], verifiedFindings: [] },
+      techLeadReviewDiff: async () => round === 1
+        ? { pass: true }
+        : { pass: false, findings: [laterDispute] },
+      adjudicateSplit: async () => {
+        adjudicatorCalls += 1;
+        return { upholds: 'pass', rationale: 'the later lease concern is acceptable' };
+      },
+    }));
+
+    expect(adjudicatorCalls).toBe(0);
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toContain('human-owned high security');
+    expect(ev.findingsLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        class: 'security',
+        severity: 'high',
+        status: 'open',
+      }),
+    ]));
+  });
+
+  it('resolves only the current disputed findings, not older findings from the same role', async () => {
+    let round = 0;
+    const olderFinding: ObjectionFinding = {
+      ...disputed,
+      location: 'src/lease.ts:21',
+      rationale: 'the first waiter can retain a stale holder after cancellation completes',
+    };
+    const currentFinding: ObjectionFinding = {
+      ...disputed,
+      location: 'src/lease.ts:87',
+      rationale: 'the next waiter can enter before the released work has settled',
+    };
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `diff ${round}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [round === 1 ? olderFinding : currentFinding],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async () => ({
+        upholds: 'pass',
+        rationale: 'the current waiter transition is guarded',
+      }),
+    }));
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toContain('another blocking concurrency finding remains open');
+    expect(ev.findingsLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ location: olderFinding.location, status: 'open' }),
+      expect.objectContaining({ location: currentFinding.location, status: 'resolved' }),
+    ]));
+    expect(ev.downgradedFindings?.map((entry) => entry.finding.location)).toEqual([
+      currentFinding.location,
+    ]);
+  });
+
+  it('keeps explicit irreversibility sticky when a later verdict omits the flag', async () => {
+    let round = 0;
+    let adjudicatorCalls = 0;
+    const irreversible: ObjectionFinding = {
+      ...disputed,
+      reversible: false,
+    };
+    const { reversible: _omitted, ...withoutReversibility } = irreversible;
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, makeDeps({
+      coder: async () => {
+        round += 1;
+        return { diff: `diff ${round}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [round === 1
+          ? irreversible
+          : withoutReversibility],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async () => {
+        adjudicatorCalls += 1;
+        return { upholds: 'pass', rationale: 'must not be consulted' };
+      },
+    }));
+
+    expect(adjudicatorCalls).toBe(0);
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toContain('human-owned non-reversible medium');
+  });
+
   it('does not adjudicate a first-round split while coder rounds remain', async () => {
     let calls = 0;
     let round = 0;
@@ -1219,7 +1454,7 @@ describe('team-task-workflow — split adjudication', () => {
 
     expect(ev.outcome).toBe('blocked');
     expect(ev.adjudications?.[0]?.upheld).toBe('fail');
-    // The ruling's finding is handed to the coder, not left implicit.
+    // The ruling's finding survives as concrete blocking evidence.
     expect(ev.findingsLedger.some(
       (entry) => entry.status === 'open' && entry.location === disputed.location,
     )).toBe(true);
@@ -1261,16 +1496,35 @@ describe('team-task-workflow — split adjudication', () => {
       },
     }));
 
-    // Round 1 has a remaining round so it is not adjudicated; the signature is
-    // first seen at the cap. A second identical dispute escalates.
-    expect(escalations.length).toBeGreaterThanOrEqual(1);
-    expect(escalations.at(-1)).toBe(escalations.length > 1);
+    // Round 1 records the split without spending an adjudication. When the
+    // same objection survives the coder retry, round 2 uses the alternate.
+    expect(escalations).toEqual([true]);
   });
 
   it('fails closed when no adjudicator is wired', async () => {
-    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps());
+    const events: WorkflowActivityEvent[] = [];
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1, emit: (event) => events.push(event) },
+      splitDeps(),
+    );
 
     expect(ev.outcome).toBe('blocked');
+    expect(ev.adjudications?.[0]?.failClosedReason).toBe('no adjudicator is wired');
+    expect(ev.rolesInvoked).not.toContain('adjudicator');
+    expect(events.some((event) => event.data?.['role'] === 'adjudicator')).toBe(false);
+  });
+
+  it('retains the severity-loop fallback for a findings-backed split without an adjudicator', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [{ ...disputed, severity: 'medium', reversible: true }],
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
     expect(ev.adjudications?.[0]?.failClosedReason).toBe('no adjudicator is wired');
   });
 
@@ -4778,6 +5032,17 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
+      adjudicateSplit: async () => ({
+        upholds: 'fail',
+        rationale: 'the requested assertion remains necessary',
+        finding: {
+          class: 'concurrency',
+          severity: 'medium',
+          location: 'src/example.ts:12',
+          rationale: 'the untested branch returns the wrong state after a retry',
+          reversible: true,
+        },
+      }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -4799,9 +5064,7 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'tech-lead', stage: 'diff-review' },
       { role: 'designer', stage: 'design' },
       // The reviewer failed while the tech lead and designer passed — a split,
-      // at cap 1, so the tie-breaker is dispatched. No `adjudicateSplit` dep is
-      // wired in this fixture, so it fails closed; the stage is emitted either
-      // way, because a fail-closed adjudication must be as visible as a ruling.
+      // at cap 1, so the wired tie-breaker is dispatched.
       { role: 'adjudicator', stage: 'split-adjudication' },
     ]);
     expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
@@ -4822,6 +5085,17 @@ describe('team-task-workflow — execution observability', () => {
         pass: false,
         objections: [],
         notes: 'reviewer wants one more assertion',
+      }),
+      adjudicateSplit: async () => ({
+        upholds: 'fail',
+        rationale: 'the requested assertion remains necessary',
+        finding: {
+          class: 'concurrency',
+          severity: 'medium',
+          location: 'src/example.ts:12',
+          rationale: 'the untested branch returns the wrong state after a retry',
+          reversible: true,
+        },
       }),
     });
 
@@ -4874,6 +5148,17 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
+      adjudicateSplit: async () => ({
+        upholds: 'fail',
+        rationale: 'the requested assertion remains necessary',
+        finding: {
+          class: 'concurrency',
+          severity: 'medium',
+          location: 'src/example.ts:12',
+          rationale: 'the untested branch returns the wrong state after a retry',
+          reversible: true,
+        },
+      }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -4888,10 +5173,10 @@ describe('team-task-workflow — execution observability', () => {
       { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
       { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
       { role: 'designer', verdict: 'pass', gate: 'design-review' },
-      // Split at the cap with no adjudicator wired → fail closed, and SAY so.
+      // Split at the cap with an adjudicator that upholds the failure.
       { role: 'adjudicator', verdict: 'fail', gate: 'implementation-diff' },
     ]);
-    expect(verdicts.at(-1)?.data?.['summary']).toContain('no adjudicator is wired');
+    expect(verdicts.at(-1)?.data?.['summary']).toContain('requested assertion remains necessary');
     expect(verdicts.every((event) => String(event.data?.['summary']).trim().length > 0)).toBe(true);
     expect(verdicts.every((event) => String(event.data?.['line']).trim().length > 0)).toBe(true);
   });

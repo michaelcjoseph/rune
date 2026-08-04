@@ -1523,6 +1523,30 @@ describe('project-orchestrator — durable run state', () => {
             taskBaseTree: '1111111111111111111111111111111111111111',
             currentReviewTree: '3333333333333333333333333333333333333333',
             fullTaskReviewHash: 'full-task-review-hash',
+            adjudications: [{
+              round: 1,
+              dissentingRole: 'reviewer',
+              concurringRole: 'tech-lead',
+              signature: 'cost-perf/medium @ src/streak.ts:8',
+              upheld: 'pass',
+              rationale: 'The bounded update satisfies the task contract.',
+              escalated: false,
+              executedModelAlias: 'gpt-5.6-terra',
+              executedProvider: 'openai',
+            }],
+            downgradedFindings: [{
+              finding: {
+                class: 'cost-perf',
+                severity: 'medium',
+                location: 'src/streak.ts:8',
+                rationale: 'A follow-up could simplify the bounded update.',
+              },
+              sourceGate: 'reviewer',
+              round: 1,
+              gaps: [],
+              reason: 'adjudicator upheld the pass',
+              rePrompted: false,
+            }],
           };
         }
         return {
@@ -1576,6 +1600,16 @@ describe('project-orchestrator — durable run state', () => {
           { role: 'reviewer', status: 'pass' },
           { role: 'tech-lead', status: 'pass' },
         ],
+        adjudications: [expect.objectContaining({
+          dissentingRole: 'reviewer',
+          upheld: 'pass',
+          executedModelAlias: 'gpt-5.6-terra',
+        })],
+        modelChoices: { adjudicator: 'gpt-5.6-terra' },
+        downgradedFindings: [expect.objectContaining({
+          sourceGate: 'reviewer',
+          reason: 'adjudicator upheld the pass',
+        })],
       }),
     );
     expect(persistedRecords[1]).toEqual(
@@ -1982,6 +2016,12 @@ describe('project-orchestrator — durable run state', () => {
       decision: 'accepted-with-rationale',
       rationale:
         'Accepting because the remaining concern is a low-risk copy preference and the task contract is satisfied.',
+      dissentingRole: 'reviewer',
+      overriddenVerdict: {
+        outcome: 'fail',
+        findings: [],
+        notes: 'reviewer wanted copy polish beyond the task contract',
+      },
     };
     const h = makeHarness({
       runTaskWorkflow: async (task) => ({

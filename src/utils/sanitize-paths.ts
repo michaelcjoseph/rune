@@ -27,6 +27,18 @@ export function scrubAbsolutePaths(raw: string): string {
   return s;
 }
 
+/** Replace remaining host-shaped Unix/Windows paths that are not one of Rune's
+ * configured roots. The Unix prefixes are deliberately bounded so product
+ * routes such as `/api/users` survive in model-authored prose. */
+export function scrubGenericAbsolutePaths(raw: string): string {
+  return raw
+    .replace(
+      /(^|[\s([{:="'`,;])(?:file:\/\/\/[A-Za-z0-9._-]+(?:\/[^\s)\]}>,”,"'`;]*)?|\/(?:Users|home|private|tmp|var|opt|Volumes|Applications|usr|etc|workspace|workspaces|repo|repos)(?:\/[^\s)\]}>,”,"'`;]*)?)/g,
+      '$1<path>',
+    )
+    .replace(/\b[A-Za-z]:\\[^\\\s]+(?:\\[^\s]*)?/g, '<path>');
+}
+
 function projectPathScrubCandidates(): string[] {
   const candidates = new Set<string>();
   if (PROJECT_ROOT) {

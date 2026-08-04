@@ -47,6 +47,8 @@ export interface ExecutionPreflightRoleModels {
   coder: RoleModelBinding;
   reviewer: RoleModelBinding | null;
   designer: RoleModelBinding;
+  adjudicator?: RoleModelBinding | null;
+  adjudicatorEscalation?: RoleModelBinding | null;
 }
 
 interface ProbeResult {
@@ -268,6 +270,8 @@ function groupBindings(models: ExecutionPreflightRoleModels): BindingGroup[] {
   const entries: Array<[ExecutionPreflightRole, RoleModelBinding | null]> = [
     ['pm', models.pm], ['tech-lead', models.techLead], ['qa', models.qa],
     ['coder', models.coder], ['reviewer', models.reviewer], ['designer', models.designer],
+    ['adjudicator', models.adjudicator ?? null],
+    ['adjudicator', models.adjudicatorEscalation ?? null],
   ];
   const groups = new Map<string, BindingGroup>();
   for (const [role, binding] of entries) {

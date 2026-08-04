@@ -172,6 +172,61 @@ describe('orch-run-record — required fields', () => {
     expect(rec.judgmentOutcomes?.[0]).not.toBe(judgmentOutcomes[0]);
   });
 
+  it('persists bounded adjudication and downgrade evidence with path scrubbing', () => {
+    const adjudications = [{
+      round: 1,
+      dissentingRole: 'reviewer' as const,
+      concurringRole: 'tech-lead' as const,
+      signature: 'security/high @ /Users/operator/private/auth.ts:8',
+      upheld: 'pass' as const,
+      rationale: 'The guard at /Users/operator/private/auth.ts:8 settles the dispute.',
+      escalated: false,
+      executedModelAlias: 'gpt-5.6-terra',
+      executedProvider: 'openai' as const,
+    }];
+    const downgradedFindings = [{
+      finding: {
+        class: 'security' as const,
+        severity: 'medium' as const,
+        location: '/Users/operator/private/export.ts:9',
+        rationale: 'The export concern lacks a reproducible path.',
+      },
+      sourceGate: 'reviewer' as const,
+      round: 1,
+      gaps: ['location' as const],
+      reason: 'missing evidence at /Users/operator/private/export.ts:9',
+      rePrompted: true,
+    }];
+    const rec = buildTaskRunRecord({
+      taskId: 'durable-decisions',
+      taskText: 'Persist decisions',
+      attemptId: 'a-decisions',
+      rolesInvoked: ['reviewer', 'tech-lead', 'adjudicator'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: 'abc4444',
+      verdicts: { reviewer: 'fail', 'tech-lead': 'pass' },
+      adjudications,
+      downgradedFindings,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.adjudications).toHaveLength(1);
+    expect(rec.downgradedFindings).toHaveLength(1);
+    expect(rec.adjudications).not.toBe(adjudications);
+    expect(rec.adjudications?.[0]).toMatchObject({
+      executedModelAlias: 'gpt-5.6-terra',
+      executedProvider: 'openai',
+    });
+    expect(rec.downgradedFindings).not.toBe(downgradedFindings);
+    expect(JSON.stringify({
+      adjudications: rec.adjudications,
+      downgradedFindings: rec.downgradedFindings,
+    })).not.toContain('/Users/operator');
+  });
+
   it('bounds coderSelfReviews to at most 4 rounds and truncates notes/changedPaths for durable evidence', () => {
     const manyPaths = Array.from({ length: 250 }, (_, i) => `src/file-${i}.ts`);
     const longNotes = 'x'.repeat(2_500);

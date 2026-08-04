@@ -4,6 +4,11 @@ import type { MessageSender, SendOpts } from './sender.js';
 import type { BusMutationEvent, BusOpEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
 import { isGateValidationReceipt } from '../intent/full-suite-attestation.js';
+import {
+  scrubAbsolutePaths,
+  scrubGenericAbsolutePaths,
+} from '../utils/sanitize-paths.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('telegram-sender');
 
@@ -279,12 +284,16 @@ function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
 function formatPmAcceptanceProgress(event: BusMutationEvent): string | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
   if (data['event'] !== 'pm-acceptance') return null;
-  const taskText = typeof data['taskText'] === 'string' ? data['taskText'] : '';
+  const taskText = typeof data['taskText'] === 'string'
+    ? redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(data['taskText'])))
+    : '';
   const actor = data['actor'] === 'human' ? 'human' : 'PM';
   const overriddenRole = typeof data['overriddenRole'] === 'string'
     ? data['overriddenRole']
     : 'a role';
-  const rationale = typeof data['rationale'] === 'string' ? data['rationale'] : '';
+  const rationale = typeof data['rationale'] === 'string'
+    ? redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(data['rationale'])))
+    : '';
   const parts = [
     `⚖️ ${actor} accepted over ${overriddenRole}'s dissent`,
     taskText,
@@ -385,12 +394,16 @@ export class TelegramSender implements MessageSender {
     // un-scrubbed `operatorWorktreePath` (formatWorkRunStart and the parked
     // branch of formatWorkRunTerminal both embed it). The length answers
     // "was it empty?" without carrying any of the body.
-    log.info('telegram send delivered', {
+    const deliveryRecord = {
       kind: telemetry.kind,
       ...(telemetry.mutationId !== undefined ? { mutationId: telemetry.mutationId } : {}),
       ...(telemetry.mutationKind !== undefined ? { mutationKind: telemetry.mutationKind } : {}),
       chatId: userId,
       chars: text.length,
+    };
+    log.info('telegram send delivered', deliveryRecord, {
+      ...deliveryRecord,
+      chatId: '[private]',
     });
   }
 

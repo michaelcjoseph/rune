@@ -322,12 +322,39 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
 
     expect(models.qa).toMatchObject({ alias: declared['qa'], provider: 'openai' });
     expect(models.coder).toMatchObject({ alias: declared['coder'], provider: 'openai' });
+    expect(models.adjudicator).toMatchObject({
+      alias: declared['adjudicator'],
+      provider: 'openai',
+      format: 'codex',
+    });
   });
 
   it('coder and reviewer resolve to different providers (independence by construction)', () => {
     const models = resolveTeamRoleModels(loadRealPolicy());
     expect(models.reviewer).not.toBeNull();
     expect(models.coder.provider).not.toBe(models.reviewer?.provider);
+  });
+
+  it('keeps the adjudicator on a different provider from both disputing roles', () => {
+    const policy = loadRealPolicy();
+    const models = resolveTeamRoleModels(policy);
+    expect(models.adjudicator).not.toBeNull();
+    expect(models.adjudicator?.provider).not.toBe(models.reviewer?.provider);
+    expect(models.adjudicator?.provider).not.toBe(models.techLead.provider);
+    expect(models.adjudicator?.alias).toBe(policy.roleDefaults['adjudicator']);
+    expect(models.adjudicatorEscalation?.alias).toBe(policy.roleEscalations?.['adjudicator']);
+    expect(models.adjudicatorEscalation?.alias).not.toBe(models.adjudicator?.alias);
+    const escalation = policy.models.find(
+      (entry) => entry.alias === models.adjudicatorEscalation?.alias,
+    );
+    expect(escalation?.capabilities).toContain('deep-reasoning');
+  });
+
+  it('fails closed instead of falling back when the adjudicator default is absent', () => {
+    const policy = loadRealPolicy();
+    const { adjudicator: _removed, ...roleDefaults } = policy.roleDefaults;
+    const models = resolveTeamRoleModels({ ...policy, roleDefaults });
+    expect(models.adjudicator).toBeNull();
   });
 });
 
@@ -353,6 +380,115 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     for (const name of seamNames) {
       expect(typeof deps[name], `seam ${String(name)}`).toBe('function');
     }
+  });
+
+  it('moves a repeated split adjudication to a different model', async () => {
+    const models: string[] = [];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, model }) => {
+        if (role === 'adjudicator') models.push(model);
+        return [
+          '```adjudication',
+          '{"upholds":"pass","rationale":"The guarded path answers the disputed claim."}',
+          '```',
+        ].join('\n');
+      },
+    }));
+    const input = {
+      task: sizedTask,
+      dissentingRole: 'reviewer' as const,
+      concurringRole: 'tech-lead' as const,
+      dissentingVerdict: {
+        outcome: 'fail' as const,
+        findings: [],
+        notes: 'the release ordering is unsafe',
+      },
+      concurringVerdict: { outcome: 'pass' as const, findings: [] },
+    };
+
+    const baseRuling = await deps.adjudicateSplit!({ ...input, escalate: false });
+    const escalatedRuling = await deps.adjudicateSplit!({ ...input, escalate: true });
+
+    expect(models).toHaveLength(2);
+    expect(models[1]).not.toBe(models[0]);
+    expect(baseRuling.execution).toEqual({
+      modelAlias: models[0],
+      provider: 'openai',
+    });
+    expect(escalatedRuling.execution).toEqual({
+      modelAlias: models[1],
+      provider: 'openai',
+    });
+  });
+
+  it('gives PM the actual dissent, spec, review artifact, tests, and complete ledger', async () => {
+    let prompt = '';
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        if (role === 'pm') prompt = message;
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+    const ledger: FindingsLedgerEntry[] = [{
+      id: 'finding-tech-lead-data-integrity-src-store-ts-19',
+      sourceGate: 'tech-lead',
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:19',
+      rationale: 'stale rows remain visible after the refresh completes',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+    }];
+
+    await deps.acceptWithRationale!({
+      task: sizedTask,
+      spec: 'The refresh must publish one coherent snapshot.',
+      reason: 'round cap',
+      dissentingRole: 'tech-lead',
+      dissentingVerdict: {
+        outcome: 'fail',
+        findings: [],
+        notes: 'snapshot publication is still ambiguous',
+      },
+      findingsLedger: ledger,
+      judgmentContext: {
+        task: sizedTask,
+        spec: 'The refresh must publish one coherent snapshot.',
+        projectContext: 'Store refresh task context.',
+        tests: ['src/store.test.ts'],
+        qa: { kind: 'tests-written', testIds: ['src/store.test.ts'] },
+        diff: 'diff --git a/src/store.ts b/src/store.ts',
+        reviewState: {
+          baseTree: 'a'.repeat(40),
+          currentTree: 'b'.repeat(40),
+          hash: 'c'.repeat(64),
+          changedPaths: ['src/store.ts'],
+        },
+        findingsLedger: ledger,
+        coderHandoffNotes: [],
+        artifactPass: 'first-pass',
+      },
+      rejectionFeedback: {
+        rejectingRole: 'tech-lead',
+        counterpartRole: 'coder',
+        rejectedRole: 'coder',
+        artifact: 'implementation-diff',
+        rejectedArtifact: 'implementation-diff',
+        reason: 'round cap',
+        whatFailed: 'snapshot publication is still ambiguous',
+        notes: [],
+        actionableNotes: [],
+      },
+    });
+
+    expect(prompt).toContain('## Spec');
+    expect(prompt).toContain('The refresh must publish one coherent snapshot.');
+    expect(prompt).toContain('diff --git a/src/store.ts b/src/store.ts');
+    expect(prompt).toContain('src/store.test.ts');
+    expect(prompt).toContain('src/store.ts:19');
+    expect(prompt).toContain('tech-lead rejected');
+    expect(prompt).toContain('snapshot publication is still ambiguous');
   });
 
   describe('coder-self-review result contract', () => {
@@ -2446,8 +2582,11 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
 
     const pm = await deps.acceptWithRationale!({
       task: sizedTask,
+      spec: 'spec',
       reason: 'cap',
-      reviewerVerdict: { outcome: 'fail', findings: [] },
+      dissentingRole: 'reviewer',
+      dissentingVerdict: { outcome: 'fail', findings: [] },
+      findingsLedger: [],
       rejectionFeedback: {
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
@@ -2590,7 +2729,6 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       workflowStage: 'post-coder-judgments',
       judgmentBatch: {
         members: [
-          { role: 'qa', workflowStage: 'qa-diff-revalidation' },
           { role: 'reviewer', workflowStage: 'reviewer-review' },
           { role: 'tech-lead', workflowStage: 'tech-lead-diff-review' },
         ],
@@ -2665,6 +2803,61 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       const expected = expectedByRole.get(role);
       expect(expected, `unexpected emitted role activity line: ${JSON.stringify(line.data)}`).toBeDefined();
       expectAttributedLine(line, expected!);
+    }
+  });
+
+  it('attributes a surviving split to the actual escalation binding', async () => {
+    const events: AttributedActivityEvent[] = [];
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+        cap: 2,
+      },
+      makeSeams({
+        judgmentCall: async ({ role }) => {
+          if (role === 'reviewer') {
+            return [
+              '```reviewer-verdict',
+              JSON.stringify({
+                outcome: 'fail',
+                findings: [{
+                  class: 'cost-perf',
+                  severity: 'medium',
+                  location: 'src/cache.ts:18',
+                  rationale: 'the retry retains an unnecessary duplicate cache lookup',
+                  reversible: true,
+                }],
+              }),
+              '```',
+            ].join('\n');
+          }
+          if (role === 'adjudicator') {
+            return [
+              '```adjudication',
+              '{"upholds":"pass","rationale":"The bounded lookup is acceptable."}',
+              '```',
+            ].join('\n');
+          }
+          return GREEN_JUDGMENT_REPLY;
+        },
+      }),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const adjudicatorEvents = events.filter((event) => event.data?.['role'] === 'adjudicator');
+    expect(adjudicatorEvents.length).toBeGreaterThanOrEqual(2);
+    const escalationAlias = loadRealPolicy().roleEscalations?.['adjudicator'];
+    for (const event of adjudicatorEvents) {
+      expect(event.data).toMatchObject({
+        adjudicatorBinding: 'escalation',
+        provider: 'openai',
+        model: escalationAlias,
+      });
     }
   });
 
@@ -3111,6 +3304,46 @@ describe('no-stub regression (Phase 8)', () => {
 
     expect(evidence.outcome).toBe('blocked');
     expect(evidence.blockedReason ?? '').toMatch(/model policy/i);
+  });
+
+  it.each([
+    ['base adjudicator', (policy: ModelPolicy) => {
+      const { adjudicator: _removed, ...roleDefaults } = policy.roleDefaults;
+      return { ...policy, roleDefaults };
+    }],
+    ['adjudicator escalation', (policy: ModelPolicy) => ({
+      ...policy,
+      roleEscalations: {},
+    })],
+  ])('blocks before preflight when the required %s declaration is missing', async (_label, edit) => {
+    const dir = await mkdtemp(join(tmpdir(), 'team-role-policy-'));
+    const policyPath = join(dir, 'model-policy.json');
+    const preflightExecution = vi.fn(async () => ({
+      status: 'success' as const,
+      bindings: [],
+      artifactMcp: 'not-required' as const,
+      artifactFormats: [],
+    }));
+    try {
+      await writeFile(policyPath, JSON.stringify(edit(loadRealPolicy())));
+      const run = createProductionTaskWorkflowRunner(
+        {
+          sandbox: makeSandbox(),
+          productsConfigPath: '/nonexistent/products.json',
+          modelPolicyPath: policyPath,
+        },
+        makeSeams({ preflightExecution }),
+      );
+
+      const evidence = await run(selectedTask, { handoff: 'h', contextMd: 'c' });
+
+      expect(evidence.outcome).toBe('blocked');
+      expect(evidence.rolesInvoked).toEqual([]);
+      expect(evidence.blockedReason).toMatch(/required adjudicator.*unavailable/i);
+      expect(preflightExecution).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('manual/live gate tasks park for operator evidence without invoking the role workflow', async () => {
