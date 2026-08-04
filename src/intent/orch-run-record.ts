@@ -24,12 +24,6 @@ import {
   type PmAcceptance,
 } from './team-task-workflow.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
-
-/** One durable outcome per role the post-coder judgment batch can dispatch:
- *  reviewer, tech lead, and designer when the task is sized for it. QA is not a
- *  member — it authors tests and stops when the coder starts. */
-export const JUDGMENT_OUTCOMES_MAX = 3;
-
 import {
   durableArtifactAttempts,
   durableExecutionFailure,
@@ -45,6 +39,11 @@ import {
   scrubAbsolutePaths,
   scrubGenericAbsolutePaths,
 } from '../utils/sanitize-paths.js';
+
+/** One durable outcome per role the post-coder judgment batch can dispatch:
+ *  reviewer, tech lead, and designer when the task is sized for it. QA is not a
+ *  member — it authors tests and stops when the coder starts. */
+export const JUDGMENT_OUTCOMES_MAX = 3;
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
