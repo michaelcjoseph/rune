@@ -1757,6 +1757,9 @@ async function runGated(
             ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
           };
         }
+        // Safe to merge unreviewed: `rulingFailure` already held this finding to
+        // its class evidence contract, so a `failClosedReason` of undefined
+        // means it carries a location and a failure scenario.
         if (failClosedReason === undefined && ruling!.finding !== undefined) {
           mergeFindingsIntoLedger(
             findingsLedger,
@@ -2321,15 +2324,32 @@ function splitSignature(verdict: GateVerdict): string {
 
 /** An adjudication ruling is admissible only when it is complete. An empty
  *  rationale, or a fail upheld with no concrete finding for the blocked task
- *  record, is not a decision — it fails closed to the block. */
+ *  record, is not a decision — it fails closed to the block.
+ *
+ *  An upheld finding must also satisfy the same class evidence contract every
+ *  other blocking finding does. The adjudicator is the one role whose output
+ *  nothing downstream reviews — its ruling is decisive for the round — so an
+ *  unanchored assertion here would block a task with exactly the confident-but-
+ *  ungrounded objection the contract exists to catch, and would do it with more
+ *  authority than the reviewer's. Unlike a role gate there is no re-prompt and
+ *  no downgrade: a gap makes the ruling inadmissible, which fails closed to the
+ *  block and keeps the ungrounded finding out of the ledger, the coder feedback,
+ *  and any later escalation. */
 function rulingFailure(ruling: AdjudicationRuling | undefined): string | undefined {
   if (ruling === undefined) return 'adjudicator returned no ruling';
   if (ruling.upholds !== 'pass' && ruling.upholds !== 'fail') {
     return `adjudicator returned an unusable verdict "${String(ruling.upholds)}"`;
   }
   if (ruling.rationale.trim() === '') return 'adjudicator gave no rationale';
-  if (ruling.upholds === 'fail' && ruling.finding === undefined) {
-    return 'adjudicator upheld the fail without a finding for the coder';
+  if (ruling.upholds === 'fail') {
+    if (ruling.finding === undefined) {
+      return 'adjudicator upheld the fail without a finding for the coder';
+    }
+    const gaps = evidenceGapsForFinding(ruling.finding);
+    if (gaps.length > 0) {
+      return `adjudicator upheld the fail with a ${ruling.finding.class} finding that lacks ` +
+        describeEvidenceGaps(gaps);
+    }
   }
   return undefined;
 }

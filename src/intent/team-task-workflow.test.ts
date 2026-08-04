@@ -1552,6 +1552,64 @@ describe('team-task-workflow — split adjudication', () => {
       expect(ev.adjudications?.[0]?.failClosedReason).toBeDefined();
     }
   });
+
+  // The adjudicator is the one role nothing downstream reviews, so an upheld
+  // finding must clear the same class evidence contract every other blocking
+  // finding does — otherwise the ruling blocks with exactly the ungrounded
+  // assertion the contract exists to catch, and with more authority.
+  it('fails closed when the upheld finding misses its class evidence contract', async () => {
+    for (const finding of [
+      // Evidence-required class, placeholder location.
+      {
+        class: 'concurrency' as const,
+        severity: 'high' as const,
+        location: 'various',
+        rationale: 'there is a race somewhere in the lease acquisition path',
+      },
+      // Evidence-required class, bare restatement for a rationale.
+      {
+        class: 'security' as const,
+        severity: 'high' as const,
+        location: 'src/lease.ts:42',
+        rationale: 'security issue',
+      },
+    ]) {
+      const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+        adjudicateSplit: async () => ({
+          upholds: 'fail' as const,
+          rationale: 'the dissent is right',
+          finding,
+        }),
+      }));
+
+      expect(ev.outcome, JSON.stringify(finding)).toBe('blocked');
+      expect(ev.adjudications?.[0]?.failClosedReason).toContain('lacks');
+      expect(ev.adjudications?.[0]?.upheld).toBe('fail');
+      // The ungrounded finding never reaches the ledger or the coder feedback.
+      expect(ev.findingsLedger.some((entry) => entry.location === finding.location)).toBe(false);
+    }
+  });
+
+  it('admits an upheld finding outside the evidence-required classes', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async () => ({
+        upholds: 'fail' as const,
+        rationale: 'the dissent is right',
+        // `outbound` is not an evidence-required class, so the contract is a
+        // no-op here and the ruling stands on the adjudicator's own judgment.
+        finding: {
+          class: 'outbound' as const,
+          severity: 'high' as const,
+          location: 'various',
+          rationale: 'egress',
+        },
+      }),
+    }));
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.adjudications?.[0]?.failClosedReason).toBeUndefined();
+    expect(ev.findingsLedger.some((entry) => entry.class === 'outbound')).toBe(true);
+  });
 });
 
 describe('team-task-workflow — objection gate', () => {
