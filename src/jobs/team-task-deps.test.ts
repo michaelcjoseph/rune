@@ -57,6 +57,7 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
+import { isExecutionCheckpoint } from '../intent/execution-failure.js';
 import type {
   ExecutionCheckpoint,
   ExecutionFailure,
@@ -2906,6 +2907,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
         ],
       },
     });
+    // The batch this producer emits must survive its own durable read-back. Run
+    // 58e8bde9 died because it did not: the cursor persisted without write-time
+    // validation, then failed isExecutionCheckpoint on the next checkpoint's read.
+    expect(isExecutionCheckpoint(batches[0])).toBe(true);
     expect(persisted.at(-1)).toMatchObject({
       taskId: sizedTask.id,
       role: 'orchestrator',

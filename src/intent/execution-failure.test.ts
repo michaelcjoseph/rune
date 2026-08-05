@@ -222,4 +222,55 @@ describe('execution failure durable contracts', () => {
       artifactAttempts: [{ ...artifactAttempts[0], candidateCount: -1 }],
     })).toBe(false);
   });
+
+  describe('judgment-batch checkpoints', () => {
+    const member = (role: string) => ({
+      role,
+      provider: 'anthropic' as const,
+      format: 'claude' as const,
+      model: 'opus',
+      workflowStage: `${role}-review`,
+    });
+    const batch = (...roles: string[]) => ({
+      ...checkpoint,
+      role: 'judgment-batch',
+      workflowStage: 'post-coder-judgments',
+      judgmentBatch: { batchId: 'batch-one', members: roles.map(member) },
+    });
+
+    // Run 58e8bde9 died here: judgmentBatchCheckpoint() emits reviewer+tech-lead for
+    // a task with designerNeeded false, but the bound still required the QA member
+    // removed in 7a09323. The invalid cursor persisted, then failed its own read back.
+    it('accepts a two-member batch for a task that needs no designer', () => {
+      expect(isExecutionCheckpoint(batch('reviewer', 'tech-lead'))).toBe(true);
+    });
+
+    it('accepts a three-member batch when a designer is needed', () => {
+      expect(isExecutionCheckpoint(batch('reviewer', 'tech-lead', 'designer'))).toBe(true);
+    });
+
+    it('keeps four-member pre-7a09323 cursors readable', () => {
+      expect(isExecutionCheckpoint(batch('qa', 'reviewer', 'tech-lead', 'designer'))).toBe(true);
+    });
+
+    it('rejects batches outside the bound or with duplicate roles', () => {
+      expect(isExecutionCheckpoint(batch('reviewer'))).toBe(false);
+      expect(isExecutionCheckpoint(batch('a', 'b', 'c', 'd', 'e'))).toBe(false);
+      expect(isExecutionCheckpoint(batch('reviewer', 'reviewer'))).toBe(false);
+    });
+
+    it('rejects malformed members and batch ids', () => {
+      expect(isExecutionCheckpoint({
+        ...batch('reviewer', 'tech-lead'),
+        judgmentBatch: { batchId: '', members: [member('reviewer'), member('tech-lead')] },
+      })).toBe(false);
+      expect(isExecutionCheckpoint({
+        ...batch('reviewer', 'tech-lead'),
+        judgmentBatch: {
+          batchId: 'batch-one',
+          members: [member('reviewer'), { ...member('tech-lead'), provider: 'unknown' }],
+        },
+      })).toBe(false);
+    });
+  });
 });
