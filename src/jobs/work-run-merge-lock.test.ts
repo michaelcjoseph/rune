@@ -18,13 +18,27 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { baseBranchLockKey, withBaseBranchLock } from './work-run-merge-lock.js';
+import { baseBranchLockKey } from './work-run-merge-lock.js';
 
 type BaseBranchRunHandle = {
   descriptor: { id: string; kind: string; status: string; payload: unknown };
 };
 
 type BaseBranchTarget = { repoPath: string; baseBranch: string };
+
+type LeaseParty = { runId: string; operationId: string };
+
+type BaseBranchLeaseSnapshot = {
+  resource: { type: string; key: string; capacity: number };
+  holders: LeaseParty[];
+  waiters: Array<LeaseParty & { position: number; waitingSince: string }>;
+};
+
+type BaseBranchLeaseOptions = {
+  holder: LeaseParty;
+  signal?: AbortSignal;
+  waitTimeoutMs?: number;
+};
 
 type RepoIdentityModule = {
   canonicalRepoId?: (repoPath: string) => Promise<string> | string;
@@ -36,6 +50,16 @@ type RepoIdentityModule = {
     includedKinds: ReadonlySet<string>,
     resolveTarget: (product: string) => BaseBranchTarget,
   ) => Promise<boolean>;
+  baseBranchLeaseSnapshot?: (
+    repoId: string,
+    baseBranch: string,
+  ) => BaseBranchLeaseSnapshot | undefined;
+  withBaseBranchLock?: <T>(
+    repoId: string,
+    baseBranch: string,
+    fn: () => Promise<T> | T,
+    options?: BaseBranchLeaseOptions,
+  ) => Promise<T>;
 };
 
 // Keep the existing module import usable while the new named exports do not yet
@@ -59,6 +83,24 @@ function hasConcurrentBaseBranchRun(
   return repoIdentity.hasConcurrentBaseBranchRun!(
     runs, currentRunId, repoId, baseBranch, includedKinds, resolveTarget,
   );
+}
+
+function baseBranchLeaseSnapshot(
+  repoId: string,
+  baseBranch: string,
+): BaseBranchLeaseSnapshot | undefined {
+  expect(repoIdentity.baseBranchLeaseSnapshot).toBeTypeOf('function');
+  return repoIdentity.baseBranchLeaseSnapshot!(repoId, baseBranch);
+}
+
+function withBaseBranchLock<T>(
+  repoId: string,
+  baseBranch: string,
+  fn: () => Promise<T> | T,
+  options?: BaseBranchLeaseOptions,
+): Promise<T> {
+  expect(repoIdentity.withBaseBranchLock).toBeTypeOf('function');
+  return repoIdentity.withBaseBranchLock!(repoId, baseBranch, fn, options);
 }
 
 let fixtureRoot = '';
@@ -307,6 +349,132 @@ describe('baseBranchLockKey — per-repository / per-base-branch', () => {
 });
 
 describe('withBaseBranchLock — repository-level serialization', () => {
+  it('grants contending identified waiters in FIFO order', async () => {
+    const repoId = await canonicalRepoId(runeRepo);
+    const holderHolds = deferred();
+    const grantOrder: string[] = [];
+    const holder = withBaseBranchLock(
+      repoId,
+      'lease-fifo',
+      async () => {
+        await holderHolds.promise;
+      },
+      { holder: { runId: 'run-holder', operationId: 'merge-holder' } },
+    );
+    const waiterA = withBaseBranchLock(
+      repoId,
+      'lease-fifo',
+      () => {
+        grantOrder.push('A');
+      },
+      { holder: { runId: 'run-a', operationId: 'merge-a' } },
+    );
+    const waiterB = withBaseBranchLock(
+      repoId,
+      'lease-fifo',
+      () => {
+        grantOrder.push('B');
+      },
+      { holder: { runId: 'run-b', operationId: 'merge-b' } },
+    );
+
+    await flush();
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-fifo')?.waiters).toEqual([
+      expect.objectContaining({
+        runId: 'run-a', operationId: 'merge-a', position: 1,
+      }),
+      expect.objectContaining({
+        runId: 'run-b', operationId: 'merge-b', position: 2,
+      }),
+    ]);
+
+    holderHolds.resolve();
+    await Promise.all([holder, waiterA, waiterB]);
+    expect(grantOrder).toEqual(['A', 'B']);
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-fifo')).toBeUndefined();
+  });
+
+  it('exposes identified FIFO waiters and removes a cancelled base-branch waiter', async () => {
+    const repoId = await canonicalRepoId(runeRepo);
+    const firstHolds = deferred();
+    const cancelled = new AbortController();
+    const first = withBaseBranchLock(
+      repoId,
+      'lease-observability',
+      () => firstHolds.promise,
+      { holder: { runId: 'run-holder', operationId: 'merge-holder' } },
+    );
+    const waiting = withBaseBranchLock(
+      repoId,
+      'lease-observability',
+      () => 'must not run',
+      {
+        holder: { runId: 'run-waiter', operationId: 'merge-waiter' },
+        signal: cancelled.signal,
+      },
+    );
+
+    await flush();
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-observability')).toEqual({
+      resource: {
+        type: 'base-branch',
+        key: baseBranchLockKey(repoId, 'lease-observability'),
+        capacity: 1,
+      },
+      holders: [{ runId: 'run-holder', operationId: 'merge-holder' }],
+      waiters: [expect.objectContaining({
+        runId: 'run-waiter',
+        operationId: 'merge-waiter',
+        position: 1,
+        waitingSince: expect.any(String),
+      })],
+    });
+
+    cancelled.abort();
+    await expect(waiting).rejects.toThrow(/abort|cancel/i);
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-observability')?.waiters).toEqual([]);
+
+    firstHolds.resolve();
+    await first;
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-observability')).toBeUndefined();
+  });
+
+  it('times out a bounded waiter without releasing its still-active holder', async () => {
+    const repoId = await canonicalRepoId(runeRepo);
+    const holderHolds = deferred();
+    let waiterRan = false;
+    const holder = withBaseBranchLock(
+      repoId,
+      'lease-timeout',
+      () => holderHolds.promise,
+      { holder: { runId: 'run-holder', operationId: 'merge-holder' } },
+    );
+    const timedOutWaiter = withBaseBranchLock(
+      repoId,
+      'lease-timeout',
+      () => {
+        waiterRan = true;
+      },
+      {
+        holder: { runId: 'run-timeout', operationId: 'merge-timeout' },
+        waitTimeoutMs: 25,
+      },
+    );
+
+    await expect(timedOutWaiter).rejects.toThrow(/time(d)?[ -]?out/i);
+    expect(waiterRan).toBe(false);
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-timeout')).toEqual(
+      expect.objectContaining({
+        holders: [{ runId: 'run-holder', operationId: 'merge-holder' }],
+        waiters: [],
+      }),
+    );
+
+    holderHolds.resolve();
+    await holder;
+    expect(baseBranchLeaseSnapshot(repoId, 'lease-timeout')).toBeUndefined();
+  });
+
   it('serializes rune and rune-mcp because their worktrees resolve to one repository', async () => {
     const order: string[] = [];
     const firstHolds = deferred();
