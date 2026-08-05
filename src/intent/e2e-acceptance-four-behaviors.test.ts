@@ -514,6 +514,7 @@ async function runExecutedScaffoldTask(spec: string): Promise<{
     coder: binding('gpt-5.6-sol', 'openai', 'codex'),
     reviewer: binding('opus', 'anthropic', 'claude'),
     designer: binding('opus', 'anthropic', 'claude'),
+    security: binding('opus', 'anthropic', 'claude'),
     adjudicator: binding('gpt-5.6-sol', 'openai', 'codex'),
   };
   const deps = buildProductionTeamTaskDeps(

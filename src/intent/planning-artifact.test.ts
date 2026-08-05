@@ -11,6 +11,7 @@ import {
   sizedTasksToMarkdown,
 } from './planning-artifact.js';
 import type { PlanningRolesOutcome, SizedTask } from './planning-roles.js';
+import { selectNextTask, type SelectedTask } from './orch-task-select.js';
 
 const TASKS: SizedTask[] = [
   { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', validationPolicy: 'required', designerNeeded: false, roles: ['qa', 'coder'] },
@@ -84,6 +85,39 @@ describe('sizedTasksToMarkdown', () => {
     const md = sizedTasksToMarkdown(flat);
     expect((md.match(/^## /gm) ?? []).length).toBe(1);
     expect(md).toContain('## Phase 1');
+  });
+
+  it('serializes and re-parses the security review marker as task metadata', () => {
+    const securityTask = {
+      ...TASKS[0],
+      id: 'p1-security',
+      text: 'Add the execution-profile security gate',
+      securityNeeded: true,
+    } as SizedTask;
+
+    const markdown = sizedTasksToMarkdown([securityTask]);
+    expect(markdown).toContain(
+      '**p1-security** — Add the execution-profile security gate _(security review)_',
+    );
+
+    const selected = selectNextTask(markdown);
+    expect(selected.kind).toBe('task');
+    if (selected.kind !== 'task') return;
+    expect((selected.task as SelectedTask & { securityNeeded?: boolean }).securityNeeded).toBe(true);
+  });
+
+  it('does not infer security review from marker-looking prose inside a task description', () => {
+    const proseTask = {
+      ...TASKS[0],
+      id: 'p1-security-prose',
+      text: 'Document why _(security review)_ happens before the release checklist',
+      securityNeeded: false,
+    } as SizedTask;
+
+    const selected = selectNextTask(sizedTasksToMarkdown([proseTask]));
+    expect(selected.kind).toBe('task');
+    if (selected.kind !== 'task') return;
+    expect((selected.task as SelectedTask & { securityNeeded?: boolean }).securityNeeded).toBe(false);
   });
 });
 

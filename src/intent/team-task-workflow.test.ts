@@ -69,6 +69,13 @@ const frontEndTask: SizedTask = {
   roles: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer'],
 };
 
+const securityTask: SizedTask = {
+  ...codeTask,
+  id: 'p1-security',
+  text: 'Enforce execution-profile isolation',
+  securityNeeded: true,
+};
+
 const cleanVerdict: ReviewerVerdict = { pass: true, objections: [] };
 
 function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
@@ -4650,6 +4657,99 @@ describe('team-task-workflow — designer routing', () => {
     const deps = makeDeps({ designer: async () => ({ pass: false, notes: 'control not reachable' }) });
     const ev = await runTeamTaskWorkflow(frontEndTask, INPUT, deps);
     expect(ev.outcome).toBe('blocked');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security review routing
+// ---------------------------------------------------------------------------
+
+describe('team-task-workflow — security routing', () => {
+  it('invokes security review for a task explicitly flagged by planning', async () => {
+    let securityCalled = false;
+    const deps = makeDeps() as TeamTaskDeps & { security: TeamTaskDeps['designer'] };
+    deps.security = async () => {
+      securityCalled = true;
+      return { pass: true };
+    };
+
+    await runTeamTaskWorkflow(securityTask, INPUT, deps);
+    expect(securityCalled).toBe(true);
+  });
+
+  it('does not invoke security review for an unflagged task', async () => {
+    let securityCalled = false;
+    const deps = makeDeps() as TeamTaskDeps & { security: TeamTaskDeps['designer'] };
+    deps.security = async () => {
+      securityCalled = true;
+      return { pass: true };
+    };
+
+    await runTeamTaskWorkflow(codeTask, INPUT, deps);
+    expect(securityCalled).toBe(false);
+  });
+
+  it('treats a failing security review as a closeout-blocking gate', async () => {
+    const deps = makeDeps() as TeamTaskDeps & { security: TeamTaskDeps['designer'] };
+    deps.security = async () => ({ pass: false, notes: 'untrusted network path remains' });
+
+    const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 1 }, deps);
+    expect(evidence.outcome).toBe('blocked');
+    expect(evidence.blockedReason).toMatch(/security review/i);
+  });
+
+  it('keeps a failed security gate authoritative after non-final split adjudication', async () => {
+    let adjudicatorCalls = 0;
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [],
+        notes: 'the lease release ordering still reads wrong to me',
+      }),
+      techLeadReviewDiff: async () => ({ pass: true }),
+      adjudicateSplit: async () => {
+        adjudicatorCalls += 1;
+        return {
+          upholds: 'pass',
+          rationale: 'the guarded release path answers the reviewer dispute',
+        };
+      },
+    }) as TeamTaskDeps & { security: TeamTaskDeps['designer'] };
+    deps.security = async () => ({
+      pass: false,
+      notes: 'untrusted network path remains',
+    });
+
+    const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 3 }, deps);
+
+    expect(adjudicatorCalls).toBe(1);
+    expect(evidence.outcome).toBe('blocked');
+    expect(evidence.blockedReason).toMatch(/security review/i);
+  });
+
+  it('never lets a persistently failing security gate close through stagnation', async () => {
+    let securityCalls = 0;
+    const deps = makeDeps() as TeamTaskDeps & { security: TeamTaskDeps['designer'] };
+    deps.security = async () => {
+      securityCalls += 1;
+      return {
+        outcome: 'fail',
+        findings: [{
+          class: 'security',
+          severity: 'medium',
+          location: 'src/security.ts:12',
+          rationale: 'the execution boundary remains bypassable',
+          reversible: true,
+        }],
+      };
+    };
+
+    const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 4 }, deps);
+
+    expect(evidence.outcome).toBe('blocked');
+    expect(evidence.loopExitReason).toBe('hard-budget');
+    expect(evidence.loopExitReason).not.toBe('stagnation');
+    expect(securityCalls).toBe(4);
   });
 });
 

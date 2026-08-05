@@ -40,26 +40,30 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-- tech-lead repaired test intent: src/intent/sandbox.test.ts, src/jobs/sandbox-runtime.test.ts, src/jobs/work-run-gc.test.ts, src/jobs/work-runner.test.ts
-- cy branch identity flows through both runner paths and recovery.
-- GC remains safe for both branch shapes.
-- Updated downstream branch-contract tests.
+- s, findings, checkpoints, and preflight coverage.
+- Updated structural architecture documentation.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 353 files passed; 6,274 tests passed; 8 todo
+- Targeted QA suite — 371 passed
+- `npm test` — 353 files passed; 6,299 tests passed; 8 todo
 - `git diff --check` — clean
-- No tests removed.
-- coder self-review (revised): Fixed legacy branch identity across shutdown parking, restart finalization, and operator release. npm run build passed; npm test passed (353 files, 6,279 tests, 8 todo). No tests removed.
--  probing is limited to work branches.
-- Added namespaced recovery match/mismatch coverage.
-- Legacy resume and GC remain safe.
-
-Validation:
-
-- `npm run build` — passed
-- `npm test` — 353 files passed; 6,287 tests passed; 8 todo
-- `git diff HEAD --check` — clean
 - No tests removed
 - No commit created
+- sts passed; 8 todo.
+- Final affected suite rerun — 146 tests passed.
+- Staged and unstaged diff checks — clean.
+- No tests removed and no commit created.
+
+A redundant second full-suite invocation stalled before emitting test progress and was interrupted; the completed full-suite run above was green.
+-  regression test.
+- Added direct production security prompt/parsing coverage.
+- Centralized the designer-review marker constant.
+- No tests removed and no commit created.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 353 files passed; 6,304 tests passed; 8 todo
+- `git diff --check` — clean

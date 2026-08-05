@@ -90,6 +90,7 @@ const models: TeamRoleModels = {
   coder: openai,
   reviewer: anthropic,
   designer: anthropic,
+  security: anthropic,
   adjudicator: openai,
 };
 

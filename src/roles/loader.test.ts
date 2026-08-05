@@ -348,8 +348,22 @@ describe('roles/loader — char budget', () => {
 describe('roles/loader — charter inventory (real disk)', () => {
   it('enumerates exactly the product-team roles', () => {
     expect([...ROLE_NAMES].sort()).toEqual(
-      ['adjudicator', 'coder', 'designer', 'pm', 'qa', 'reviewer', 'tech-lead'].sort(),
+      ['adjudicator', 'coder', 'designer', 'pm', 'qa', 'reviewer', 'security', 'tech-lead'].sort(),
     );
+  });
+
+  it('round-trips the security role through the on-disk role loader', () => {
+    // The assertion deliberately exercises the real product-team inventory and
+    // disk layout rather than merely checking that a directory was created.
+    // `security` is cast while this test is red; the implementation must add it
+    // to RoleName before callers can address it without a cast.
+    const role = 'security' as RoleName;
+    expect(ROLE_NAMES).toContain(role);
+    expect(roleDir(role)).toBe(join(REPO_ROOT, 'agents', 'security'));
+
+    const ctx = composeRoleContext(role, BASE);
+    expect(ctx.systemInstructions.trim().length).toBeGreaterThan(0);
+    expect(ctx.referenceContext).toContain('<security-memory>');
   });
 
   it.each([...ROLE_NAMES])('role "%s" has a non-empty SOUL.md on disk', (role: RoleName) => {

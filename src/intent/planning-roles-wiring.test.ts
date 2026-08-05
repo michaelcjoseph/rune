@@ -92,6 +92,28 @@ const BREAKDOWN_REPLY = [
   '```',
 ].join('\n');
 
+const BREAKDOWN_WITH_SECURITY_REPLY = [
+  '```tech-breakdown',
+  JSON.stringify({
+    tasks: [
+      {
+        id: 'p1-security-role',
+        text: 'Add the security product-team review role',
+        phase: 'Phase 1 - Foundation',
+        testStrategy: 'code-tests-required',
+        validationPolicy: 'required',
+        designerNeeded: false,
+        securityNeeded: true,
+        roles: ['qa', 'coder', 'reviewer', 'tech-lead', 'security'],
+      },
+    ],
+  }),
+  '```',
+  '```tech-spec',
+  'Security review is an explicit closeout gate.',
+  '```',
+].join('\n');
+
 const BREAKDOWN_WITH_MANUAL_GATE_REPLY = [
   '```tech-breakdown',
   JSON.stringify({
@@ -319,6 +341,22 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     expect(result.tasks.find((t) => t.id === 'p2-card')?.phase).toBe('Phase 2 - UI');
   });
 
+  it('asks for and preserves the explicit security-review sizing flag', async () => {
+    const { call, seenSystem } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_SECURITY_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'rune',
+      spec: 's',
+    });
+
+    expect(seenSystem['tech-lead']).toContain('"securityNeeded"');
+    expect(seenSystem['tech-lead']).toContain(
+      'Every task needs a\ntestStrategy from the allowed values and a phase label.',
+    );
+    const task = result.tasks.find((candidate) => candidate.id === 'p1-security-role');
+    expect((task as (typeof task) & { securityNeeded?: boolean })?.securityNeeded).toBe(true);
+  });
+
   it('split format: tech spec markdown with a nested code fence survives, tasks still parse', async () => {
     const { call } = stubModelCall({ 'tech-lead': SPLIT_BREAKDOWN_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'rune', spec: 's' });
@@ -423,6 +461,7 @@ describe('planning-roles-wiring — PM review seam', () => {
         phase: 'Phase 3 - Release',
         testStrategy: 'manual-live-gate',
         designerNeeded: false,
+        securityNeeded: true,
         roles: ['human'],
       },
     ];
@@ -454,6 +493,7 @@ describe('planning-roles-wiring — PM review seam', () => {
       repairedTechSpec: expect.stringContaining('live release evidence'),
     });
     expect(result.repairedTasks?.[0]?.testStrategy).toBe('manual-live-gate');
+    expect(result.repairedTasks?.[0]?.securityNeeded).toBe(true);
   });
 
   it('asks PM review to repair missing scope and manual/live gates instead of only judging', async () => {
@@ -503,5 +543,49 @@ describe('planning-roles-wiring — critique prompt', () => {
     expect(seenClaude).toContain('manual-live-gate');
     expect(seenClaude).toContain('Preserve `manual-live-gate` tasks');
     expect(seenClaude).toContain('automated tests cannot prove');
+  });
+
+  it('preserves securityNeeded when critique-tasks are parsed', async () => {
+    const reply = [
+      '```critique-tasks',
+      JSON.stringify({
+        tasks: [{
+          id: 'security-closeout',
+          text: 'Review the execution boundary',
+          testStrategy: 'code-tests-required',
+          validationPolicy: 'required',
+          designerNeeded: false,
+          securityNeeded: true,
+          roles: ['qa', 'coder', 'reviewer', 'security'],
+        }],
+      }),
+      '```',
+      '```critique-spec',
+      'Revised spec',
+      '```',
+      '```critique-tech-spec',
+      'Revised tech spec',
+      '```',
+    ].join('\n');
+    const critiquePlan = buildProductionCritiquePlan({
+      claudeCall: async () => reply,
+      isCodexAvailable: async () => false,
+    });
+
+    const result = await critiquePlan({
+      spec: 'spec',
+      techSpec: 'tech',
+      tasks: [{
+        id: 'security-closeout',
+        text: 'Review the execution boundary',
+        testStrategy: 'code-tests-required',
+        validationPolicy: 'required',
+        designerNeeded: false,
+        securityNeeded: true,
+        roles: ['qa', 'coder', 'reviewer', 'security'],
+      }],
+    });
+
+    expect(result.plan.tasks[0]?.securityNeeded).toBe(true);
   });
 });

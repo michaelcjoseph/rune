@@ -10,7 +10,7 @@
  *     → [round loop, bounded by cap]
  *         coder implements
  *         → coder self-review + canonical Git capture
- *         → QA/reviewer/tech-lead/(conditional) designer judge concurrently
+ *         → reviewer/tech-lead/(conditional) designer/security judge concurrently
  *         → verdicts/findings merge in stable role order
  *         → open objection-class finding ⇒ hard block (PM can't clear it)
  *         → all gates green ⇒ ready-for-closeout
@@ -162,6 +162,7 @@ export interface WorkflowGateVerdicts {
   reviewer?: GateVerdict;
   techLeadDiff?: GateVerdict;
   designer?: GateVerdict;
+  security?: GateVerdict;
 }
 
 /** A tie-break ruling on a reviewer-vs-tech-lead split. Decisive for the round. */
@@ -218,7 +219,7 @@ export interface DowngradedFinding {
   rePrompted: boolean;
 }
 
-export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer';
+export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer' | 'security';
 export type FindingStatus = 'open' | 'resolved' | 'regressed';
 export type LoopExitReason = 'all-low' | 'stagnation' | 'hard-budget' | 'operational';
 
@@ -288,7 +289,8 @@ export type GateRejectedArtifact =
   | 'test-intent'
   | 'reviewer-verdict'
   | 'implementation-diff'
-  | 'design-review';
+  | 'design-review'
+  | 'security-review';
 
 /** QA's output for a task — code tests, or a reviewed no-code-test rationale. */
 export type QaResult =
@@ -406,7 +408,7 @@ export interface ReviewerInput {
  *  coder's own provider family — the one gate that violated the distinct-provider
  *  review rule. The test-integrity questions it nominally owned are now part of
  *  the tech lead's diff review, which already reads the test files. */
-export type JudgmentRole = 'reviewer' | 'tech-lead' | 'designer';
+export type JudgmentRole = 'reviewer' | 'tech-lead' | 'designer' | 'security';
 
 /** One immutable canonical snapshot shared by every eligible post-coder
  * judgment in a round. Role-specific legacy fields remain on each input for
@@ -498,6 +500,19 @@ export interface TeamTaskDeps {
     judgmentBatchId?: string;
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
+    task: SizedTask;
+    diff: string;
+    findingsLedger?: FindingsLedgerEntry[];
+    reviewState?: Omit<CanonicalReviewState, 'diff'>;
+    spec?: string;
+    context?: string;
+    tests?: string[] | string;
+    qa?: QaResult;
+    coderHandoffNotes?: string[];
+    judgmentContext?: JudgmentContext;
+    judgmentBatchId?: string;
+  }) => Promise<GateReviewVerdict>;
+  security?: (input: {
     task: SizedTask;
     diff: string;
     findingsLedger?: FindingsLedgerEntry[];
@@ -984,10 +999,11 @@ async function runGated(
     });
   }
 
-  // Round loop — coder → reviewer → tech-lead diff → designer, bounded by cap.
+  // Round loop — coder → reviewer → tech-lead diff → conditional specialist gates.
   let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
+  let lastSecurity: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   let lastJudgmentContext: JudgmentContext | undefined;
   // Accumulated across rounds: a finding downgraded in round 1 stays visible in
@@ -1158,6 +1174,16 @@ async function runGated(
         'designer-review',
       );
     }
+    if (task.securityNeeded) {
+      roles.add('security');
+      previousRole = emitRoleTransition(
+        input,
+        previousRole,
+        'security',
+        'security',
+        'security-review',
+      );
+    }
 
     let cleanupRequested = false;
     let cleanupRequestedAt = '';
@@ -1240,6 +1266,31 @@ async function runGated(
             })),
           }]
         : []),
+      ...(task.securityNeeded
+        ? [{
+            role: 'security' as const,
+            promise: startJudgment(() => {
+              if (deps.security === undefined) {
+                throw new Error('security review gate is not configured');
+              }
+              return deps.security({
+                task: judgmentContext.task,
+                diff: judgmentContext.diff,
+                spec: judgmentContext.spec,
+                context: judgmentContext.projectContext,
+                tests: judgmentContext.tests,
+                qa: judgmentContext.qa,
+                reviewState: judgmentContext.reviewState,
+                coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
+                judgmentContext,
+                judgmentBatchId,
+                ...(roundFindingsLedger.length > 0
+                  ? { findingsLedger: [...judgmentContext.findingsLedger] }
+                  : {}),
+              });
+            }),
+          }]
+        : []),
     ];
     const partiallySettled = new Map<
       JudgmentRole,
@@ -1319,6 +1370,7 @@ async function runGated(
     const reviewerSettled = settledByRole.get('reviewer');
     const techLeadSettled = settledByRole.get('tech-lead');
     const designerSettled = settledByRole.get('designer');
+    const securitySettled = settledByRole.get('security');
     const rawReviewerVerdict = reviewerSettled?.status === 'fulfilled'
       ? reviewerSettled.value as ReviewerVerdict
       : undefined;
@@ -1330,6 +1382,9 @@ async function runGated(
       : undefined;
     lastDesigner = designerSettled?.status === 'fulfilled'
       ? normalizeGateVerdict(designerSettled.value as GateReviewVerdict)
+      : undefined;
+    lastSecurity = securitySettled?.status === 'fulfilled'
+      ? normalizeGateVerdict(securitySettled.value as GateReviewVerdict)
       : undefined;
 
     // Evidence contract — between normalization and every consumer (ledger
@@ -1358,6 +1413,11 @@ async function runGated(
         deps, task, 'designer', lastDesigner, round, judgmentContext, downgradedFindings,
       );
     }
+    if (lastSecurity !== undefined) {
+      lastSecurity = await applyEvidenceContract(
+        deps, task, 'security', lastSecurity, round, judgmentContext, downgradedFindings,
+      );
+    }
 
     judgmentOutcomes.splice(0, judgmentOutcomes.length, ...judgmentCalls.map(({ role }, index) => {
       const result = settled[index]!;
@@ -1373,7 +1433,9 @@ async function runGated(
         ? lastReviewer
         : role === 'tech-lead'
           ? lastTechLeadDiff
-          : lastDesigner;
+          : role === 'designer'
+            ? lastDesigner
+            : lastSecurity;
       if (role === 'reviewer' && lastReviewer?.operationalFailureReason !== undefined) {
         return {
           role,
@@ -1495,6 +1557,38 @@ async function runGated(
         roundFeedback.push(feedback);
       }
     }
+    if (lastSecurity !== undefined) {
+      mergeFindingsIntoLedger(
+        findingsLedger,
+        explicitNonReversibleFindingIds,
+        'security',
+        lastSecurity.findings,
+        round,
+      );
+      emitRoleVerdict(input, {
+        role: 'security',
+        gate: 'security-review',
+        verdict: isGatePass(lastSecurity) ? 'pass' : 'fail',
+        summary: lastSecurity.notes?.trim() || (isGatePass(lastSecurity)
+          ? 'security approved implementation diff'
+          : 'security rejected implementation diff'),
+      });
+      if (!isGatePass(lastSecurity)) {
+        const feedback = buildGateRejectionFeedback({
+          rejectingRole: 'security',
+          counterpartRole: 'coder',
+          artifact: 'security-review',
+          reason: lastSecurity.findings.length > 0
+            ? summarizeObjections(lastSecurity.findings)
+            : lastSecurity.notes ?? 'security review failed',
+          actionableNotes: suggestedChangesFromVerdict(lastSecurity),
+        });
+        await recordGateRejection(deps, feedback);
+        emitGateRejection(input, feedback);
+        lastRejectionFeedback = feedback;
+        roundFeedback.push(feedback);
+      }
+    }
     if (primaryFailure !== undefined) {
       throw primaryFailure.reason;
     }
@@ -1507,6 +1601,7 @@ async function runGated(
           lastReviewer,
           lastTechLeadDiff,
           lastDesigner,
+          lastSecurity,
         ),
         findingsLedger,
         loopExitReason: 'operational',
@@ -1522,6 +1617,7 @@ async function runGated(
       isReviewerPass(lastReviewer) &&
       isGatePass(lastTechLeadDiff) &&
       isGatePass(lastDesigner) &&
+      isGatePass(lastSecurity) &&
       reviewerVerificationAllowsCloseout(
         roundFindingsLedger,
         lastReviewer?.verifiedFindings,
@@ -1534,7 +1630,7 @@ async function runGated(
         outcome: 'ready-for-closeout',
         rolesInvoked: roles.list(),
         reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
         findingsLedger,
         loopExitReason: 'all-low',
         objectionOpen: false,
@@ -1550,18 +1646,28 @@ async function runGated(
 
     const lastRound = round >= configuredRoundBudget;
 
-    // A required designer verdict is never a tie to delegate. At the terminal
-    // round it remains a direct blocking gate, regardless of severity-loop or
-    // adjudication escape hatches.
-    if (lastRound && task.designerNeeded && !isGatePass(lastDesigner)) {
-      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+    // Conditional gates are never ties to delegate. At the terminal round they
+    // remain direct blocks, regardless of severity-loop or adjudication escape
+    // hatches.
+    const roundConditionalGateFailure = conditionalGateBlockReason(
+      task,
+      lastDesigner,
+      lastSecurity,
+    );
+    if (lastRound && roundConditionalGateFailure !== undefined) {
+      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
       return block(task, roles, handoffNotes, {
-        blockedReason: 'designer review failed at the round cap',
+        blockedReason: `${roundConditionalGateFailure} at the round cap`,
         ...(lastRejectionFeedback !== undefined
           ? { rejectionFeedback: lastRejectionFeedback }
           : {}),
         reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        gateVerdicts: buildWorkflowGateVerdicts(
+          lastReviewer,
+          lastTechLeadDiff,
+          lastDesigner,
+          lastSecurity,
+        ),
         findingsLedger,
         loopExitReason: 'hard-budget',
         downgradedFindings,
@@ -1596,14 +1702,14 @@ async function runGated(
               explicitNonReversibleFindingIds,
             ) ?? adjudicationHumanBlocker(dissenting);
         if (humanBlocker !== undefined) {
-          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
           return block(task, roles, handoffNotes, {
             blockedReason: humanBlocker,
             ...(lastRejectionFeedback !== undefined
               ? { rejectionFeedback: lastRejectionFeedback }
               : {}),
             reviewerVerdict: lastReviewer,
-            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
             findingsLedger,
             loopExitReason: 'hard-budget',
             downgradedFindings,
@@ -1677,7 +1783,7 @@ async function runGated(
             explicitNonReversibleFindingIds,
           );
           if (protectedFinding !== undefined) {
-            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
             return block(task, roles, handoffNotes, {
               blockedReason: protectedFinding,
               ...(lastRejectionFeedback !== undefined
@@ -1688,6 +1794,7 @@ async function runGated(
                 lastReviewer,
                 lastTechLeadDiff,
                 lastDesigner,
+                lastSecurity,
               ),
               findingsLedger,
               loopExitReason: 'hard-budget',
@@ -1717,7 +1824,7 @@ async function runGated(
             (entry) => severityRank[entry.severity] > severityRank.low,
           );
           if (remainingBlockingFinding !== undefined) {
-            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
             return block(task, roles, handoffNotes, {
               blockedReason: 'adjudicator settled the current split, but another blocking ' +
                 `${remainingBlockingFinding.class} finding remains open at ` +
@@ -1730,6 +1837,7 @@ async function runGated(
                 lastReviewer,
                 lastTechLeadDiff,
                 lastDesigner,
+                lastSecurity,
               ),
               findingsLedger,
               loopExitReason: 'hard-budget',
@@ -1739,13 +1847,40 @@ async function runGated(
               noCodeTestRationale,
             });
           }
-          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          const conditionalGateFailure = conditionalGateBlockReason(
+            task,
+            lastDesigner,
+            lastSecurity,
+          );
+          if (conditionalGateFailure !== undefined) {
+            emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
+            return block(task, roles, handoffNotes, {
+              blockedReason: conditionalGateFailure,
+              ...(lastRejectionFeedback !== undefined
+                ? { rejectionFeedback: lastRejectionFeedback }
+                : {}),
+              reviewerVerdict: lastReviewer,
+              gateVerdicts: buildWorkflowGateVerdicts(
+                lastReviewer,
+                lastTechLeadDiff,
+                lastDesigner,
+                lastSecurity,
+              ),
+              findingsLedger,
+              loopExitReason: 'hard-budget',
+              objectionOpen: false,
+              downgradedFindings,
+              adjudications,
+              noCodeTestRationale,
+            });
+          }
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
           return {
             taskId: task.id,
             outcome: 'ready-for-closeout',
             rolesInvoked: roles.list(),
             reviewerVerdict: lastReviewer,
-            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
             findingsLedger,
             loopExitReason: 'all-low',
             objectionOpen: false,
@@ -1771,7 +1906,7 @@ async function runGated(
           );
         }
         if (deps.adjudicateSplit !== undefined) {
-          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
           return block(task, roles, handoffNotes, {
             blockedReason: failClosedReason ??
               `adjudicator upheld ${split.dissentingRole}'s fail: ${ruling!.rationale}`,
@@ -1779,7 +1914,7 @@ async function runGated(
               ? { rejectionFeedback: lastRejectionFeedback }
               : {}),
             reviewerVerdict: lastReviewer,
-            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+            gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
             findingsLedger,
             loopExitReason: 'hard-budget',
             objectionOpen: false,
@@ -1795,7 +1930,7 @@ async function runGated(
     if (
       maxOpenSeverity !== undefined &&
       severityRank[maxOpenSeverity] > severityRank.low &&
-      hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner)
+      hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity)
     ) {
       const strictSeverityDrop =
         previousMaxOpenSeverity !== undefined &&
@@ -1813,13 +1948,40 @@ async function runGated(
           explicitNonReversibleFindingIds,
         ) === undefined
       ) {
-        emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+        const conditionalGateFailure = conditionalGateBlockReason(
+          task,
+          lastDesigner,
+          lastSecurity,
+        );
+        if (conditionalGateFailure !== undefined) {
+          emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
+          return block(task, roles, handoffNotes, {
+            blockedReason: conditionalGateFailure,
+            ...(lastRejectionFeedback !== undefined
+              ? { rejectionFeedback: lastRejectionFeedback }
+              : {}),
+            reviewerVerdict: lastReviewer,
+            gateVerdicts: buildWorkflowGateVerdicts(
+              lastReviewer,
+              lastTechLeadDiff,
+              lastDesigner,
+              lastSecurity,
+            ),
+            findingsLedger,
+            loopExitReason: 'stagnation',
+            objectionOpen: false,
+            downgradedFindings,
+            adjudications,
+            noCodeTestRationale,
+          });
+        }
+        emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
         return {
           taskId: task.id,
           outcome: 'ready-for-closeout',
           rolesInvoked: roles.list(),
           reviewerVerdict: lastReviewer,
-          gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+          gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
           findingsLedger,
           loopExitReason: 'stagnation',
           objectionOpen: false,
@@ -1850,10 +2012,36 @@ async function runGated(
   // structured verdicts/feedback, but do not route to PM wrap-up or a human
   // blocked state.
   if (
-    hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner) &&
+    hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity) &&
     maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
-    emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+    emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
+    const conditionalGateFailure = conditionalGateBlockReason(
+      task,
+      lastDesigner,
+      lastSecurity,
+    );
+    if (conditionalGateFailure !== undefined) {
+      return block(task, roles, handoffNotes, {
+        blockedReason: conditionalGateFailure,
+        ...(lastRejectionFeedback !== undefined
+          ? { rejectionFeedback: lastRejectionFeedback }
+          : {}),
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(
+          lastReviewer,
+          lastTechLeadDiff,
+          lastDesigner,
+          lastSecurity,
+        ),
+        findingsLedger,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        downgradedFindings,
+        adjudications,
+        noCodeTestRationale,
+      });
+    }
     const holdFinding = firstNonReversibleHighSeverityFinding(
       findingsLedger,
       explicitNonReversibleFindingIds,
@@ -1862,7 +2050,7 @@ async function runGated(
       return block(task, roles, handoffNotes, {
         blockedReason: terminalHoldReason(holdFinding),
         reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
         findingsLedger,
         loopExitReason: 'hard-budget',
         objectionOpen: false,
@@ -1876,7 +2064,7 @@ async function runGated(
       outcome: 'ready-for-closeout',
       rolesInvoked: roles.list(),
       reviewerVerdict: lastReviewer,
-      gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+      gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
       findingsLedger,
       loopExitReason: 'hard-budget',
       objectionOpen: false,
@@ -1899,6 +2087,34 @@ async function runGated(
   // The PM's authority stops where the charter says it stops: a non-reversible
   // or at/above-threshold finding is not the PM's to clear, and acceptance
   // requires a rationale. Both refusals leave the block untouched.
+  const conditionalGateFailure = conditionalGateBlockReason(
+    task,
+    lastDesigner,
+    lastSecurity,
+  );
+  if (conditionalGateFailure !== undefined) {
+    emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
+    return block(task, roles, handoffNotes, {
+      blockedReason: conditionalGateFailure,
+      ...(lastRejectionFeedback !== undefined
+        ? { rejectionFeedback: lastRejectionFeedback }
+        : {}),
+      reviewerVerdict: lastReviewer,
+      gateVerdicts: buildWorkflowGateVerdicts(
+        lastReviewer,
+        lastTechLeadDiff,
+        lastDesigner,
+        lastSecurity,
+      ),
+      findingsLedger,
+      loopExitReason: 'hard-budget',
+      objectionOpen: false,
+      downgradedFindings,
+      adjudications,
+      noCodeTestRationale,
+    });
+  }
+
   const acceptanceBlocker = pmAcceptanceBlocker(
     findingsLedger,
     explicitNonReversibleFindingIds,
@@ -1921,6 +2137,7 @@ async function runGated(
       lastReviewer,
       lastTechLeadDiff,
       lastDesigner,
+      lastSecurity,
     ) ?? { outcome: 'fail', findings: [] };
     try {
       acceptance = await deps.acceptWithRationale({
@@ -1967,13 +2184,13 @@ async function runGated(
         summary: `accepted over dissent: ${rationale}`,
       });
       emitPmAcceptance(input, task, record, rejectionFeedback);
-      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+      emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
       return {
         taskId: task.id,
         outcome: 'ready-for-closeout',
         rolesInvoked: roles.list(),
         reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
         findingsLedger,
         loopExitReason: 'hard-budget',
         objectionOpen: false,
@@ -1997,7 +2214,7 @@ async function runGated(
       ? { rejectionFeedback: lastRejectionFeedback }
       : {}),
     reviewerVerdict: lastReviewer,
-    gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+    gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity),
     findingsLedger,
     loopExitReason: 'hard-budget',
     downgradedFindings,
@@ -2270,7 +2487,7 @@ function detectSplit(
 }
 
 function isFindingSourceGate(role: RoleName): role is FindingSourceGate {
-  return role === 'reviewer' || role === 'tech-lead' || role === 'designer';
+  return role === 'reviewer' || role === 'tech-lead' || role === 'designer' || role === 'security';
 }
 
 function verdictForGate(
@@ -2278,10 +2495,12 @@ function verdictForGate(
   reviewer: GateVerdict | undefined,
   techLead: GateVerdict | undefined,
   designer: GateVerdict | undefined,
+  security: GateVerdict | undefined,
 ): GateVerdict | undefined {
   if (role === 'reviewer') return reviewer;
   if (role === 'tech-lead') return techLead;
-  return designer;
+  if (role === 'designer') return designer;
+  return security;
 }
 
 /** High/critical or explicitly irreversible objections are human-owned. */
@@ -2644,6 +2863,16 @@ function isGatePass(verdict: GateVerdict | undefined): boolean {
     verdict.outcome === 'pass-with-warnings';
 }
 
+function conditionalGateBlockReason(
+  task: SizedTask,
+  designer: GateVerdict | undefined,
+  security: GateVerdict | undefined,
+): string | undefined {
+  if (task.designerNeeded && !isGatePass(designer)) return 'designer review failed';
+  if (task.securityNeeded && !isGatePass(security)) return 'security review failed';
+  return undefined;
+}
+
 const severityRank: Record<ObjectionSeverity, number> = {
   low: 0,
   medium: 1,
@@ -2721,13 +2950,19 @@ const sourceGateRank: Record<FindingSourceGate, number> = {
   reviewer: 0,
   'tech-lead': 1,
   designer: 2,
+  security: 3,
 };
 
 function hasOnlySeverityDerivedFailures(
   reviewer: NormalizedReviewerVerdict | undefined,
   techLeadDiff: GateVerdict | undefined,
   designer: GateVerdict | undefined,
+  security: GateVerdict | undefined,
 ): boolean {
+  // The conditional security gate is not a severity-loop disagreement: while
+  // it remains red, neither stagnation nor the cap's severity escape hatch may
+  // authorize closeout. The explicit round-cap guard reports the terminal block.
+  if (security !== undefined && !isGatePass(security)) return false;
   const failureHasFindings: boolean[] = [];
   if (reviewer !== undefined && !isReviewerPass(reviewer)) {
     failureHasFindings.push(reviewer.findings.length > 0);
@@ -2746,6 +2981,7 @@ function emitTerminalObjections(
   reviewer: NormalizedReviewerVerdict | undefined,
   techLeadDiff: GateVerdict | undefined,
   designer: GateVerdict | undefined,
+  security: GateVerdict | undefined,
 ): void {
   for (const finding of reviewer?.findings ?? []) {
     if (finding.severity !== 'low') {
@@ -2760,6 +2996,11 @@ function emitTerminalObjections(
   for (const finding of designer?.findings ?? []) {
     if (finding.severity !== 'low') {
       emitObjection(input, toPublicFinding(finding), 'designer', 'design-review');
+    }
+  }
+  for (const finding of security?.findings ?? []) {
+    if (finding.severity !== 'low') {
+      emitObjection(input, toPublicFinding(finding), 'security', 'security-review');
     }
   }
 }
@@ -2785,11 +3026,13 @@ function buildWorkflowGateVerdicts(
   reviewer: NormalizedReviewerVerdict | undefined,
   techLeadDiff: GateVerdict | undefined,
   designer: GateVerdict | undefined,
+  security: GateVerdict | undefined,
 ): WorkflowGateVerdicts | undefined {
   const verdicts: WorkflowGateVerdicts = {};
   if (reviewer !== undefined) verdicts.reviewer = toPublicGateVerdict(reviewer);
   if (techLeadDiff !== undefined) verdicts.techLeadDiff = toPublicGateVerdict(techLeadDiff);
   if (designer !== undefined) verdicts.designer = toPublicGateVerdict(designer);
+  if (security !== undefined) verdicts.security = toPublicGateVerdict(security);
   return Object.keys(verdicts).length > 0 ? verdicts : undefined;
 }
 

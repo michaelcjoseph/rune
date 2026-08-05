@@ -50,9 +50,8 @@ export type TestStrategy =
  * reviewed planning artifact. */
 export type ValidationPolicy = 'required' | 'reviewed-no-validation';
 
-/** One sized task from the tech lead's breakdown. `designerNeeded` is the
- *  EXPLICIT front-end / designer-needed flag (spec req 7) so designer routing
- *  (req 24) is deterministic, not inferred at runtime. */
+/** One sized task from the tech lead's breakdown. Review-role flags are
+ *  explicit so conditional routing is deterministic, not inferred at runtime. */
 export interface SizedTask {
   /** Stable task id. */
   id: string;
@@ -65,6 +64,9 @@ export interface SizedTask {
   validationPolicy?: ValidationPolicy;
   /** Explicit front-end / designer-needed flag. */
   designerNeeded: boolean;
+  /** Explicit security-review flag. Optional only for historical in-memory
+   *  fixtures; every planning parser materializes it as a boolean. */
+  securityNeeded?: boolean;
   /** Roles the tech lead sized into this task. */
   roles: string[];
   /** Phase / milestone label this task belongs to (e.g. "Phase 1 - Core").
@@ -655,6 +657,7 @@ function parseSelfReviewedTask(raw: unknown, index: number): SizedTask {
     testStrategy,
     validationPolicy,
     designerNeeded: task['designerNeeded'] === true,
+    securityNeeded: task['securityNeeded'] === true,
     roles,
     ...(phase ? { phase } : {}),
   };

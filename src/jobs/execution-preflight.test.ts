@@ -36,6 +36,7 @@ function models(overrides: Partial<ExecutionPreflightRoleModels> = {}): Executio
     coder: codex(),
     reviewer: claude(),
     designer: claude(),
+    security: claude(),
     ...overrides,
   };
 }
@@ -170,7 +171,7 @@ describe('preflightExecution', () => {
 
   it.each([
     ['codex', ['qa', 'coder']],
-    ['claude', ['pm', 'tech-lead', 'reviewer', 'designer']],
+    ['claude', ['pm', 'tech-lead', 'reviewer', 'designer', 'security']],
   ] as const)('fails closed on a missing or unexecutable %s binary', async (format, roles) => {
     const seams = io({
       resolveBinary: vi.fn(async (candidate) => candidate === format
@@ -268,7 +269,7 @@ describe('preflightExecution', () => {
     expect(seams.probeModel).toHaveBeenCalledTimes(2);
     expect(seams.buildArtifactMcp).toHaveBeenCalledTimes(1);
     expect(result.status === 'success' ? result.bindings : []).toEqual(expect.arrayContaining([
-      expect.objectContaining({ model: 'opus', roles: ['pm', 'tech-lead', 'reviewer', 'designer'] }),
+      expect.objectContaining({ model: 'opus', roles: ['pm', 'tech-lead', 'reviewer', 'designer', 'security'] }),
       expect.objectContaining({ model: 'gpt-coder', roles: ['qa', 'coder'] }),
     ]));
   });
