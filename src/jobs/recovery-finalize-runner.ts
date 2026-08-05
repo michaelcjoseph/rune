@@ -53,8 +53,10 @@ import { runGate, type GateRuntimeOpts } from './work-run-gate-runtime.js';
 import {
   canonicalRepoId,
   hasConcurrentBaseBranchRun,
+  releaseBaseBranchRunLease,
   withBaseBranchLock,
 } from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import {
@@ -66,7 +68,7 @@ import {
   readLastWorkRunPhase,
   type WorkRunSummary,
 } from './work-run-store.js';
-import { upsertRun, readAllRuns, writeAllRuns } from './supervision-store.js';
+import { upsertRun, readAllRuns, writeAllRuns, writeRunLeaseState } from './supervision-store.js';
 import {
   recoverAndFinalizeStaleRuns,
   type RecoverAndFinalizeDeps,
@@ -246,9 +248,14 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   // mode and stranding the Done commit on an unmerged branch. Once the merge has
   // landed (`merged-not-pushed`/`pushed-not-deleted`), the recorded phase is
   // authoritative and recovery completes only the remaining push/delete tail.
+  const resumeWaitingBaseBranch = run.waitingOn?.resource.type === 'base-branch';
   const resumeAfterProjectDone = lastPhase === 'project-marked-done';
   const resumeAfterMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
-  const resumeGatedMerge = resumeAfterProjectDone || resumeAfterMerge;
+  // A persisted base-branch waiter proves which operation was interrupted, but
+  // never proves ownership. Re-enter gated merge so its critical section makes
+  // a fresh process-local FIFO acquisition. An ordinary pre-merge crash with no
+  // waiting metadata retains the long-standing hold-mode recovery behavior.
+  const resumeGatedMerge = resumeWaitingBaseBranch || resumeAfterProjectDone || resumeAfterMerge;
 
   const classified = classifyOutcome({ exit, product: productFacts });
   // On a gated-merge RESUME the recorded phase is authoritative: once the
@@ -374,7 +381,10 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   const effects: FinalizerEffects = resumeGatedMerge
     ? {
         ...baseEffects,
-        baseBranchCriticalSection: (fn) => withBaseBranchLock(repoId, product.baseBranch, fn),
+        baseBranchCriticalSection: (fn) => withRunLeaseContext(
+          { run, operationId: 'recovery-finalize' },
+          () => withBaseBranchLock(repoId, product.baseBranch, fn),
+        ),
         recordGateValidationReceipt: (receipt) => {
           writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt);
           gateValidationReceipt = receipt;
@@ -492,6 +502,15 @@ export function buildRecoveryFinalizeDeps(io: RecoveryFinalizeIO = defaultIO()):
   return {
     readRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
     writeRuns: (runs) => writeAllRuns(runs, config.SUPERVISED_RUNS_FILE),
+    writeRunLeaseState: (run) => writeRunLeaseState(run, config.SUPERVISED_RUNS_FILE),
+    releaseRunLease: releaseBaseBranchRunLease,
+    reportBlockedEnvironment: ({ runId, resource, remediation }) => {
+      log.warn('recovery: waiting resource unavailable', {
+        id: runId,
+        resourceType: resource.type,
+        remediation,
+      });
+    },
     // Per-run boot ceiling so a pathologically slow run can't block startup.
     finalizeStaleRun: (run) => withTimeout(finalizeStaleRun(run, io), RECOVERY_PER_RUN_TIMEOUT_MS, run.id),
   };

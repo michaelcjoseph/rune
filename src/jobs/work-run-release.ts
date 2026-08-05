@@ -73,6 +73,10 @@ import {
   withBaseBranchLock,
 } from './work-run-merge-lock.js';
 import {
+  withRunLeaseContext,
+  type RunLeaseExecutionContext,
+} from './lease-lifecycle.js';
+import {
   writeSummary,
   appendIndexRow,
   recordWorkRunPhase,
@@ -157,7 +161,11 @@ export interface ReleaseRuntimeDeps {
   /** Cold-finalize the run through the Project 15 finalizer in `gated-merge`
    *  mode (NOT the fresh-run hold default), keeping the parked hold until the
    *  finalizer terminal write. Returns the classified terminal event. */
-  coldFinalizeGatedMerge: (run: SupervisedRun, worktreePath: string) => Promise<MutationEvent>;
+  coldFinalizeGatedMerge: (
+    run: SupervisedRun,
+    worktreePath: string,
+    leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
+  ) => Promise<MutationEvent>;
   /** Explicit discard of a confirmed-dirty worktree: destroy it, then clear the
    *  parked hold. */
   discardDirtyWorktree: (run: SupervisedRun, worktreePath: string) => Promise<void>;
@@ -179,6 +187,7 @@ export interface ReleaseRuntimeDeps {
 export async function* runWorkRunRelease(
   payload: WorkRunReleasePayload,
   deps: ReleaseRuntimeDeps,
+  leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
 ): AsyncIterable<MutationEvent> {
   const { runId } = payload;
   const run = deps.readParkedRun(runId);
@@ -231,7 +240,7 @@ export async function* runWorkRunRelease(
   // Clean → COLD-finalize through the Project 15 finalizer (gated-merge). The
   // gate decides merge vs branch-complete hold. Keep the parked hold until the
   // finalizer terminal write resolves, THEN clear it.
-  const terminal = await deps.coldFinalizeGatedMerge(run, worktreePath);
+  const terminal = await deps.coldFinalizeGatedMerge(run, worktreePath, leaseCancellation);
   deps.clearParkedHold(run, terminal.kind === 'failed' ? 'failed' : 'completed');
   yield terminal;
 }
@@ -364,7 +373,11 @@ async function discardDirtyWorktreeProd(run: SupervisedRun, worktreePath: string
  * supervision write via `clearParkedHold` (which runs AFTER this resolves), so
  * the parked hold persists for the whole finalization.
  */
-async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: string): Promise<MutationEvent> {
+async function coldFinalizeGatedMergeProd(
+  run: SupervisedRun,
+  worktreePath: string,
+  leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
+): Promise<MutationEvent> {
   for (const [label, slug] of [['id', run.id], ['product', run.product], ['project', run.project]] as const) {
     if (!VALID_SLUG.test(slug)) {
       throw new Error(`release: invalid ${label} slug '${slug}' on parked run`);
@@ -497,7 +510,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     recordGateValidationReceipt: (receipt) =>
       writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt),
     gate: () =>
-      withBaseBranchLock(repoId, baseBranch, async () => {
+      withRunLeaseContext({ run, operationId: 'released-finalize', ...leaseCancellation }, () => withBaseBranchLock(repoId, baseBranch, async () => {
         const verdict = await runGate({
           product: run.product,
           repoPath,
@@ -516,7 +529,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
         });
         gateValidationReceipt = verdict.validationReceipt;
         return verdict;
-      }),
+      })),
     alert: (reason: GateFailReason) => {
       gateHeldReason = reason;
       log.warn('release: held at branch-complete (gate failed)', { id: run.id, branch, reason });
@@ -678,8 +691,11 @@ export const workRunReleaseApplier: MutationApplier<WorkRunReleasePayload> = {
   },
   async *apply(
     descriptor: MutationDescriptor<WorkRunReleasePayload>,
-    _ctx: ApplyContext,
+    ctx: ApplyContext,
   ): AsyncIterable<MutationEvent> {
-    yield* runWorkRunRelease(descriptor.payload, getReleaseRuntimeDeps());
+    yield* runWorkRunRelease(descriptor.payload, getReleaseRuntimeDeps(), {
+      cancelled: ctx.cancel,
+      onCancel: ctx.onCancel,
+    });
   },
 };

@@ -1,6 +1,7 @@
 import type { BacklogItem, FileWarning } from './backlog-parser.js';
 import type { ProductClass, ProductContainerCapabilities, Registry, RegistryProduct } from './registry.js';
 import type { SupervisedRun } from './supervision.js';
+import { waitingResourceLabel } from './lease-presentation.js';
 import {
   computeFixAction,
   computePlanAction,
@@ -63,6 +64,7 @@ export interface ActiveRunDetail {
   worktreePath: string;
   agents: AgentOnRun[];
   transcriptUrl: string;
+  waitingOn?: string;
   branch?: string;
   routePath?: string;
   writingStage?: string;
@@ -375,6 +377,7 @@ function activeRunDetail(
   const target = targetFromSupervisedRun(run);
   const records = readTaskRunRecords(deps, run.id);
   const agents = agentsFromRecords(records);
+  const waitingOn = waitingResourceLabel(run.waitingOn);
 
   return {
     runId: run.id,
@@ -385,6 +388,7 @@ function activeRunDetail(
     worktreePath: resolveWorktreePath(deps, run, target),
     agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
     transcriptUrl: `/api/work-runs/${run.id}/transcript`,
+    ...(waitingOn !== undefined ? { waitingOn } : {}),
     ...writingRunMetadata(run),
   };
 }

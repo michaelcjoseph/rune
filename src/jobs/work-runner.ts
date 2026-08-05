@@ -28,6 +28,7 @@ import {
   hasConcurrentBaseBranchRun,
   withBaseBranchLock,
 } from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import type { GateFailReason, GateValidationReceipt } from './work-run-gate.js';
 import type { ValidationAdapter } from '../intent/full-suite-attestation.js';
 import type { ValidationCommandProfile } from '../intent/validation-profiles.js';
@@ -903,7 +904,20 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // products sharing one `main` serialize (req 14); the gate itself tests
           // `main` in a throwaway integration worktree, never the real checkout.
           gate: () =>
-            withBaseBranchLock(repoId, baseBranch, async () => {
+            withRunLeaseContext({
+              run: {
+                id: descriptor.id,
+                kind: descriptor.kind,
+                product,
+                project: projectSlug,
+                status: 'running',
+                startedAt: descriptor.createdAt,
+                lastHeartbeatAt: new Date().toISOString(),
+              },
+              operationId: 'integration-finalize',
+              cancelled: ctx.cancel,
+              onCancel: ctx.onCancel,
+            }, () => withBaseBranchLock(repoId, baseBranch, async () => {
               const verdict = await runGate({
                 product,
                 repoPath,
@@ -924,7 +938,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               });
               gateValidationReceipt = verdict.validationReceipt;
               return verdict;
-            }),
+            })),
           // Gate refused → the run holds at branch-complete off `main`. Never a
           // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
           alert: (reason: GateFailReason) => {

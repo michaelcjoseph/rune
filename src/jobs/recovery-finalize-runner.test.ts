@@ -418,6 +418,23 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(gitCalls.some(a => a.includes('branch') && a.includes('-d'))).toBe(false);
   });
 
+  it('re-enters a persisted base-branch waiter through gated recovery', async () => {
+    const runGate = vi.fn(async () => ({ ok: false as const, reason: 'tests-red' as const }));
+    const { io } = makeIO({
+      readLastPhase: () => 'transcript-flushed',
+      runGate,
+    });
+    await __finalizeStaleRunForTest(makeRun({
+      waitingOn: {
+        resource: { type: 'base-branch', key: '/tmp/repo:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-08-05T12:00:00.000Z',
+      },
+    }), io);
+
+    expect(runGate).toHaveBeenCalledOnce();
+  });
+
   it('a branch with commits but unchecked tasks → partial (still a terminal completed status)', async () => {
     const run = makeRun();
     const { io, captured } = makeIO({

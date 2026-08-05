@@ -13,12 +13,14 @@
  * tests fail as clean missing-symbol assertions rather than a bad import.
  */
 
-import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { baseBranchLockKey } from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
+import type { SupervisedRun } from '../intent/supervision.js';
 
 type BaseBranchRunHandle = {
   descriptor: { id: string; kind: string; status: string; payload: unknown };
@@ -349,6 +351,68 @@ describe('baseBranchLockKey — per-repository / per-base-branch', () => {
 });
 
 describe('withBaseBranchLock — repository-level serialization', () => {
+  it('persists a run-context wait and clears it when the FIFO grant arrives', async () => {
+    const repoId = await canonicalRepoId(runeRepo);
+    const holderHolds = deferred();
+    const writes: SupervisedRun[] = [];
+    const run: SupervisedRun = {
+      id: 'context-grant', product: 'rune', project: '24-execution-profiles', status: 'running',
+      startedAt: '2026-08-05T12:00:00.000Z', lastHeartbeatAt: '2026-08-05T12:00:00.000Z',
+    };
+    const holder = withBaseBranchLock(repoId, 'context-grant', () => holderHolds.promise);
+    const waiter = withRunLeaseContext({
+      run,
+      operationId: 'recovery-finalize',
+      writeRun: entry => writes.push(structuredClone(entry)),
+    }, () => withBaseBranchLock(repoId, 'context-grant', () => 'granted'));
+
+    await flush();
+    expect(writes.at(-1)?.waitingOn).toMatchObject({
+      resource: { type: 'base-branch', key: expect.stringMatching(/^<path:[0-9a-f]{12}>$/) },
+      operationId: 'recovery-finalize',
+    });
+    expect(JSON.stringify(writes)).not.toContain(repoId);
+    holderHolds.resolve();
+    await expect(waiter).resolves.toBe('granted');
+    await holder;
+    expect(writes.at(-1)).not.toHaveProperty('waitingOn');
+  });
+
+  it('clears a cancelled run-context waiter without releasing the active holder', async () => {
+    const repoId = await canonicalRepoId(runeRepo);
+    const holderHolds = deferred();
+    const writes: SupervisedRun[] = [];
+    let cancel!: () => void;
+    const run: SupervisedRun = {
+      id: 'context-cancel', product: 'rune', project: '24-execution-profiles', status: 'running',
+      startedAt: '2026-08-05T12:00:00.000Z', lastHeartbeatAt: '2026-08-05T12:00:00.000Z',
+    };
+    const holder = withBaseBranchLock(repoId, 'context-cancel', () => holderHolds.promise, {
+      holder: { runId: 'holder', operationId: 'merge' },
+    });
+    const waiter = withRunLeaseContext({
+      run,
+      operationId: 'recovery-finalize',
+      writeRun: entry => writes.push(structuredClone(entry)),
+      onCancel: listener => {
+        cancel = listener;
+        return vi.fn();
+      },
+    }, () => withBaseBranchLock(repoId, 'context-cancel', () => 'must not run'));
+
+    await flush();
+    expect(writes.at(-1)).toHaveProperty('waitingOn');
+    cancel();
+    await expect(waiter).rejects.toThrow(/abort|cancel/i);
+    expect(writes.at(-1)).not.toHaveProperty('waitingOn');
+    expect(baseBranchLeaseSnapshot(repoId, 'context-cancel')).toMatchObject({
+      holders: [{ runId: 'holder', operationId: 'merge' }],
+      waiters: [],
+    });
+    holderHolds.resolve();
+    await holder;
+  });
+
   it('grants contending identified waiters in FIFO order', async () => {
     const repoId = await canonicalRepoId(runeRepo);
     const holderHolds = deferred();
@@ -418,7 +482,7 @@ describe('withBaseBranchLock — repository-level serialization', () => {
     expect(baseBranchLeaseSnapshot(repoId, 'lease-observability')).toEqual({
       resource: {
         type: 'base-branch',
-        key: baseBranchLockKey(repoId, 'lease-observability'),
+        key: expect.stringMatching(/^<path:[0-9a-f]{12}>$/),
         capacity: 1,
       },
       holders: [{ runId: 'run-holder', operationId: 'merge-holder' }],

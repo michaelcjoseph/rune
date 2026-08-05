@@ -20,6 +20,7 @@ import {
   readAllRuns,
   writeAllRuns,
   upsertRun,
+  writeRunLeaseState,
   recordRunActivity,
   removeRun,
 } from './supervision-store.js';
@@ -182,6 +183,65 @@ describe('writeAllRuns', () => {
       // Restore write permission so afterEach cleanup works.
       chmodSync(tmpDir, 0o755);
     }
+  });
+});
+
+describe('lease waiting metadata', () => {
+  const waitingOn: NonNullable<SupervisedRun['waitingOn']> = {
+    resource: { type: 'base-branch', key: 'repo-a:main' },
+    operationId: 'integration-finalize',
+    waitingSince: '2026-08-05T12:01:00.000Z',
+  };
+
+  it('sets and clears only waitingOn while preserving newer heartbeat fields', () => {
+    const latestHeartbeat = '2026-08-05T12:02:00.000Z';
+    writeAllRuns([makeRun('run-lease', {
+      lastHeartbeatAt: latestHeartbeat,
+      lastChildAliveAt: latestHeartbeat,
+    })], filePath);
+
+    const staleSnapshot = makeRun('run-lease', {
+      waitingOn,
+      lastHeartbeatAt: '2026-08-05T12:00:00.000Z',
+    });
+    writeRunLeaseState(staleSnapshot, filePath);
+    expect(readAllRuns(filePath)[0]).toMatchObject({
+      waitingOn,
+      lastHeartbeatAt: latestHeartbeat,
+      lastChildAliveAt: latestHeartbeat,
+    });
+
+    const cleared = { ...staleSnapshot };
+    delete cleared.waitingOn;
+    writeRunLeaseState(cleared, filePath);
+    expect(readAllRuns(filePath)[0]).toMatchObject({
+      lastHeartbeatAt: latestHeartbeat,
+      lastChildAliveAt: latestHeartbeat,
+    });
+    expect(readAllRuns(filePath)[0]).not.toHaveProperty('waitingOn');
+  });
+
+  it('does not fabricate a supervision row when lease state targets a missing id', () => {
+    writeAllRuns([], filePath);
+
+    writeRunLeaseState(makeRun('missing-clear'), filePath);
+    writeRunLeaseState(makeRun('missing-set', { waitingOn }), filePath);
+
+    expect(readAllRuns(filePath)).toEqual([]);
+  });
+
+  it('strips waitingOn from terminal rows and drops invalid resource types on read', () => {
+    writeFileSync(filePath, JSON.stringify([
+      makeRun('terminal-waiter', { status: 'completed', waitingOn }),
+      { ...makeRun('invalid-waiter'), waitingOn: {
+        ...waitingOn,
+        resource: { type: 'future-resource', key: 'opaque' },
+      } },
+    ]), 'utf8');
+
+    const [terminal, invalid] = readAllRuns(filePath);
+    expect(terminal).not.toHaveProperty('waitingOn');
+    expect(invalid).not.toHaveProperty('waitingOn');
   });
 });
 

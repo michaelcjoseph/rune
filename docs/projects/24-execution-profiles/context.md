@@ -40,9 +40,34 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-- /47 passed
-- `npm run build`: passed
-- `npm test`: 352 files passed; 6,249 tests passed; 8 todo
-- `git diff --check`: clean
+- isted waiter order during startup recovery.
+- Added safe “waiting on base branch” projections to Cockpit and run views without exposing resource keys.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 353 files passed; 6,255 tests passed; 8 todo
+- `git diff --check` — clean
+- No tests removed.
+- coder self-review (revised): Fixed post-grant cancellation races, held active leases until protected work settles, wired release cancellation, cleared stale wait metadata on crash/restart, and synced module docs. npm run build passed; npm test passed (353 files, 6,257 tests, 8 todo). No tests removed.
+- .
+- Idle lifecycle run snapshots are pruned.
+- Added integration coverage for persistence, FIFO recovery, cancellation, and merge-lock context wiring.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 353 files passed; 6,264 tests passed; 8 todo
+- `git diff --check` — clean
+- No tests removed.
+- coder self-review (revised): Fixed restart recovery so persisted base-branch waiters re-enter gated finalization through a fresh FIFO lease acquisition; added production-path coverage. npm run build and npm test passed (353 files, 6,265 tests, 8 todo); no tests removed.
+- or each issue.
+- Left the real resource-existence probe deferred to `blocked-environment-status-unions`, as directed by the ledger.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 353 files passed; 6,268 tests passed; 8 todo
+- `git diff --check` — clean
 - No tests removed
-- Current staged delta remains QA’s [work-run-merge-lock.test.ts](rune/.worktrees/rune/24-execution-profiles/src/jobs/work-run-merge-lock.test.ts) expansion.
+- No commit created

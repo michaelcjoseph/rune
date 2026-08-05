@@ -213,6 +213,7 @@ import {
   hasConcurrentBaseBranchRun,
   withBaseBranchLock,
 } from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
 import { resolveLiveWorkProject } from './work-project.js';
@@ -2835,7 +2836,20 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             recordGateValidationReceipt: (receipt) =>
               writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
             gate: () =>
-              withBaseBranchLock(repoId, baseBranch, async () => {
+              withRunLeaseContext({
+                run: {
+                  id: descriptor.id,
+                  kind: descriptor.kind,
+                  product,
+                  project: projectSlug,
+                  status: 'running',
+                  startedAt: descriptor.createdAt,
+                  lastHeartbeatAt: new Date().toISOString(),
+                },
+                operationId: 'integration-finalize',
+                cancelled: ctx.cancel,
+                onCancel: ctx.onCancel,
+              }, () => withBaseBranchLock(repoId, baseBranch, async () => {
                 const verdict = await deps.runGate({
                   product,
                   repoPath,
@@ -2854,7 +2868,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 });
                 gateValidationReceipt = verdict.validationReceipt;
                 return verdict;
-              }),
+              })),
             cancelled: ctx.cancel,
             alert: (reason) => {
               gateHeldReason = reason;

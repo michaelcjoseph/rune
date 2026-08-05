@@ -4,9 +4,10 @@
  * can't be observed across a Rune restart). Mirrors `reconcileOrphans()`
  * in `mutations-log.ts` for the supervision store.
  *
- * Idempotent: terminal entries (`completed` / `failed`) and durable states
- * (`blocked-on-human`, `unknown`) are unchanged. Skips the disk write when
- * no entry transitioned to avoid needless I/O on a clean boot.
+ * Idempotent: terminal entries (`completed` / `failed`) and durable statuses
+ * (`blocked-on-human`, `unknown`) are unchanged, while stale process-local
+ * lease diagnostics are removed from every status. Skips the disk write when
+ * neither a status nor waiting metadata changed.
  *
  * Called from `src/index.ts` at startup, paired with `reconcileOrphans`.
  *
@@ -44,21 +45,32 @@ export function recoverSupervisedRuns(filePath: string): RecoveryResult {
   if (runs.length === 0) return { transitioned: 0, total: 0 };
 
   let transitioned = 0;
+  let clearedWaiting = 0;
   const next = runs.map((run) => {
-    const recovered = recoverRun(run);
+    let recovered = recoverRun(run);
     if (recovered.status !== run.status) transitioned++;
+    // Lease ownership is process-local, so no persisted waiter can remain
+    // authoritative at process start. This also covers parked release runs,
+    // which may have queued while their durable status stayed blocked-on-human.
+    if (recovered.waitingOn !== undefined) {
+      recovered = { ...recovered };
+      delete recovered.waitingOn;
+      clearedWaiting++;
+    }
     return recovered;
   });
 
-  // Safe only because recoverRun is identity except for 'running' → 'unknown'.
-  // If it's ever extended to mutate other fields, this guard becomes too
-  // aggressive and needs to compare more than just status.
-  if (transitioned === 0) {
+  if (transitioned === 0 && clearedWaiting === 0) {
     return { transitioned: 0, total: runs.length };
   }
 
   writeAllRuns(next, filePath);
-  log.info('Recovered supervised runs', { transitioned, total: runs.length, path: filePath });
+  log.info('Recovered supervised runs', {
+    transitioned,
+    clearedWaiting,
+    total: runs.length,
+    path: filePath,
+  });
 
   return { transitioned, total: runs.length };
 }
@@ -76,6 +88,16 @@ export interface RecoverAndFinalizeDeps {
   readRuns: () => SupervisedRun[];
   /** Persist the updated runs (prod: `(runs) => writeAllRuns(runs, filePath)`). */
   writeRuns: (runs: SupervisedRun[]) => void;
+  /** Clear only durable lease diagnostics without replacing newer run fields. */
+  writeRunLeaseState: (run: SupervisedRun) => void;
+  /** Release any process-local lease state after this run's recovery attempt. */
+  releaseRunLease: (runId: string) => void;
+  /** Status-less Phase 1 action report; the blocked status union lands separately. */
+  reportBlockedEnvironment: (input: {
+    runId: string;
+    resource: NonNullable<SupervisedRun['waitingOn']>['resource'];
+    remediation: string;
+  }) => void;
   /**
    * Drive ONE stale `running` run through the finalizer in HOLD mode: compute
    * work product over its (still-present) worktree → classify → terminal writes,
@@ -83,8 +105,8 @@ export interface RecoverAndFinalizeDeps {
    * Called only for `running` entries; never for terminal/blocked/unknown ones.
    *
    * MAY reject (git failure, worktree gone). A rejection is isolated per run —
-   * the run is counted in `failedToFinalize` and left as-is, and the remaining
-   * stale runs are still finalized (a single bad run never aborts the pass).
+   * the run is counted in `failedToFinalize`; stale lease diagnostics are
+   * cleared and reported for remediation, and the remaining runs continue.
    */
   finalizeStaleRun: (run: SupervisedRun) => Promise<FinalizerSupervisionStatus>;
 }
@@ -92,8 +114,8 @@ export interface RecoverAndFinalizeDeps {
 export interface RecoverFinalizeResult {
   /** Stale `running` runs driven to a real terminal state via the finalizer. */
   finalized: number;
-  /** Stale `running` runs whose `finalizeStaleRun` rejected — left untouched,
-   *  logged, but did NOT abort the pass (per-run fault isolation). */
+  /** Stale `running` runs whose `finalizeStaleRun` rejected — logged, with any
+   * stale waiting metadata cleared, but without aborting the recovery pass. */
   failedToFinalize: number;
   /** Total persisted runs walked. */
   total: number;
@@ -108,7 +130,8 @@ export interface RecoverFinalizeResult {
  *
  * Stale runs are finalized SERIALLY (one at a time) — startup is not
  * perf-critical, and serial keeps the worktree lifecycle simple. A per-run
- * `finalizeStaleRun` rejection is isolated (counted, logged, run left as-is) so
+ * `finalizeStaleRun` rejection is isolated (counted and logged, with stale
+ * waiting state cleared) so
  * one bad run never strands the rest as `running` for the sweep to delete.
  *
  * WIRING (P0.4, index.ts): this is awaited via `runRecoveryFinalize()` FIRST,
@@ -127,22 +150,60 @@ export async function recoverAndFinalizeStaleRuns(
   let finalized = 0;
   let failedToFinalize = 0;
 
+  // Persisted waiters retain their pre-restart FIFO order. Ownership itself is
+  // never restored from disk: each finalizer below submits a fresh lease
+  // acquisition through the process-local scheduler.
+  const processingOrder = next.map((run, index) => ({ run, index })).sort((a, b) => {
+    const aWait = a.run.waitingOn?.waitingSince;
+    const bWait = b.run.waitingOn?.waitingSince;
+    if (aWait === undefined && bWait === undefined) return a.index - b.index;
+    if (aWait === undefined) return 1;
+    if (bWait === undefined) return -1;
+    const aTime = Date.parse(aWait);
+    const bTime = Date.parse(bWait);
+    if (Number.isNaN(aTime) && Number.isNaN(bTime)) return a.index - b.index;
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return aTime - bTime || a.index - b.index;
+  });
+
   // Serial — one worktree finalized at a time (startup is not perf-critical and
   // serial keeps the worktree lifecycle simple). Per-run fault isolation: a
   // single rejecting run is counted and left as-is, never aborting the rest.
-  for (let i = 0; i < next.length; i++) {
-    const run = next[i]!;
+  for (const { run, index } of processingOrder) {
     if (run.status !== 'running') continue;
     try {
       const status = await deps.finalizeStaleRun(run);
-      next[i] = { ...run, status };
+      const terminal = { ...run, status };
+      delete terminal.waitingOn;
+      next[index] = terminal;
       finalized++;
     } catch (err) {
       failedToFinalize++;
+      if (run.waitingOn) {
+        const cleared = { ...run };
+        delete cleared.waitingOn;
+        next[index] = cleared;
+        try {
+          deps.writeRunLeaseState(cleared);
+        } catch (writeErr) {
+          log.warn('recoverAndFinalizeStaleRuns: failed to clear stale lease metadata', {
+            id: run.id,
+            error: (writeErr as Error).message,
+          });
+        }
+        deps.reportBlockedEnvironment({
+          runId: run.id,
+          resource: { ...run.waitingOn.resource },
+          remediation: `Verify the ${run.waitingOn.resource.type.replaceAll('-', ' ')} resource exists, then retry the run.`,
+        });
+      }
       log.warn('recoverAndFinalizeStaleRuns: finalize failed; leaving run for the unknown-relabel fallback', {
         id: run.id,
         error: (err as Error).message,
       });
+    } finally {
+      deps.releaseRunLease(run.id);
     }
   }
 

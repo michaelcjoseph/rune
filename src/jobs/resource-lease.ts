@@ -104,7 +104,8 @@ function resourceId(type: LeaseType, key: string): string {
   return JSON.stringify([type, key]);
 }
 
-function safeResourceKey(key: string): string {
+/** Opaque presentation/storage identity for resource keys that contain host paths. */
+export function safeResourceKey(key: string): string {
   if (!key.startsWith('/')) return key;
   const digest = createHash('sha256').update(key).digest('hex').slice(0, 12);
   return `<path:${digest}>`;

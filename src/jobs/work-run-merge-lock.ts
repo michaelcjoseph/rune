@@ -30,15 +30,49 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
+import config from '../config.js';
+import type { SupervisedRun } from '../intent/supervision.js';
 import {
   createResourceLeaseScheduler,
+  safeResourceKey,
   type LeaseParty,
   type LeaseSnapshot,
 } from './resource-lease.js';
+import { createRunLeaseLifecycle, currentRunLeaseContext } from './lease-lifecycle.js';
+import { writeRunLeaseState } from './supervision-store.js';
 
 const execFile = promisify(execFileCb);
 const log = createLogger('work-run-merge-lock');
 const baseBranchLeases = createResourceLeaseScheduler();
+const baseBranchRunLeases = createRunLeaseLifecycle<SupervisedRun>({
+  scheduler: baseBranchLeases,
+  writeRun: (run) => {
+    try {
+      const contextualWriter = currentRunLeaseContext()?.writeRun;
+      if (contextualWriter) contextualWriter(run);
+      else writeRunLeaseState(run, config.SUPERVISED_RUNS_FILE);
+    } catch (err) {
+      // Supervision is a visibility surface, not authorization for the lease.
+      // Match every other supervision writer: retain the process-local lock
+      // and log a diagnostic instead of skipping the protected operation.
+      log.warn('base-branch lease supervision write failed', {
+        runId: run.id,
+        error: (err as Error).message,
+      });
+    }
+  },
+  // Live and recovery callers resolve the repository before reaching this
+  // logical base-branch resource. Later physical resource types supply their
+  // own probes through the same lifecycle factory.
+  resourceExists: () => true,
+  reportBlockedEnvironment: (blocked) => {
+    log.warn('base-branch resource unavailable during lease recovery', {
+      runId: blocked.runId,
+      resourceType: blocked.resource.type,
+      remediation: blocked.remediation,
+    });
+  },
+});
 let anonymousLeaseSequence = 0;
 
 type BaseBranchRunHandle = {
@@ -152,6 +186,10 @@ export function baseBranchLockKey(repoId: string, baseBranch: string): string {
   return `${repoId}:${baseBranch}`;
 }
 
+function baseBranchLeaseKey(repoId: string, baseBranch: string): string {
+  return safeResourceKey(baseBranchLockKey(repoId, baseBranch));
+}
+
 export interface BaseBranchLeaseOptions {
   holder: LeaseParty;
   signal?: AbortSignal;
@@ -163,7 +201,12 @@ export function baseBranchLeaseSnapshot(
   repoId: string,
   baseBranch: string,
 ): LeaseSnapshot | undefined {
-  return baseBranchLeases.snapshot('base-branch', baseBranchLockKey(repoId, baseBranch));
+  return baseBranchLeases.snapshot('base-branch', baseBranchLeaseKey(repoId, baseBranch));
+}
+
+/** Terminal/recovery cleanup for any run-owned base-branch acquisition. */
+export function releaseBaseBranchRunLease(runId: string): void {
+  baseBranchRunLeases.releaseRun(runId);
 }
 
 /**
@@ -187,16 +230,40 @@ export function withBaseBranchLock<T>(
     runId: 'base-branch',
     operationId: `anonymous-${++anonymousLeaseSequence}`,
   };
-  return baseBranchLeases.withLease(
-    {
-      type: 'base-branch',
-      key: baseBranchLockKey(repoId, baseBranch),
-      holder,
-      signal: options?.signal ?? new AbortController().signal,
-      ...(options?.waitTimeoutMs !== undefined
-        ? { waitTimeoutMs: options.waitTimeoutMs }
-        : {}),
-    },
-    fn,
-  );
+  // The canonical repository id is an absolute git-common-dir path. Use the
+  // same deterministic opaque identity for scheduling and persistence so a
+  // durable waiter never records a host path and recovered/fresh requests
+  // still contend on one key.
+  const key = baseBranchLeaseKey(repoId, baseBranch);
+  const runContext = currentRunLeaseContext();
+  if (runContext) {
+    const cancellation = new AbortController();
+    const signal = options?.signal
+      ? AbortSignal.any([options.signal, cancellation.signal])
+      : cancellation.signal;
+    const unsubscribe = runContext.onCancel?.(() => cancellation.abort());
+    if (runContext.cancelled?.()) cancellation.abort();
+    return baseBranchRunLeases.withLease(
+      runContext.run,
+      {
+        type: 'base-branch',
+        key,
+        operationId: runContext.operationId,
+        signal,
+        ...(options?.waitTimeoutMs !== undefined
+          ? { waitTimeoutMs: options.waitTimeoutMs }
+          : {}),
+      },
+      fn,
+    ).finally(() => unsubscribe?.());
+  }
+  return baseBranchLeases.withLease({
+    type: 'base-branch',
+    key,
+    holder,
+    signal: options?.signal ?? new AbortController().signal,
+    ...(options?.waitTimeoutMs !== undefined
+      ? { waitTimeoutMs: options.waitTimeoutMs }
+      : {}),
+  }, fn);
 }

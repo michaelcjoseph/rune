@@ -92,6 +92,8 @@ export interface WorkRunProjection {
   startedAt: string;
   /** Authenticated transcript route URL, or null when no transcript exists yet. */
   transcriptUrl: string | null;
+  /** Safe resource-type label for an active queued run; never includes its key. */
+  waitingOn?: string;
   /** Structured terminal cause and cleanup result; absent for active/legacy runs. */
   trigger?: import('./execution-failure.js').ExecutionTerminalTrigger;
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;

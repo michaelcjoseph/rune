@@ -33,6 +33,17 @@ export type SupervisedRunStatus =
   | 'failed'
   | 'unknown';
 
+export interface SupervisedRunWaitingOn {
+  resource: {
+    type: 'base-branch' | 'ios-simulator' | 'android-emulator' | 'port-range' |
+      'build-capacity' | 'cache-dir' | 'device';
+    /** Opaque diagnostic identity. Operator projections expose only the resource type. */
+    key: string;
+  };
+  operationId: string;
+  waitingSince: string;
+}
+
 /** One long-running run tracked by the supervision visibility surface. */
 export interface SupervisedRun {
   /** Stable run id. */
@@ -55,6 +66,8 @@ export interface SupervisedRun {
    * {@link lastChildAliveAt} as the truer liveness signal when present.
    */
   lastHeartbeatAt: string;
+  /** Durable queue diagnostic only; never proof that this process owns a lease. */
+  waitingOn?: SupervisedRunWaitingOn;
   /**
    * ISO-8601 timestamp of the most recent in-runner liveness tick —
    * advances on a 30s setInterval owned by the applier while the child
@@ -366,7 +379,9 @@ export function getVisibility(
  */
 export function markCrashed(run: SupervisedRun): SupervisedRun {
   if (run.status === 'completed' || run.status === 'failed') return run;
-  return { ...run, status: 'failed' };
+  const crashed = { ...run, status: 'failed' } as SupervisedRun;
+  delete crashed.waitingOn;
+  return crashed;
 }
 
 /**
@@ -375,7 +390,10 @@ export function markCrashed(run: SupervisedRun): SupervisedRun {
  * already in a terminal or blocked state is returned unchanged — those states are durable.
  */
 export function recoverRun(run: SupervisedRun): SupervisedRun {
-  return run.status === 'running' ? { ...run, status: 'unknown' } : run;
+  if (run.status !== 'running') return run;
+  const recovered = { ...run, status: 'unknown' } as SupervisedRun;
+  delete recovered.waitingOn;
+  return recovered;
 }
 
 /**

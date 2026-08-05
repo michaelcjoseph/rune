@@ -152,6 +152,32 @@ function normalizeParkedQuestion(value: unknown): SupervisedRun['parkedQuestion'
   };
 }
 
+function normalizeWaitingOn(value: unknown): SupervisedRun['waitingOn'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const waiting = value as Record<string, unknown>;
+  const resource = waiting['resource'];
+  if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return undefined;
+  const typedResource = resource as Record<string, unknown>;
+  const validTypes = new Set([
+    'base-branch', 'ios-simulator', 'android-emulator', 'port-range',
+    'build-capacity', 'cache-dir', 'device',
+  ]);
+  if (
+    typeof typedResource['type'] !== 'string' || !validTypes.has(typedResource['type']) ||
+    typeof typedResource['key'] !== 'string' ||
+    typeof waiting['operationId'] !== 'string' ||
+    typeof waiting['waitingSince'] !== 'string'
+  ) return undefined;
+  return {
+    resource: {
+      type: typedResource['type'] as NonNullable<SupervisedRun['waitingOn']>['resource']['type'],
+      key: typedResource['key'],
+    },
+    operationId: waiting['operationId'],
+    waitingSince: waiting['waitingSince'],
+  };
+}
+
 function normalizeSupervisedRun(value: unknown): SupervisedRun | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
@@ -187,6 +213,18 @@ function normalizeSupervisedRun(value: unknown): SupervisedRun | null {
     const parkedQuestion = normalizeParkedQuestion(v['parkedQuestion']);
     if (parkedQuestion) run.parkedQuestion = parkedQuestion;
     else delete run.parkedQuestion;
+  }
+  if (
+    v['waitingOn'] !== undefined &&
+    (run.status === 'running' || run.status === 'blocked-on-human')
+  ) {
+    const waitingOn = normalizeWaitingOn(v['waitingOn']);
+    if (waitingOn) run.waitingOn = waitingOn;
+    else delete run.waitingOn;
+  } else {
+    // Queues are non-terminal. A stale field on a terminal row is not
+    // allowed to survive a read and masquerade as live ownership.
+    delete run.waitingOn;
   }
   return run;
 }
@@ -300,6 +338,28 @@ export function upsertRun(run: SupervisedRun, filePath: string): void {
   const next = idx === -1
     ? [...existing, run]
     : existing.map((r, i) => (i === idx ? { ...r, ...run } : r));
+  writeAllRuns(next, filePath);
+}
+
+/**
+ * Persist lease diagnostics without letting a stale run snapshot overwrite
+ * newer heartbeat/supervision fields. Unlike the general field-merge upsert,
+ * absence of `waitingOn` here explicitly clears that one field.
+ */
+export function writeRunLeaseState(run: SupervisedRun, filePath: string): void {
+  const existing = readAllRuns(filePath);
+  const idx = existing.findIndex((candidate) => candidate.id === run.id);
+  // Lease diagnostics augment a supervision row owned by the runner. They
+  // must never create one: an uncontended/late clear against a missing id is
+  // not evidence that the synthesized caller snapshot is a live run.
+  if (idx === -1) return;
+  const updated = { ...existing[idx] } as SupervisedRun;
+  if (run.waitingOn === undefined) {
+    delete updated.waitingOn;
+  } else {
+    updated.waitingOn = run.waitingOn;
+  }
+  const next = existing.map((candidate, index) => index === idx ? updated : candidate);
   writeAllRuns(next, filePath);
 }
 
