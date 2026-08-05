@@ -27,11 +27,11 @@ import { scrubPathsInText } from '../ai/tool-labels.js';
 import { activeRuns, type MutationEvent } from '../transport/mutations.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { worktreePathFor, VALID_SLUG } from '../intent/sandbox.js';
-import { workBranchName } from './work-runner.js';
 import {
   defaultRunGit,
   destroyWorktree,
   getProductConfig,
+  resolveCheckedOutWorkBranch,
   type GitRunner,
   type ProductConfig,
 } from './sandbox-runtime.js';
@@ -114,6 +114,8 @@ export interface RecoveryFinalizeIO {
   worktreeFor: (product: string, project: string) => string;
   /** True if the worktree still exists on disk (recovery must run before the sweep). */
   worktreeExists: (path: string) => boolean;
+  /** Resolve the effective namespaced-or-legacy branch checked out in the worktree. */
+  resolveWorkBranch: (product: string, project: string, worktreePath: string) => Promise<string>;
   /** Read the worktree's tasks.md, or '' if absent/unreadable. */
   readTasks: (worktreePath: string, project: string) => string;
   /** Read the fail-closed receipt written immediately before merge. */
@@ -142,6 +144,8 @@ function defaultIO(): RecoveryFinalizeIO {
     getProduct: (product) => getProductConfig(product, config.PRODUCTS_CONFIG_FILE),
     worktreeFor: (product, project) => worktreePathFor(product, project, config.WORKTREE_ROOT),
     worktreeExists: (p) => existsSync(p),
+    resolveWorkBranch: (product, project, worktree) =>
+      resolveCheckedOutWorkBranch({ product, project, worktree, runGit: defaultRunGit }),
     readTasks: (worktreePath, project) => {
       try {
         return readFileSync(join(worktreePath, 'docs', 'projects', project, 'tasks.md'), 'utf8');
@@ -207,7 +211,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   if (!io.worktreeExists(worktree)) {
     throw new Error(`recovery: worktree absent (already swept?) for run ${run.id}`);
   }
-  const branch = workBranchName(run.project);
+  const branch = await io.resolveWorkBranch(run.product, run.project, worktree);
 
   // We lost the in-memory baseSha; the fork point (merge-base of the work branch
   // and the product's base branch) is the stable diff base for the work product.

@@ -17,6 +17,7 @@ import {
 const roots: string[] = [];
 const PROJECT = '22-recovery-safety';
 const BRANCH = `rune-work/${PROJECT}`;
+const NAMESPACED_BRANCH = `rune-work/rune/${PROJECT}`;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -88,6 +89,33 @@ describe('preflightOrchestratedRecovery', () => {
     const f = fixture();
     const result = await preflightOrchestratedRecovery(mutation(), deps(f.repo, f.worktree));
     expect(result.kind).toBe('recoverable');
+  });
+
+  it('accepts a namespaced cursor when the registered worktree is on that exact branch', async () => {
+    const f = fixture(NAMESPACED_BRANCH);
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => ({ ...cursor(f.worktree), branch: NAMESPACED_BRANCH }),
+      }),
+    );
+
+    expect(result.kind).toBe('recoverable');
+  });
+
+  it('rejects recovery when cursor and registered worktree use different supported branch shapes', async () => {
+    const f = fixture(NAMESPACED_BRANCH);
+    const result = await preflightOrchestratedRecovery(
+      mutation(),
+      deps(f.repo, f.worktree, {
+        readRunCursor: async () => cursor(f.worktree),
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'worktree is registered on a different branch',
+    });
   });
 
   it('verifies and retains a durable task base for an interrupted task', async () => {

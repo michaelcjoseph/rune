@@ -27,8 +27,11 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  assertNoWorkBranchCollision,
   isContainedIn,
+  legacyWorkBranchName,
   VALID_SLUG,
+  workBranchName,
   worktreePathFor,
   type SandboxSpec,
 } from '../intent/sandbox.js';
@@ -249,16 +252,20 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
     throw new Error(`readProductsConfig: ${path} did not parse to an object`);
   }
 
+  const productEntries = Object.entries(parsed as Record<string, unknown>)
+    .filter((entry): entry is [string, Record<string, unknown>] => (
+      entry[1] !== null && typeof entry[1] === 'object'
+    ));
+  assertNoWorkBranchCollision(productEntries.map(([slug]) => slug));
+
   const out: Record<string, ProductConfig> = {};
-  for (const [slug, entryRaw] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!entryRaw || typeof entryRaw !== 'object') continue;
+  for (const [slug, entry] of productEntries) {
     if (!VALID_SLUG.test(slug)) {
       throw new Error(
         `readProductsConfig: invalid product slug '${slug}' in ${path} — ` +
           'must be non-empty lowercase alphanumeric/hyphen with an alphanumeric first character',
       );
     }
-    const entry = entryRaw as Record<string, unknown>;
     let productClass: ProductClass | undefined;
     if (entry['class'] !== undefined) {
       if (entry['class'] !== 'internal' && entry['class'] !== 'external') {
@@ -752,14 +759,28 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   //  - no branch → track the product's baseBranch.
   let baseSha: string | undefined;
   let resumed = false;
+  let effectiveBranch = opts.branch;
   let args: string[];
   let baseReconciled: SandboxSpec['baseReconciled'];
   if (opts.branch) {
     // An explicit `startPoint` means the caller wants a fresh branch from a
     // specific commit — honor it and skip the resume probe.
-    const existingTip = opts.startPoint
+    let existingTip = opts.startPoint
       ? null
       : await resolveBranchTip(runGit, product.repoPath, opts.branch);
+    if (
+      !existingTip &&
+      !opts.startPoint &&
+      opts.branch.startsWith('rune-work/') &&
+      opts.branch === workBranchName(opts.product, opts.project)
+    ) {
+      const legacyBranch = legacyWorkBranchName(opts.project);
+      const legacyTip = await resolveBranchTip(runGit, product.repoPath, legacyBranch);
+      if (legacyTip) {
+        effectiveBranch = legacyBranch;
+        existingTip = legacyTip;
+      }
+    }
     if (existingTip) {
       resumed = true;
       baseSha = existingTip;
@@ -769,11 +790,11 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
       // manual fix). Git forbids the branch in two trees at once, so release it
       // from the main checkout before the add (2026-06-29 project-19 collision).
       await freeBranchFromMainCheckout(
-        runGit, product.repoPath, opts.branch, product.baseBranch,
+        runGit, product.repoPath, effectiveBranch!, product.baseBranch,
       );
       // No -b: check out the existing branch so the project's prior commits are
       // present in the worktree.
-      args = ['worktree', 'add', worktree, opts.branch];
+      args = ['worktree', 'add', worktree, effectiveBranch!];
     } else {
       baseSha = opts.startPoint?.trim() || undefined;
       if (!baseSha) {
@@ -828,7 +849,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   const postcondition = await (opts.verifyProvisioning ?? verifyWorktreeProvisioning)({
     repoPath: product.repoPath,
     worktree,
-    expectedBranch: opts.branch ?? product.baseBranch,
+    expectedBranch: effectiveBranch ?? product.baseBranch,
     runGit,
   });
   if (!postcondition.ok) {
@@ -857,7 +878,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
       const reconciled = await reconcileResumedBranchBase({
         runGit,
         worktree,
-        branch: opts.branch,
+        branch: effectiveBranch!,
         baseBranch: product.baseBranch,
         previousTip: baseSha,
       });
@@ -868,7 +889,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
         runGit,
         product.repoPath,
         worktree,
-        opts.branch,
+        effectiveBranch!,
         product.baseBranch,
       );
       throw err;
@@ -888,7 +909,59 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     baseSha,
     baseReconciled,
     resumed,
+    branch: effectiveBranch ?? product.baseBranch,
   };
+}
+
+/**
+ * Resolve the branch actually checked out by a work-run worktree and constrain
+ * it to the two supported shapes. Recovery and release must not blindly
+ * recompute the namespaced branch because compatibility provisioning may have
+ * resumed the legacy per-project ref instead.
+ */
+export async function resolveCheckedOutWorkBranch(opts: {
+  product: string;
+  project: string;
+  worktree: string;
+  runGit?: GitRunner;
+}): Promise<string> {
+  const runGit = opts.runGit ?? defaultRunGit;
+  const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: opts.worktree });
+  const branch = stdout.trim();
+  const supported = new Set([
+    workBranchName(opts.product, opts.project),
+    legacyWorkBranchName(opts.project),
+  ]);
+  if (!supported.has(branch)) {
+    throw new Error(
+      `worktree is checked out on unsupported work branch '${branch || '(detached)'}'`,
+    );
+  }
+  return branch;
+}
+
+/**
+ * Resolve the effective work branch from durable repository refs. Namespaced
+ * refs win when both shapes exist; the legacy ref remains a read-compatibility
+ * fallback. Unlike `resolveCheckedOutWorkBranch`, this does not require a live
+ * worktree and is therefore safe for cold release/recovery paths.
+ */
+export async function resolveExistingWorkBranch(opts: {
+  product: string;
+  project: string;
+  repoPath: string;
+  runGit?: GitRunner;
+}): Promise<string> {
+  const runGit = opts.runGit ?? defaultRunGit;
+  const namespaced = workBranchName(opts.product, opts.project);
+  if (await resolveBranchTip(runGit, opts.repoPath, namespaced)) return namespaced;
+
+  const legacy = legacyWorkBranchName(opts.project);
+  if (await resolveBranchTip(runGit, opts.repoPath, legacy)) return legacy;
+
+  throw new Error(
+    `no work branch exists for product '${opts.product}' project '${opts.project}'`,
+  );
 }
 
 interface ProvisioningDirectoryOwnership {

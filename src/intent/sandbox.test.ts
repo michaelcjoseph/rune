@@ -14,10 +14,13 @@ import { describe, it, expect } from 'vitest';
  */
 
 import {
+  VALID_SLUG,
   worktreePathFor,
   isWriteAllowed,
   isEgressAllowed,
   canReachCredential,
+  workBranchName,
+  assertNoWorkBranchCollision,
   writingBranchName,
   writingSlugFromBranch,
   type SandboxSpec,
@@ -68,6 +71,42 @@ describe('sandbox — worktree isolation (test-plan §11)', () => {
   it('rejects an empty product or project slug', () => {
     expect(() => worktreePathFor('', 'x', WORKTREE_ROOT)).toThrow(/invalid|slug/i);
     expect(() => worktreePathFor('aura', '', WORKTREE_ROOT)).toThrow(/invalid|slug/i);
+  });
+});
+
+describe('sandbox — namespaced work branches (execution-profiles §1)', () => {
+  it('names a new work branch by its product and project so shared repositories cannot reuse a project branch', () => {
+    const project = '24-execution-profiles';
+
+    expect(workBranchName('rune-mcp', project)).toBe('rune-work/rune-mcp/24-execution-profiles');
+    expect(workBranchName('rune', project)).toBe('rune-work/rune/24-execution-profiles');
+    expect(workBranchName('rune-mcp', project)).not.toBe(workBranchName('rune', project));
+  });
+
+  it('sanitizes a raw product name into a single branch-safe segment', () => {
+    const project = '24-execution-profiles';
+
+    expect(workBranchName('Rune MCP', project)).toBe('rune-work/rune-mcp/24-execution-profiles');
+
+    // A separator-bearing raw name must not deepen the ref path — the product
+    // is always exactly one segment between the prefix and the project.
+    const branch = workBranchName('rune/mcp', project);
+    const segments = branch.split('/');
+    expect(segments).toHaveLength(3);
+    expect(segments[0]).toBe('rune-work');
+    expect(segments[1]).toMatch(VALID_SLUG);
+    expect(segments[2]).toBe(project);
+  });
+
+  it('rejects distinct product names that collide after sanitization instead of silently sharing a namespace', () => {
+    // 'rune mcp' and 'rune-mcp' sanitize to the same segment; handing both
+    // rune-work/rune-mcp/<project> would recreate the shared-branch hazard the
+    // namespace exists to prevent. The error names the colliding segment so
+    // the collision is diagnosable from the message alone.
+    expect(() => assertNoWorkBranchCollision(['rune mcp', 'rune-mcp'])).toThrow(/rune-mcp/);
+
+    // Names that stay distinct after sanitization coexist.
+    expect(() => assertNoWorkBranchCollision(['rune', 'rune-mcp', 'aura'])).not.toThrow();
   });
 });
 

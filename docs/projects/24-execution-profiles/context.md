@@ -40,34 +40,26 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-- isted waiter order during startup recovery.
-- Added safe “waiting on base branch” projections to Cockpit and run views without exposing resource keys.
+- tech-lead repaired test intent: src/intent/sandbox.test.ts, src/jobs/sandbox-runtime.test.ts, src/jobs/work-run-gc.test.ts, src/jobs/work-runner.test.ts
+- cy branch identity flows through both runner paths and recovery.
+- GC remains safe for both branch shapes.
+- Updated downstream branch-contract tests.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 353 files passed; 6,255 tests passed; 8 todo
+- `npm test` — 353 files passed; 6,274 tests passed; 8 todo
 - `git diff --check` — clean
 - No tests removed.
-- coder self-review (revised): Fixed post-grant cancellation races, held active leases until protected work settles, wired release cancellation, cleared stale wait metadata on crash/restart, and synced module docs. npm run build passed; npm test passed (353 files, 6,257 tests, 8 todo). No tests removed.
-- .
-- Idle lifecycle run snapshots are pruned.
-- Added integration coverage for persistence, FIFO recovery, cancellation, and merge-lock context wiring.
+- coder self-review (revised): Fixed legacy branch identity across shutdown parking, restart finalization, and operator release. npm run build passed; npm test passed (353 files, 6,279 tests, 8 todo). No tests removed.
+-  probing is limited to work branches.
+- Added namespaced recovery match/mismatch coverage.
+- Legacy resume and GC remain safe.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 353 files passed; 6,264 tests passed; 8 todo
-- `git diff --check` — clean
-- No tests removed.
-- coder self-review (revised): Fixed restart recovery so persisted base-branch waiters re-enter gated finalization through a fresh FIFO lease acquisition; added production-path coverage. npm run build and npm test passed (353 files, 6,265 tests, 8 todo); no tests removed.
-- or each issue.
-- Left the real resource-existence probe deferred to `blocked-environment-status-unions`, as directed by the ledger.
-
-Validation:
-
-- `npm run build` — passed
-- `npm test` — 353 files passed; 6,268 tests passed; 8 todo
-- `git diff --check` — clean
+- `npm test` — 353 files passed; 6,287 tests passed; 8 todo
+- `git diff HEAD --check` — clean
 - No tests removed
 - No commit created

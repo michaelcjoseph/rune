@@ -319,7 +319,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // instead of re-forking off `main` and restarting from Phase 1 — the
     // re-fork bug in docs/projects/bugs.md. The per-project run cap of 1 keeps
     // a single run on the branch at a time.
-    const branch = workBranchName(projectSlug);
+    let branch = workBranchName(product, projectSlug);
 
     let sandbox: SandboxSpec | null = null;
     // Per-run durable transcript sink — created once the worktree exists, teed
@@ -350,6 +350,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           worktreeRoot: config.WORKTREE_ROOT,
           productsConfigPath: config.PRODUCTS_CONFIG_FILE,
         });
+        branch = sandbox.branch ?? branch;
       } catch (err) {
         // No worktree was created, so the outer finally's destroy is a
         // no-op (sandbox stays null). Surface the failure as a terminal

@@ -84,6 +84,7 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
     getProduct: () => PRODUCT,
     worktreeFor: (product, project) => `/tmp/worktrees/${product}/${project}`,
     worktreeExists: () => true,
+    resolveWorkBranch: async (product, project) => `rune-work/${product}/${project}`,
     readTasks: () => '## Phase A\n- [x] Task 1\n- [x] Task 2\n', // all checked
     writeSummaryFile: (dir, summary) => { captured.summaries.push({ dir, summary }); },
     appendIndex: (filePath, row) => { captured.indexRows.push({ filePath, row }); },
@@ -136,13 +137,32 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(captured.summaries).toHaveLength(1);
     expect(captured.summaries[0]!.summary.outcome).toBe('branch-complete');
     expect(captured.summaries[0]!.summary.baseSha).toBe('base000sha');
-    expect(captured.summaries[0]!.summary.branch).toBe('rune-work/15-work-run-finalizer');
+    expect(captured.summaries[0]!.summary.branch).toBe('rune-work/rune/15-work-run-finalizer');
     // Index row + terminal supervision upsert + worktree removal all happened.
     expect(captured.indexRows).toHaveLength(1);
     expect(captured.indexRows[0]!.row.outcome).toBe('branch-complete');
     expect(captured.upserts).toHaveLength(1);
     expect(captured.upserts[0]!.status).toBe('completed');
     expect(captured.removed).toHaveLength(1);
+  });
+
+  it('preserves a legacy checked-out branch identity through restart finalization', async () => {
+    const legacyBranch = 'rune-work/15-work-run-finalizer';
+    const gitCalls: string[][] = [];
+    const { io, captured } = makeIO({
+      resolveWorkBranch: async () => legacyBranch,
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'merge-base') return { stdout: 'base000sha\n', stderr: '' };
+        if (args[0] === 'rev-list') return { stdout: 'a1\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+    });
+
+    await __finalizeStaleRunForTest(makeRun(), io);
+
+    expect(gitCalls).toContainEqual(['merge-base', 'main', legacyBranch]);
+    expect(captured.summaries.at(-1)!.summary.branch).toBe(legacyBranch);
   });
 
   it('resumes a crashed gated-merge run from `merged-not-pushed`: completes push then delete, never re-merges (Phase 3.5)', async () => {

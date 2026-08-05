@@ -38,7 +38,7 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { VALID_SLUG, worktreePathFor, workBranchName } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import {
   createMutation,
@@ -52,6 +52,8 @@ import {
   defaultRunGit,
   destroyWorktree,
   getProductConfig,
+  resolveExistingWorkBranch,
+  type GitRunner,
 } from './sandbox-runtime.js';
 import {
   classifyOutcome,
@@ -388,7 +390,7 @@ async function coldFinalizeGatedMergeProd(
   const baseBranch = product.baseBranch;
   const repoId = await canonicalRepoId(repoPath);
   const validationCommands = product.validationCommands ?? [];
-  const branch = workBranchName(run.project);
+  const branch = await resolveColdFinalizeWorkBranch(run, repoPath, defaultRunGit);
 
   const mb = await defaultRunGit(['merge-base', baseBranch, branch], { cwd: repoPath });
   const baseSha = mb.stdout.trim();
@@ -586,6 +588,20 @@ async function coldFinalizeGatedMergeProd(
     }
   }
   return result.terminalEvent;
+}
+
+/** Resolve a cold-finalize branch from durable repository refs, not worktree HEAD. */
+export function resolveColdFinalizeWorkBranch(
+  run: Pick<SupervisedRun, 'product' | 'project'>,
+  repoPath: string,
+  runGit: GitRunner = defaultRunGit,
+): Promise<string> {
+  return resolveExistingWorkBranch({
+    product: run.product,
+    project: run.project,
+    repoPath,
+    runGit,
+  });
 }
 
 /** Another work run owns the same repository/base branch this release's merge

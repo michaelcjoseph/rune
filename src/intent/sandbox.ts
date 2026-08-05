@@ -55,6 +55,10 @@ export interface SandboxSpec {
    *  to tell the agent prior commits are already present so it continues from
    *  the first incomplete task instead of restarting from Phase 1. */
   resumed?: boolean;
+  /** The branch actually checked out in the worktree. This can differ from the
+   * requested namespaced branch when `createWorktree` read-compatibly resumes a
+   * legacy `rune-work/<project>` ref. */
+  branch?: string;
 }
 
 /**
@@ -71,16 +75,57 @@ export const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
  * resume target a run's worktree is checked out on. A per-project name lets
  * `createWorktree` check out an existing branch (carrying committed progress
  * forward) instead of re-forking off the base branch and restarting from Phase
- * 1. `projectSlug` is git-ref-safe (VALID_SLUG-validated by callers), and
- * branches are per-repo so two products sharing a slug never collide.
+ * 1. `projectSlug` is git-ref-safe and the normalized product namespace keeps
+ * products that share a repository from reusing one project's branch.
  *
  * Lives here (the light sandbox-policy module) rather than in the heavy
  * `work-runner.ts` so consumers like `work-run-release.ts` can reuse it without
  * pulling in the Claude-CLI spawn chain. `work-runner.ts` re-exports it for
  * back-compat with existing importers.
  */
-export function workBranchName(projectSlug: string): string {
+export function workBranchName(product: string, projectSlug: string): string {
+  if (!VALID_SLUG.test(projectSlug)) {
+    throw new Error(`workBranchName: invalid project slug '${projectSlug}'`);
+  }
+  return `rune-work/${sanitizeWorkBranchProduct(product)}/${projectSlug}`;
+}
+
+/** The pre-namespacing work branch shape, retained only for resume lookup. */
+export function legacyWorkBranchName(projectSlug: string): string {
+  if (!VALID_SLUG.test(projectSlug)) {
+    throw new Error(`legacyWorkBranchName: invalid project slug '${projectSlug}'`);
+  }
   return `rune-work/${projectSlug}`;
+}
+
+/** Normalize a product display name to one lowercase, git-ref-safe segment. */
+export function sanitizeWorkBranchProduct(product: string): string {
+  const segment = product
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!VALID_SLUG.test(segment)) {
+    throw new Error(
+      `workBranchName: product '${product}' does not contain a branch-safe alphanumeric name`,
+    );
+  }
+  return segment;
+}
+
+/** Reject ambiguous product namespaces before any work branch is selected. */
+export function assertNoWorkBranchCollision(products: readonly string[]): void {
+  const owners = new Map<string, string>();
+  for (const product of products) {
+    const segment = sanitizeWorkBranchProduct(product);
+    const owner = owners.get(segment);
+    if (owner !== undefined && owner !== product) {
+      throw new Error(
+        `work branch namespace collision: '${owner}' and '${product}' both normalize to '${segment}'`,
+      );
+    }
+    owners.set(segment, product);
+  }
 }
 
 /**

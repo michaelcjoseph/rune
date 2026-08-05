@@ -176,6 +176,29 @@ describe('gcWorkRuns', () => {
     expect(result.deletedIds).toContain('run-1');
   });
 
+  it('protects an active namespaced branch while still pruning a merged legacy branch', async () => {
+    const activeNamespaced = 'rune-work/aura/01-growth';
+    const legacy = 'rune-work/01-growth';
+    seedRunOnBranch('active-namespaced', 0, activeNamespaced);
+    seedRunOnBranch('legacy', 1, legacy);
+    const { stub, calls } = makeGitStub(activeNamespaced, { revListCount: '0\n' });
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { rune: '/fake/repo' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0,
+      maxBytes: 100_000,
+    });
+
+    expect(result.deletedIds).not.toContain('active-namespaced');
+    expect(result.deletedIds).toContain('legacy');
+    expect(calls.some(c => c.includes('branch') && c.includes('-D') && c.includes(activeNamespaced))).toBe(false);
+    expect(calls.some(c => c.includes('branch') && c.includes('-D') && c.includes(legacy))).toBe(true);
+  });
+
   it('project 13: a parked run (blocked-on-human id in nonTerminalIds) is never pruned — dir + branch protected, even over cap', async () => {
     // The gc-runner builds nonTerminalIds from supervised runs filtered by
     // `!TERMINAL_STATUSES.has(status)` — and TERMINAL_STATUSES = {completed,

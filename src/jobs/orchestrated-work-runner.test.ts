@@ -3549,7 +3549,7 @@ describe('orchestratedWorkApplier', () => {
         runId,
         project: 'demo',
         product: 'rune',
-        branch: 'rune-work/demo',
+        branch: 'rune-work/rune/demo',
         baseBranch: 'main',
       });
       expect(typeof effects.classify).toBe('function');
@@ -3673,7 +3673,7 @@ describe('orchestratedWorkApplier', () => {
           event: 'merge-success',
           projectSlug: 'demo',
           product: 'rune',
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           baseBranch: 'main',
         },
       });
@@ -3791,7 +3791,7 @@ describe('orchestratedWorkApplier', () => {
           runId,
           project: 'demo',
           product: 'rune',
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           baseBranch: 'main',
         });
         expect(effects.markProjectDone).toEqual(expect.any(Function));
@@ -4013,7 +4013,7 @@ describe('orchestratedWorkApplier', () => {
           product: 'rune',
           repoPath,
           baseBranch: 'trunk',
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           validationCommands: ['npm test -- --runInBand'],
           tasksRemaining: 0,
           concurrentRun: false,
@@ -4041,11 +4041,11 @@ describe('orchestratedWorkApplier', () => {
         expect(operations).toEqual(['merge', 'push', 'destroy-worktree', 'delete-branch']);
         expect(calls).toEqual(expect.arrayContaining([
           expect.objectContaining({
-            args: ['merge', '--no-ff', 'rune-work/demo', '-m', 'rune(rune): merge orchestrated branch rune-work/demo'],
+            args: ['merge', '--no-ff', 'rune-work/rune/demo', '-m', 'rune(rune): merge orchestrated branch rune-work/rune/demo'],
             cwd: repoPath,
           }),
           expect.objectContaining({ args: ['push', 'origin', 'trunk'], cwd: repoPath }),
-          expect.objectContaining({ args: ['branch', '-d', 'rune-work/demo'], cwd: repoPath }),
+          expect.objectContaining({ args: ['branch', '-d', 'rune-work/rune/demo'], cwd: repoPath }),
         ]));
         expect(destroyed).toBe(true);
       } finally {
@@ -4259,9 +4259,9 @@ describe('orchestratedWorkApplier', () => {
         const baseMutations = calls.filter(({ args }) => {
           const command = args[0];
           return (
-            (command === 'merge' && args.includes('rune-work/demo')) ||
+            (command === 'merge' && args.includes('rune-work/rune/demo')) ||
             (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
-            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/demo')
+            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/rune/demo')
           );
         });
         expect(baseMutations).toEqual([]);
@@ -4372,7 +4372,7 @@ describe('orchestratedWorkApplier', () => {
           });
           expect(summary['baseSha']).toBe(baseSha);
 
-          const expectedRange = `${baseSha}..rune-work/demo`;
+          const expectedRange = `${baseSha}..rune-work/rune/demo`;
           expect(calls).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ args: ['rev-list', expectedRange] }),
@@ -4394,7 +4394,7 @@ describe('orchestratedWorkApplier', () => {
           runId: 'mut-1',
           project: 'demo',
           product: 'rune',
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           taskRecords: [],
         },
       });
@@ -4420,7 +4420,7 @@ describe('orchestratedWorkApplier', () => {
           runId: 'mut-1',
           project: 'demo',
           product: 'rune',
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           taskRecords: [],
         },
       });
@@ -4558,7 +4558,7 @@ describe('orchestratedWorkApplier', () => {
           held: true,
           reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           operatorWorktreePath: wtDir,
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           baseBranch: 'main',
           preserveBranch: true,
           preserveWorktree: true,
@@ -4568,7 +4568,7 @@ describe('orchestratedWorkApplier', () => {
         const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, unknown>;
         expect(summary).toMatchObject({
           id: runId,
-          branch: 'rune-work/demo',
+          branch: 'rune-work/rune/demo',
           reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           baseSha: 'base-objection-123',
         });
@@ -4576,9 +4576,9 @@ describe('orchestratedWorkApplier', () => {
         const baseMutations = calls.filter(({ args }) => {
           const command = args[0];
           return (
-            (command === 'merge' && args.includes('rune-work/demo')) ||
+            (command === 'merge' && args.includes('rune-work/rune/demo')) ||
             (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
-            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/demo')
+            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/rune/demo')
           );
         });
         expect(baseMutations).toEqual([]);
@@ -5753,6 +5753,7 @@ describe('shutdown park composition (suppression + parker, codex 2026-07-08 BLOC
         worktreeExists: () => true,
         resolveBaseBranch: () => 'main',
         resolveWorktreePath: () => '/tmp/orch-park-compose-wt',
+        resolveWorkBranch: async () => 'rune-work/rune/demo',
       };
       const parked = await parkInFlightOrchestratedRuns(parkDeps);
 
