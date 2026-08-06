@@ -25,16 +25,41 @@ import {
   workRunReleaseApplier,
   requestWorkRunRelease,
   formatReleaseRequestReply,
+  resolveColdFinalizeWorkBranch,
   type ReleasePreflightDeps,
   type ReleaseRuntimeDeps,
   type ReleaseRequestDeps,
   type WorkRunReleasePayload,
 } from './work-run-release.js';
+import type { GitRunner } from './sandbox-runtime.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { MutationEvent } from '../transport/mutations.js';
 
 const NOW_ISO = '2026-06-09T00:00:00.000Z';
 const WORKTREE = '/tmp/test-worktrees/rune/06-webview';
+
+describe('cold-finalize branch resolution', () => {
+  it('resolves from durable repository refs without requiring a live worktree HEAD', async () => {
+    const runGit = vi.fn<GitRunner>(async (args, opts) => {
+      expect(opts?.cwd).toBe('/tmp/test-repo');
+      if (args[0] === 'rev-parse') throw new Error('worktree HEAD is absent');
+      if (args.at(-1) === 'refs/heads/rune-work/rune/06-webview') {
+        return {
+          stdout: 'branch-sha refs/heads/rune-work/rune/06-webview\n',
+          stderr: '',
+        };
+      }
+      throw new Error('missing ref');
+    });
+
+    await expect(resolveColdFinalizeWorkBranch(
+      parkedRun(),
+      '/tmp/test-repo',
+      runGit,
+    )).resolves.toBe('rune-work/rune/06-webview');
+    expect(runGit).toHaveBeenCalledTimes(1);
+  });
+});
 
 /** A parked (blocked-on-human) supervised run for the release surfaces. */
 function parkedRun(overrides: Partial<SupervisedRun> = {}): SupervisedRun {

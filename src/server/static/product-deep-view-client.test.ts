@@ -1759,6 +1759,28 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/no-op/i);
   });
 
+  it('renders a persisted lease wait in the active run feed without exposing its resource key', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      activeRun: {
+        runId: 'run-live-1',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        state: 'running',
+        startedAt: '2026-06-23T12:00:00.000Z',
+        elapsedMs: 125_000,
+        worktreePath: LIVE_WORKTREE_PATH,
+        agents: [{ role: 'qa', active: true }],
+        transcriptUrl: '/api/work-runs/run-live-1/transcript',
+        waitingOn: 'base branch',
+        // Deliberately hostile to accidental object spreading into HTML.
+        resourceKey: '/private/operator/repositories/aura:main',
+      },
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toMatch(/waiting on\s+base branch/i);
+    expect(html).not.toContain('/private/operator/repositories');
+  });
+
   it('renders context-closeout repair and preservation details in run history', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
     const html = renderProductDeepView(productView({

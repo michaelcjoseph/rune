@@ -12,6 +12,11 @@
  */
 
 import type { ValidationPolicy } from './planning-roles.js';
+import {
+  DESIGNER_REVIEW_MARKER,
+  MANUAL_LIVE_GATE_MARKER,
+  SECURITY_REVIEW_MARKER,
+} from './planning-artifact.js';
 
 /** A selected `tasks.md` task. */
 export interface SelectedTask {
@@ -24,6 +29,8 @@ export interface SelectedTask {
   /** Mechanical validation contract. Runtime selection always populates this;
    * the optional type keeps older fixture literals source-compatible. */
   validationPolicy?: ValidationPolicy;
+  /** Exact marker in the trailing task-line tag set requesting the security gate. */
+  securityNeeded?: boolean;
 }
 
 export type TaskSelectionResult =
@@ -48,6 +55,30 @@ const CHECKLIST_RE = /^\s*-\s*\[[ xX]\]\s+/;
 const SECTION_RE = /^##\s+(\S(?:.*\S)?)\s*$/;
 const VALIDATION_POLICY_RE =
   /^\s+-\s+Validation policy:\s+`(required|reviewed-no-validation)`\s*$/;
+const TRAILING_TASK_MARKERS = [
+  DESIGNER_REVIEW_MARKER,
+  SECURITY_REVIEW_MARKER,
+  MANUAL_LIVE_GATE_MARKER,
+] as const;
+
+function trailingTaskMarkers(text: string): Set<string> {
+  const found = new Set<string>();
+  let remaining = text;
+  let matched = true;
+  while (matched) {
+    matched = false;
+    for (const marker of TRAILING_TASK_MARKERS) {
+      const suffix = ` ${marker}`;
+      if (remaining.endsWith(suffix)) {
+        found.add(marker);
+        remaining = remaining.slice(0, -suffix.length);
+        matched = true;
+        break;
+      }
+    }
+  }
+  return found;
+}
 
 /**
  * Select the first unchecked task in document order. Tracks the running `## `
@@ -72,12 +103,17 @@ export function selectNextTask(tasksMd: string): TaskSelectionResult {
     }
     const taskMatch = UNCHECKED_RE.exec(line);
     if (taskMatch) {
-      const text = taskMatch[1]!;
+      const rawText = taskMatch[1]!;
+      const securityNeeded = trailingTaskMarkers(rawText).has(SECURITY_REVIEW_MARKER);
+      // Keep the checklist body byte-for-byte intact so closeout can tick the
+      // same line selection chose; the marker is projected as metadata in
+      // addition to remaining part of the durable task identity.
       selected = {
-        id: computeTaskId(text),
-        text,
+        id: computeTaskId(rawText),
+        text: rawText,
         section,
         validationPolicy: 'required',
+        securityNeeded,
       };
     }
   }

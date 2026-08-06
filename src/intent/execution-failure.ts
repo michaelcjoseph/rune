@@ -251,7 +251,7 @@ function isJudgmentBatchCheckpoint(value: unknown): value is JudgmentBatchCheckp
   const v = value as Record<string, unknown>;
   if (!boundedString(v['batchId'], 128) || !Array.isArray(v['members'])) return false;
   // Lower bound tracks judgmentBatchCheckpoint() in src/jobs/team-task-deps.ts:
-  // reviewer and tech-lead always, designer only when task.designerNeeded — so 2 is
+  // reviewer and tech-lead always; designer and security follow their explicit task flags — so 2 is
   // the legitimate floor. Upper bound stays 4 to keep pre-7a09323 cursors (which
   // still carried QA's since-removed diff gate) readable.
   if (v['members'].length < 2 || v['members'].length > 4) return false;

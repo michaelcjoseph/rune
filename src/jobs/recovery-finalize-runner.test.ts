@@ -80,9 +80,11 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
       'diff': ' src/foo.ts | 3 +++\n 1 file changed, 3 insertions(+)\n',
       'status': '', // clean tree
     }),
+    canonicalRepoId: async (repoPath) => repoPath,
     getProduct: () => PRODUCT,
     worktreeFor: (product, project) => `/tmp/worktrees/${product}/${project}`,
     worktreeExists: () => true,
+    resolveWorkBranch: async (product, project) => `rune-work/${product}/${project}`,
     readTasks: () => '## Phase A\n- [x] Task 1\n- [x] Task 2\n', // all checked
     writeSummaryFile: (dir, summary) => { captured.summaries.push({ dir, summary }); },
     appendIndex: (filePath, row) => { captured.indexRows.push({ filePath, row }); },
@@ -135,13 +137,32 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(captured.summaries).toHaveLength(1);
     expect(captured.summaries[0]!.summary.outcome).toBe('branch-complete');
     expect(captured.summaries[0]!.summary.baseSha).toBe('base000sha');
-    expect(captured.summaries[0]!.summary.branch).toBe('rune-work/15-work-run-finalizer');
+    expect(captured.summaries[0]!.summary.branch).toBe('rune-work/rune/15-work-run-finalizer');
     // Index row + terminal supervision upsert + worktree removal all happened.
     expect(captured.indexRows).toHaveLength(1);
     expect(captured.indexRows[0]!.row.outcome).toBe('branch-complete');
     expect(captured.upserts).toHaveLength(1);
     expect(captured.upserts[0]!.status).toBe('completed');
     expect(captured.removed).toHaveLength(1);
+  });
+
+  it('preserves a legacy checked-out branch identity through restart finalization', async () => {
+    const legacyBranch = 'rune-work/15-work-run-finalizer';
+    const gitCalls: string[][] = [];
+    const { io, captured } = makeIO({
+      resolveWorkBranch: async () => legacyBranch,
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'merge-base') return { stdout: 'base000sha\n', stderr: '' };
+        if (args[0] === 'rev-list') return { stdout: 'a1\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+    });
+
+    await __finalizeStaleRunForTest(makeRun(), io);
+
+    expect(gitCalls).toContainEqual(['merge-base', 'main', legacyBranch]);
+    expect(captured.summaries.at(-1)!.summary.branch).toBe(legacyBranch);
   });
 
   it('resumes a crashed gated-merge run from `merged-not-pushed`: completes push then delete, never re-merges (Phase 3.5)', async () => {
@@ -415,6 +436,50 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(gitCalls.some(a => a.includes('push'))).toBe(false);
     expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(false);
     expect(gitCalls.some(a => a.includes('branch') && a.includes('-d'))).toBe(false);
+  });
+
+  it('re-enters a persisted base-branch waiter through gated recovery', async () => {
+    const runGate = vi.fn(async () => ({ ok: false as const, reason: 'tests-red' as const }));
+    const { io } = makeIO({
+      readLastPhase: () => 'transcript-flushed',
+      runGate,
+    });
+    await __finalizeStaleRunForTest(makeRun({
+      waitingOn: {
+        resource: { type: 'base-branch', key: '/tmp/repo:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-08-05T12:00:00.000Z',
+      },
+    }), io);
+
+    expect(runGate).toHaveBeenCalledOnce();
+  });
+
+  it('carries scope roots and the recorded worktree into a gated recovery closeout', async () => {
+    const runGate = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'scope-violation' as const,
+      offendingPaths: ['docs/outside.md'],
+    }));
+    const { io } = makeIO({
+      getProduct: () => ({ ...PRODUCT, scopeRoots: ['src/**'] }),
+      readLastPhase: () => 'transcript-flushed',
+      runGate,
+    });
+    const run = makeRun({
+      waitingOn: {
+        resource: { type: 'base-branch', key: '/tmp/repo:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-08-05T12:00:00.000Z',
+      },
+    });
+
+    await __finalizeStaleRunForTest(run, io);
+
+    expect(runGate).toHaveBeenCalledWith(expect.objectContaining({
+      scopeRoots: ['src/**'],
+      sourceWorktree: '/tmp/worktrees/rune/15-work-run-finalizer',
+    }));
   });
 
   it('a branch with commits but unchecked tasks → partial (still a terminal completed status)', async () => {

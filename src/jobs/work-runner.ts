@@ -23,7 +23,12 @@ import {
 } from './work-run-store.js';
 import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase } from './work-run-finalizer.js';
 import { runGate } from './work-run-gate-runtime.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import type { GateFailReason, GateValidationReceipt } from './work-run-gate.js';
 import type { ValidationAdapter } from '../intent/full-suite-attestation.js';
 import type { ValidationCommandProfile } from '../intent/validation-profiles.js';
@@ -314,7 +319,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // instead of re-forking off `main` and restarting from Phase 1 — the
     // re-fork bug in docs/projects/bugs.md. The per-project run cap of 1 keeps
     // a single run on the branch at a time.
-    const branch = workBranchName(projectSlug);
+    let branch = workBranchName(product, projectSlug);
 
     let sandbox: SandboxSpec | null = null;
     // Per-run durable transcript sink — created once the worktree exists, teed
@@ -345,6 +350,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           worktreeRoot: config.WORKTREE_ROOT,
           productsConfigPath: config.PRODUCTS_CONFIG_FILE,
         });
+        branch = sandbox.branch ?? branch;
       } catch (err) {
         // No worktree was created, so the outer finally's destroy is a
         // no-op (sandbox stays null). Surface the failure as a terminal
@@ -672,11 +678,12 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // `missing-validation-command` → the run HOLDS at branch-complete, never
         // a stray merge).
         let baseBranch = 'main';
-        let repoPath = '';
+        let repoPath = worktreeDir;
         let validationCommands: string[] = [];
         let validationCommandProfiles: ValidationCommandProfile[] = [];
         let validationAdapters: ValidationAdapter[] = [];
         let validationCwd: string | undefined;
+        let scopeRoots: string[] | undefined;
         try {
           const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
           baseBranch = productConfig.baseBranch;
@@ -685,6 +692,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
           validationAdapters = productConfig.validationAdapters ?? [];
           validationCwd = productConfig.validationCwd;
+          scopeRoots = productConfig.scopeRoots;
         } catch (err) {
           log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
             id: descriptor.id,
@@ -692,19 +700,24 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
             error: scrubPathsInText((err as Error).message),
           });
         }
-        // Pre-gathered concurrency fact for the gate: another work-run owns the
-        // same product right now (its branch could be based on a `main` this
-        // merge is about to move). Read LIVE inside the gate closure (below) so
+        // Pre-gathered concurrency fact for the gate: another work run owns the
+        // same repository/base branch this merge is about to move. Read LIVE
+        // inside the gate closure (below) so
         // it reflects the moment the gate runs, not a stale finalize-setup
         // snapshot. The per-base-branch lock serializes the gate; this fact is
         // the separate ownership signal (gate req 14) and fails toward HOLD.
-        const hasConcurrentRun = (): boolean =>
-          [...activeRuns.values()].some(
-            h =>
-              h.descriptor.kind === 'work-run' &&
-              h.descriptor.id !== descriptor.id &&
-              ((h.descriptor.payload as WorkRunPayload).product ?? 'rune') === product &&
-              h.descriptor.status === 'running',
+        const repoId = await canonicalRepoId(repoPath);
+        const hasConcurrentRun = (): Promise<boolean> =>
+          hasConcurrentBaseBranchRun(
+            activeRuns.values(),
+            descriptor.id,
+            repoId,
+            baseBranch,
+            new Set(['orchestrated-work', 'work-run']),
+            (candidateProduct) => {
+              const candidate = getProductConfig(candidateProduct, config.PRODUCTS_CONFIG_FILE);
+              return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+            },
           );
         // Throwaway integration worktree the gate creates + tears down to test
         // `main` BEFORE it is mutated (never the product's real checkout). The
@@ -890,11 +903,24 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
             deps.writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
           cancelled: ctx.cancel,
           // --- gated-merge effects (Phase 3.5) ---
-          // The hard gate runs INSIDE the per-product/per-base-branch lock so two
-          // projects sharing one `main` serialize (req 14); the gate itself tests
+          // The hard gate runs INSIDE the per-repository/per-base-branch lock so
+          // products sharing one `main` serialize (req 14); the gate itself tests
           // `main` in a throwaway integration worktree, never the real checkout.
           gate: () =>
-            withBaseBranchLock(product, baseBranch, async () => {
+            withRunLeaseContext({
+              run: {
+                id: descriptor.id,
+                kind: descriptor.kind,
+                product,
+                project: projectSlug,
+                status: 'running',
+                startedAt: descriptor.createdAt,
+                lastHeartbeatAt: new Date().toISOString(),
+              },
+              operationId: 'integration-finalize',
+              cancelled: ctx.cancel,
+              onCancel: ctx.onCancel,
+            }, () => withBaseBranchLock(repoId, baseBranch, async () => {
               const verdict = await runGate({
                 product,
                 repoPath,
@@ -905,17 +931,19 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 validationCommandProfiles,
                 validationAdapters,
                 ...(validationCwd !== undefined ? { validationCwd } : {}),
+                ...(scopeRoots !== undefined ? { scopeRoots } : {}),
+                sourceWorktree: worktreeDir,
                 tasksRemaining: gateTasksRemaining,
                 // Live read inside the lock — accurate at gate time, not a stale
                 // finalize-setup snapshot.
-                concurrentRun: hasConcurrentRun(),
+                concurrentRun: await hasConcurrentRun(),
                 commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
                 validationArtifactsDir: join(config.WORK_RUNS_DIR, descriptor.id, 'validation-diagnostics'),
                 cancelled: ctx.cancel,
               });
               gateValidationReceipt = verdict.validationReceipt;
               return verdict;
-            }),
+            })),
           // Gate refused → the run holds at branch-complete off `main`. Never a
           // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
           alert: (reason: GateFailReason) => {

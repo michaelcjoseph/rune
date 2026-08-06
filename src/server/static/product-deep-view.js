@@ -427,6 +427,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
   const worktreePath = live.worktreePath || activeRun.worktreePath;
   const transcriptUrl = live.transcriptUrl || activeRun.transcriptUrl;
   const target = live.target || activeRun.target;
+  const waitingOn = live.waitingOn || activeRun.waitingOn;
   return `<article class="deep-live-run" data-run-id="${attr(activeRun.runId)}">` +
     `<div class="deep-row-head">` +
       `<strong>${escHtml(activeRun.runId)}</strong>` +
@@ -438,6 +439,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
       `<span>${escHtml(fmtProgress(tasks))} tasks</span>` +
       `<span>${escHtml(fmtRemaining(tasks))}</span>` +
       `<span>${escHtml(fmtElapsed(elapsedMs))}</span>` +
+      (waitingOn ? `<span class="deep-run-waiting">waiting on ${escHtml(waitingOn)}</span>` : '') +
       (outcome ? `<span>outcome ${escHtml(outcome)}</span>` : '') +
     `</div>` +
     `<code class="deep-worktree">${escHtml(worktreePath)}</code>` +

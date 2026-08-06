@@ -30,6 +30,8 @@ const STRATEGY_LABEL: Record<TestStrategy, string> = {
 };
 
 export const MANUAL_LIVE_GATE_MARKER = '*(manual/live - not automatable)*';
+export const DESIGNER_REVIEW_MARKER = '_(designer review)_';
+export const SECURITY_REVIEW_MARKER = '_(security review)_';
 
 /** Phase label for tasks the tech lead left unlabeled. */
 const DEFAULT_PHASE = 'Phase 1';
@@ -65,9 +67,10 @@ export function sizedTasksToMarkdown(tasks: readonly SizedTask[]): string {
     lines.push(`## ${phase}`, '', '### Implementation', '');
 
     for (const t of phaseTasks) {
-      const designer = t.designerNeeded ? ' _(designer review)_' : '';
+      const designer = t.designerNeeded ? ` ${DESIGNER_REVIEW_MARKER}` : '';
+      const security = t.securityNeeded ? ` ${SECURITY_REVIEW_MARKER}` : '';
       const manualGate = t.testStrategy === 'manual-live-gate' ? ` ${MANUAL_LIVE_GATE_MARKER}` : '';
-      lines.push(`- [ ] **${t.id}** — ${t.text}${designer}${manualGate}`);
+      lines.push(`- [ ] **${t.id}** — ${t.text}${designer}${security}${manualGate}`);
       lines.push(`  - Test strategy: \`${t.testStrategy}\``);
       lines.push(`  - Validation policy: \`${t.validationPolicy ?? 'required'}\``);
       if (t.roles.length > 0) {

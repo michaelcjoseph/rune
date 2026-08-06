@@ -38,7 +38,7 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { VALID_SLUG, worktreePathFor, workBranchName } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import {
   createMutation,
@@ -52,6 +52,8 @@ import {
   defaultRunGit,
   destroyWorktree,
   getProductConfig,
+  resolveExistingWorkBranch,
+  type GitRunner,
 } from './sandbox-runtime.js';
 import {
   classifyOutcome,
@@ -67,7 +69,15 @@ import {
 } from './work-run-finalizer.js';
 import type { GateValidationReceipt } from './work-run-gate.js';
 import { runGate } from './work-run-gate-runtime.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
+import {
+  withRunLeaseContext,
+  type RunLeaseExecutionContext,
+} from './lease-lifecycle.js';
 import {
   writeSummary,
   appendIndexRow,
@@ -153,7 +163,11 @@ export interface ReleaseRuntimeDeps {
   /** Cold-finalize the run through the Project 15 finalizer in `gated-merge`
    *  mode (NOT the fresh-run hold default), keeping the parked hold until the
    *  finalizer terminal write. Returns the classified terminal event. */
-  coldFinalizeGatedMerge: (run: SupervisedRun, worktreePath: string) => Promise<MutationEvent>;
+  coldFinalizeGatedMerge: (
+    run: SupervisedRun,
+    worktreePath: string,
+    leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
+  ) => Promise<MutationEvent>;
   /** Explicit discard of a confirmed-dirty worktree: destroy it, then clear the
    *  parked hold. */
   discardDirtyWorktree: (run: SupervisedRun, worktreePath: string) => Promise<void>;
@@ -175,6 +189,7 @@ export interface ReleaseRuntimeDeps {
 export async function* runWorkRunRelease(
   payload: WorkRunReleasePayload,
   deps: ReleaseRuntimeDeps,
+  leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
 ): AsyncIterable<MutationEvent> {
   const { runId } = payload;
   const run = deps.readParkedRun(runId);
@@ -227,7 +242,7 @@ export async function* runWorkRunRelease(
   // Clean → COLD-finalize through the Project 15 finalizer (gated-merge). The
   // gate decides merge vs branch-complete hold. Keep the parked hold until the
   // finalizer terminal write resolves, THEN clear it.
-  const terminal = await deps.coldFinalizeGatedMerge(run, worktreePath);
+  const terminal = await deps.coldFinalizeGatedMerge(run, worktreePath, leaseCancellation);
   deps.clearParkedHold(run, terminal.kind === 'failed' ? 'failed' : 'completed');
   yield terminal;
 }
@@ -360,7 +375,11 @@ async function discardDirtyWorktreeProd(run: SupervisedRun, worktreePath: string
  * supervision write via `clearParkedHold` (which runs AFTER this resolves), so
  * the parked hold persists for the whole finalization.
  */
-async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: string): Promise<MutationEvent> {
+async function coldFinalizeGatedMergeProd(
+  run: SupervisedRun,
+  worktreePath: string,
+  leaseCancellation?: Pick<RunLeaseExecutionContext, 'cancelled' | 'onCancel'>,
+): Promise<MutationEvent> {
   for (const [label, slug] of [['id', run.id], ['product', run.product], ['project', run.project]] as const) {
     if (!VALID_SLUG.test(slug)) {
       throw new Error(`release: invalid ${label} slug '${slug}' on parked run`);
@@ -369,8 +388,9 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
   const product = getProductConfig(run.product, config.PRODUCTS_CONFIG_FILE);
   const repoPath = product.repoPath;
   const baseBranch = product.baseBranch;
+  const repoId = await canonicalRepoId(repoPath);
   const validationCommands = product.validationCommands ?? [];
-  const branch = workBranchName(run.project);
+  const branch = await resolveColdFinalizeWorkBranch(run, repoPath, defaultRunGit);
 
   const mb = await defaultRunGit(['merge-base', baseBranch, branch], { cwd: repoPath });
   const baseSha = mb.stdout.trim();
@@ -492,7 +512,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
     recordGateValidationReceipt: (receipt) =>
       writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt),
     gate: () =>
-      withBaseBranchLock(run.product, baseBranch, async () => {
+      withRunLeaseContext({ run, operationId: 'released-finalize', ...leaseCancellation }, () => withBaseBranchLock(repoId, baseBranch, async () => {
         const verdict = await runGate({
           product: run.product,
           repoPath,
@@ -504,14 +524,16 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
           ...(product.validationCwd !== undefined
             ? { validationCwd: product.validationCwd }
             : {}),
+          ...(product.scopeRoots !== undefined ? { scopeRoots: product.scopeRoots } : {}),
+          sourceWorktree: worktreePath,
           tasksRemaining: productFacts.transitions.tasksRemaining,
-          concurrentRun: hasConcurrentRunForProduct(run.product, run.id),
+          concurrentRun: await hasConcurrentRun(run.id, repoId, baseBranch),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
           validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
         });
         gateValidationReceipt = verdict.validationReceipt;
         return verdict;
-      }),
+      })),
     alert: (reason: GateFailReason) => {
       gateHeldReason = reason;
       log.warn('release: held at branch-complete (gate failed)', { id: run.id, branch, reason });
@@ -570,16 +592,38 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
   return result.terminalEvent;
 }
 
-/** Another work-run owns the same product right now (its branch could be based
- *  on a base branch this release's merge is about to move) — fails the gate
+/** Resolve a cold-finalize branch from durable repository refs, not worktree HEAD. */
+export function resolveColdFinalizeWorkBranch(
+  run: Pick<SupervisedRun, 'product' | 'project'>,
+  repoPath: string,
+  runGit: GitRunner = defaultRunGit,
+): Promise<string> {
+  return resolveExistingWorkBranch({
+    product: run.product,
+    project: run.project,
+    repoPath,
+    runGit,
+  });
+}
+
+/** Another work run owns the same repository/base branch this release's merge
+ *  is about to move — fails the gate
  *  toward HOLD. Excludes the release mutation itself (kind `work-run-release`). */
-function hasConcurrentRunForProduct(product: string, releaseRunId: string): boolean {
-  return [...activeRuns.values()].some(
-    (h) =>
-      h.descriptor.kind === 'work-run' &&
-      h.descriptor.id !== releaseRunId &&
-      ((h.descriptor.payload as { product?: string }).product ?? 'rune') === product &&
-      h.descriptor.status === 'running',
+function hasConcurrentRun(
+  releaseRunId: string,
+  repoId: string,
+  baseBranch: string,
+): Promise<boolean> {
+  return hasConcurrentBaseBranchRun(
+    activeRuns.values(),
+    releaseRunId,
+    repoId,
+    baseBranch,
+    new Set(['orchestrated-work', 'work-run']),
+    (candidateProduct) => {
+      const candidate = getProductConfig(candidateProduct, config.PRODUCTS_CONFIG_FILE);
+      return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+    },
   );
 }
 
@@ -665,8 +709,11 @@ export const workRunReleaseApplier: MutationApplier<WorkRunReleasePayload> = {
   },
   async *apply(
     descriptor: MutationDescriptor<WorkRunReleasePayload>,
-    _ctx: ApplyContext,
+    ctx: ApplyContext,
   ): AsyncIterable<MutationEvent> {
-    yield* runWorkRunRelease(descriptor.payload, getReleaseRuntimeDeps());
+    yield* runWorkRunRelease(descriptor.payload, getReleaseRuntimeDeps(), {
+      cancelled: ctx.cancel,
+      onCancel: ctx.onCancel,
+    });
   },
 };

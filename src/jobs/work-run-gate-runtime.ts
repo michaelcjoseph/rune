@@ -32,6 +32,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -42,7 +43,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, normalize, relative, resolve, sep } from 'node:path';
+import { basename, join, normalize, posix, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { defaultRunGit, removeVitestCache, vitestCacheDirFor, type GitRunner } from './sandbox-runtime.js';
@@ -143,6 +144,10 @@ export interface GateRuntimeOpts {
   /** Optional repository-relative command directory, revalidated inside the
    * throwaway integration worktree before the hard gate executes commands. */
   validationCwd?: string;
+  /** Validated repo-relative patterns constraining paths changed by this run. */
+  scopeRoots?: string[];
+  /** The run worktree whose staged changes must be included in scope checks. */
+  sourceWorktree?: string;
   /** Original tasks still unchecked (computed from the work product). */
   tasksRemaining: number;
   /** Another run owns the same product / base branch right now (lock state). */
@@ -2270,6 +2275,211 @@ const defaultGateRuntimeIO = (): GateRuntimeIO => ({
   runValidationCommand: defaultRunValidationCommand,
 });
 
+type ScopeTree = 'branch' | 'index';
+
+interface ScopeDiff {
+  changedPaths: string[];
+  materializedPaths: Array<{ path: string; tree: ScopeTree }>;
+}
+
+const INVALID_RELATIVE_PATH = '<invalid-relative-path>';
+
+function safeRelativeGitPath(value: string): string | null {
+  if (
+    value.length === 0 ||
+    posix.isAbsolute(value) ||
+    win32.isAbsolute(value) ||
+    value.includes('\0')
+  ) return null;
+  const segments = value.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return null;
+  }
+  return posix.normalize(value) === value ? value : null;
+}
+
+/** Parse `git diff --name-status -z`, retaining both sides of renames. */
+function parseScopeDiff(output: string, tree: ScopeTree): ScopeDiff {
+  const fields = output.split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  const changedPaths: string[] = [];
+  const materializedPaths: Array<{ path: string; tree: ScopeTree }> = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++] ?? '';
+    const kind = status[0];
+    if (!kind || !'ACDMRTUXB'.includes(kind)) {
+      throw new Error('scope boundary: malformed git name-status output');
+    }
+    const first = fields[index++];
+    if (first === undefined) {
+      throw new Error('scope boundary: truncated git name-status output');
+    }
+    if (kind === 'R' || kind === 'C') {
+      const second = fields[index++];
+      if (second === undefined) {
+        throw new Error('scope boundary: truncated git rename/copy output');
+      }
+      if (kind === 'R') changedPaths.push(first);
+      changedPaths.push(second);
+      materializedPaths.push({ path: second, tree });
+      continue;
+    }
+    changedPaths.push(first);
+    if (kind !== 'D') materializedPaths.push({ path: first, tree });
+  }
+  return { changedPaths, materializedPaths };
+}
+
+function scopeGlobMatches(pattern: string, filePath: string): boolean {
+  if (!pattern.includes('*') && !pattern.includes('?')) {
+    return filePath === pattern || filePath.startsWith(`${pattern}/`);
+  }
+  let source = '';
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index]!;
+    if (char === '*' && pattern[index + 1] === '*') {
+      if (pattern[index + 2] === '/') {
+        source += '(?:.*/)?';
+        index += 2;
+      } else {
+        source += '.*';
+        index += 1;
+      }
+    } else if (char === '*') {
+      source += '[^/]*';
+    } else if (char === '?') {
+      source += '[^/]';
+    } else {
+      source += /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+    }
+  }
+  return new RegExp(`^${source}$`).test(filePath);
+}
+
+function pathMatchesScopeRoots(filePath: string, scopeRoots: string[]): boolean {
+  return scopeRoots.some((root) => scopeGlobMatches(root, filePath));
+}
+
+async function readScopeSymlinkTarget(
+  runGit: GitRunner,
+  opts: GateRuntimeOpts,
+  entry: { path: string; tree: ScopeTree },
+): Promise<{ found: boolean; target: string | null }> {
+  const cwd = entry.tree === 'branch' ? opts.repoPath : (opts.sourceWorktree ?? opts.repoPath);
+  const listing = entry.tree === 'branch'
+    ? await runGit(['--literal-pathspecs', 'ls-tree', '-z', opts.branch, '--', entry.path], { cwd })
+    : await runGit(['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', entry.path], { cwd });
+  const records = listing.stdout.split('\0').filter((record) => record.length > 0);
+  const exact = records.map((record) => {
+    const match = entry.tree === 'branch'
+      ? /^(\d{6})\s+\S+\s+([0-9a-f]+)\t([\s\S]*)$/.exec(record)
+      : /^(\d{6})\s+([0-9a-f]+)\s+(\d+)\t([\s\S]*)$/.exec(record);
+    if (!match) throw new Error('scope boundary: malformed git tree entry');
+    return entry.tree === 'branch'
+      ? { mode: match[1]!, object: match[2]!, stage: '0', path: match[3]! }
+      : { mode: match[1]!, object: match[2]!, stage: match[3]!, path: match[4]! };
+  }).find((record) => record.path === entry.path && record.stage === '0');
+
+  // A queried changed path (or an in-scope symlink-chain target) that cannot be
+  // identified byte-for-byte must fail closed. In particular, never interpret
+  // pathspec expansion or a missing exact record as evidence of a regular file.
+  if (!exact) return { found: false, target: null };
+  if (exact.mode !== '120000') return { found: true, target: null };
+
+  return {
+    found: true,
+    target: (await runGit(['cat-file', '-p', exact.object], { cwd })).stdout,
+  };
+}
+
+async function symlinkEscapesScope(
+  runGit: GitRunner,
+  opts: GateRuntimeOpts,
+  entry: { path: string; tree: ScopeTree },
+  scopeRoots: string[],
+): Promise<boolean> {
+  const visited = new Set<string>();
+  let currentPath = entry.path;
+  while (!visited.has(currentPath)) {
+    visited.add(currentPath);
+    const symlink = await readScopeSymlinkTarget(runGit, opts, {
+      path: currentPath,
+      tree: entry.tree,
+    });
+    if (!symlink.found) return true;
+    const target = symlink.target;
+    if (target === null) return false;
+    if (posix.isAbsolute(target) || win32.isAbsolute(target) || target.includes('\0')) {
+      return true;
+    }
+    const normalizedTarget = posix.normalize(posix.join(posix.dirname(currentPath), target));
+    // A trailing slash on a symlink target constrains resolution to a directory;
+    // it is not a path component and must not turn an otherwise contained target
+    // into the invalid empty-segment sentinel used for Git entry names.
+    const canonicalTarget = normalizedTarget.replace(/\/+$/, '');
+    const resolvedTarget = safeRelativeGitPath(canonicalTarget);
+    if (resolvedTarget === null || !pathMatchesScopeRoots(resolvedTarget, scopeRoots)) {
+      return true;
+    }
+    currentPath = resolvedTarget;
+  }
+  return false;
+}
+
+async function findScopeViolation(
+  runGit: GitRunner,
+  opts: GateRuntimeOpts,
+): Promise<{ offendingPaths: string[] } | undefined> {
+  const scopeRoots = opts.scopeRoots;
+  if (!scopeRoots || scopeRoots.length === 0) return undefined;
+
+  const mergeBase = (
+    await runGit(['merge-base', opts.baseBranch, opts.branch], { cwd: opts.repoPath })
+  ).stdout.trim();
+  if (!mergeBase) throw new Error('scope boundary: git merge-base returned no commit');
+
+  const committed = parseScopeDiff((await runGit([
+    'diff',
+    '--name-status',
+    '-z',
+    '--find-renames',
+    mergeBase,
+    opts.branch,
+  ], { cwd: opts.repoPath })).stdout, 'branch');
+  const staged = opts.sourceWorktree !== undefined && !existsSync(opts.sourceWorktree)
+    ? { changedPaths: [], materializedPaths: [] }
+    : parseScopeDiff((await runGit([
+        'diff',
+        '--cached',
+        '--name-status',
+        '-z',
+        '--find-renames',
+      ], { cwd: opts.sourceWorktree ?? opts.repoPath })).stdout, 'index');
+
+  const offending = new Set<string>();
+  for (const rawPath of [...committed.changedPaths, ...staged.changedPaths]) {
+    const filePath = safeRelativeGitPath(rawPath);
+    if (filePath === null) {
+      offending.add(INVALID_RELATIVE_PATH);
+    } else if (!pathMatchesScopeRoots(filePath, scopeRoots)) {
+      offending.add(filePath);
+    }
+  }
+  for (const entry of [...committed.materializedPaths, ...staged.materializedPaths]) {
+    const filePath = safeRelativeGitPath(entry.path);
+    if (
+      filePath !== null &&
+      pathMatchesScopeRoots(filePath, scopeRoots) &&
+      await symlinkEscapesScope(runGit, opts, { ...entry, path: filePath }, scopeRoots)
+    ) {
+      offending.add(filePath);
+    }
+  }
+  return offending.size === 0
+    ? undefined
+    : { offendingPaths: [...offending].sort() };
+}
+
 /**
  * Gather the gate's facts in an integration worktree and decide via
  * `evaluateGate`. The product repo's `baseBranch` is never mutated here — a red
@@ -2295,6 +2505,20 @@ export async function runGate(
 ): Promise<GateResult> {
   const { runGit, runValidationCommand } = io;
   const hasValidationCommands = opts.validationCommands.length > 0;
+  const scopeViolation = await findScopeViolation(runGit, opts);
+  if (scopeViolation) {
+    return evaluateGate({
+      hasValidationCommands,
+      concurrentRun: opts.concurrentRun,
+      tasksRemaining: opts.tasksRemaining,
+      treeClean: true,
+      testsGreen: true,
+      validationTimedOut: false,
+      validationCancelled: false,
+      mergeConflict: false,
+      scopeViolation,
+    });
+  }
 
   // Create the throwaway integration worktree in DETACHED HEAD at baseBranch.
   // Inside the try so a partial `worktree add` failure still hits the finally

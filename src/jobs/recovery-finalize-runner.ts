@@ -24,14 +24,14 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import type { MutationEvent } from '../transport/mutations.js';
+import { activeRuns, type MutationEvent } from '../transport/mutations.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { worktreePathFor, VALID_SLUG } from '../intent/sandbox.js';
-import { workBranchName } from './work-runner.js';
 import {
   defaultRunGit,
   destroyWorktree,
   getProductConfig,
+  resolveCheckedOutWorkBranch,
   type GitRunner,
   type ProductConfig,
 } from './sandbox-runtime.js';
@@ -50,7 +50,13 @@ import {
 } from './work-run-finalizer.js';
 import type { GateResult, GateValidationReceipt } from './work-run-gate.js';
 import { runGate, type GateRuntimeOpts } from './work-run-gate-runtime.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  releaseBaseBranchRunLease,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import {
@@ -62,7 +68,7 @@ import {
   readLastWorkRunPhase,
   type WorkRunSummary,
 } from './work-run-store.js';
-import { upsertRun, readAllRuns, writeAllRuns } from './supervision-store.js';
+import { upsertRun, readAllRuns, writeAllRuns, writeRunLeaseState } from './supervision-store.js';
 import {
   recoverAndFinalizeStaleRuns,
   type RecoverAndFinalizeDeps,
@@ -100,12 +106,16 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  *  the unit test injects stubs so `finalizeStaleRun` runs with no real repo. */
 export interface RecoveryFinalizeIO {
   runGit: GitRunner;
+  /** Canonical repository identity resolver; production uses git-common-dir. */
+  canonicalRepoId: typeof canonicalRepoId;
   /** Resolve a product's config (repo path + base branch). Throws on unknown. */
   getProduct: (product: string) => ProductConfig;
   /** Absolute worktree path for a run. */
   worktreeFor: (product: string, project: string) => string;
   /** True if the worktree still exists on disk (recovery must run before the sweep). */
   worktreeExists: (path: string) => boolean;
+  /** Resolve the effective namespaced-or-legacy branch checked out in the worktree. */
+  resolveWorkBranch: (product: string, project: string, worktreePath: string) => Promise<string>;
   /** Read the worktree's tasks.md, or '' if absent/unreadable. */
   readTasks: (worktreePath: string, project: string) => string;
   /** Read the fail-closed receipt written immediately before merge. */
@@ -130,9 +140,12 @@ export interface RecoveryFinalizeIO {
 function defaultIO(): RecoveryFinalizeIO {
   return {
     runGit: defaultRunGit,
+    canonicalRepoId,
     getProduct: (product) => getProductConfig(product, config.PRODUCTS_CONFIG_FILE),
     worktreeFor: (product, project) => worktreePathFor(product, project, config.WORKTREE_ROOT),
     worktreeExists: (p) => existsSync(p),
+    resolveWorkBranch: (product, project, worktree) =>
+      resolveCheckedOutWorkBranch({ product, project, worktree, runGit: defaultRunGit }),
     readTasks: (worktreePath, project) => {
       try {
         return readFileSync(join(worktreePath, 'docs', 'projects', project, 'tasks.md'), 'utf8');
@@ -191,13 +204,14 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   }
 
   const product = io.getProduct(run.product); // throws on unknown product
+  const repoId = await io.canonicalRepoId(product.repoPath);
   let gateValidationReceipt: GateValidationReceipt | undefined =
     io.readGateValidationReceipt?.(config.WORK_RUNS_DIR, run.id);
   const worktree = io.worktreeFor(run.product, run.project); // throws on bad slug
   if (!io.worktreeExists(worktree)) {
     throw new Error(`recovery: worktree absent (already swept?) for run ${run.id}`);
   }
-  const branch = workBranchName(run.project);
+  const branch = await io.resolveWorkBranch(run.product, run.project, worktree);
 
   // We lost the in-memory baseSha; the fork point (merge-base of the work branch
   // and the product's base branch) is the stable diff base for the work product.
@@ -238,9 +252,14 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   // mode and stranding the Done commit on an unmerged branch. Once the merge has
   // landed (`merged-not-pushed`/`pushed-not-deleted`), the recorded phase is
   // authoritative and recovery completes only the remaining push/delete tail.
+  const resumeWaitingBaseBranch = run.waitingOn?.resource.type === 'base-branch';
   const resumeAfterProjectDone = lastPhase === 'project-marked-done';
   const resumeAfterMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
-  const resumeGatedMerge = resumeAfterProjectDone || resumeAfterMerge;
+  // A persisted base-branch waiter proves which operation was interrupted, but
+  // never proves ownership. Re-enter gated merge so its critical section makes
+  // a fresh process-local FIFO acquisition. An ordinary pre-merge crash with no
+  // waiting metadata retains the long-standing hold-mode recovery behavior.
+  const resumeGatedMerge = resumeWaitingBaseBranch || resumeAfterProjectDone || resumeAfterMerge;
 
   const classified = classifyOutcome({ exit, product: productFacts });
   // On a gated-merge RESUME the recorded phase is authoritative: once the
@@ -343,6 +362,18 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   };
 
   const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${run.product}-${run.id}`);
+  const hasConcurrentRun = (): Promise<boolean> =>
+    hasConcurrentBaseBranchRun(
+      activeRuns.values(),
+      run.id,
+      repoId,
+      product.baseBranch,
+      new Set(['orchestrated-work', 'work-run']),
+      (candidateProduct) => {
+        const candidate = io.getProduct(candidateProduct);
+        return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+      },
+    );
 
   // In `gated-merge` resume mode, supply the merge effects. On resume from
   // `merged-not-pushed`/`pushed-not-deleted` the finalizer SKIPS the gate +
@@ -354,7 +385,10 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   const effects: FinalizerEffects = resumeGatedMerge
     ? {
         ...baseEffects,
-        baseBranchCriticalSection: (fn) => withBaseBranchLock(run.product, product.baseBranch, fn),
+        baseBranchCriticalSection: (fn) => withRunLeaseContext(
+          { run, operationId: 'recovery-finalize' },
+          () => withBaseBranchLock(repoId, product.baseBranch, fn),
+        ),
         recordGateValidationReceipt: (receipt) => {
           writeGateValidationReceipt(config.WORK_RUNS_DIR, run.id, receipt);
           gateValidationReceipt = receipt;
@@ -375,8 +409,10 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             ...(product.validationCwd !== undefined
               ? { validationCwd: product.validationCwd }
               : {}),
+            ...(product.scopeRoots !== undefined ? { scopeRoots: product.scopeRoots } : {}),
+            sourceWorktree: worktree,
             tasksRemaining: gateTasksRemaining,
-            concurrentRun: false,
+            concurrentRun: await hasConcurrentRun(),
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
             validationArtifactsDir: join(config.WORK_RUNS_DIR, run.id, 'validation-diagnostics'),
           });
@@ -472,6 +508,15 @@ export function buildRecoveryFinalizeDeps(io: RecoveryFinalizeIO = defaultIO()):
   return {
     readRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
     writeRuns: (runs) => writeAllRuns(runs, config.SUPERVISED_RUNS_FILE),
+    writeRunLeaseState: (run) => writeRunLeaseState(run, config.SUPERVISED_RUNS_FILE),
+    releaseRunLease: releaseBaseBranchRunLease,
+    reportBlockedEnvironment: ({ runId, resource, remediation }) => {
+      log.warn('recovery: waiting resource unavailable', {
+        id: runId,
+        resourceType: resource.type,
+        remediation,
+      });
+    },
     // Per-run boot ceiling so a pathologically slow run can't block startup.
     finalizeStaleRun: (run) => withTimeout(finalizeStaleRun(run, io), RECOVERY_PER_RUN_TIMEOUT_MS, run.id),
   };

@@ -31,7 +31,9 @@ you, this charter and the project win.
 - **Size every task.** For each task emit role-sizing metadata and a test
   strategy: `code-tests-required`, `docs-or-config-only`, or
   `tests-as-deliverable`. Set an explicit front-end / designer-needed flag so
-  designer routing is deterministic, not inferred at runtime.
+  designer routing is deterministic, not inferred at runtime. Set the explicit
+  security-needed flag when a task requires the security role as a closeout
+  gate; never rely on runtime inference from task prose.
 - **Review test intent.** Before the coder starts, review the QA-authored tests
   (or the reviewed no-code-test rationale) for a task. Tests that don't pin the
   spec's behavior are sent back.

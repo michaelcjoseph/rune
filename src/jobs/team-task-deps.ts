@@ -159,7 +159,7 @@ const NOTE_MAX_CHARS = 2_000;
 // Role-model resolution (Phase 8 model map)
 // ---------------------------------------------------------------------------
 
-/** The seven product-team roles' resolved model bindings. `reviewer` is null
+/** The eight product-team roles' resolved model bindings. `reviewer` is null
  *  when no distinct-provider reviewer can be resolved — the fail-closed
  *  independence signal the workflow blocks on. */
 export interface TeamRoleModels {
@@ -169,6 +169,7 @@ export interface TeamRoleModels {
   coder: RoleModelBinding;
   reviewer: RoleModelBinding | null;
   designer: RoleModelBinding;
+  security: RoleModelBinding;
   /** Split-verdict tie-breaker. Null when the `adjudicator` policy entry is
    *  missing or unresolvable — the workflow then falls back to today's blocking
    *  behavior rather than to a silent pass.
@@ -186,7 +187,7 @@ const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']
 const SUPPORTED_FORMATS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 /**
- * Resolve all seven roles through the model-policy resolver (pin → role-default
+ * Resolve all eight roles through the model-policy resolver (pin → role-default
  * → global-fallback). The REVIEWER is resolved with `distinctFromProvider:
  * coder.provider`; a resolver throw (no distinct-provider model registered)
  * maps to a null binding rather than a same-provider downgrade. Any other
@@ -205,6 +206,7 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
   const pm = resolveRole('pm', []);
   const techLead = resolveRole('tech-lead', []);
   const designer = resolveRole('designer', []);
+  const security = resolveRole('security', []);
   // Artifact roles need a coding-capable executor.
   const qa = resolveRole('qa', ['coding']);
   const coder = resolveRole('coder', ['coding']);
@@ -263,6 +265,7 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     coder,
     reviewer,
     designer,
+    security,
     adjudicator,
   };
 }
@@ -551,6 +554,17 @@ const DESIGNER_INSTRUCTION = [
   '```',
 ].join('\n');
 
+const SECURITY_INSTRUCTION = [
+  'You are the security reviewer. This task was explicitly sized security-needed.',
+  'Review the complete implementation diff for trust-boundary, credential,',
+  'authorization, containment, path-safety, and fail-closed defects.',
+  '',
+  'Respond with EXACTLY ONE fenced ```security-review block containing JSON:',
+  '```security-review',
+  '{"outcome": "pass", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete fix>", "reversible": true}], "notes": "<short reason>"}',
+  '```',
+].join('\n');
+
 const QA_EXEC_INSTRUCTION = [
   'You are QA. Write or update the tests that pin the selected task\'s contract',
   'BEFORE any implementation exists. Derive them from the spec; do NOT implement',
@@ -750,7 +764,8 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
 
 function hasAggregateFixtureFences(text: string): boolean {
   return text.includes('```tl-test-review') || text.includes('```tl-diff-review') ||
-    text.includes('```designer-review') || text.includes('```pm-acceptance');
+    text.includes('```designer-review') || text.includes('```security-review') ||
+    text.includes('```pm-acceptance');
 }
 
 function parseFindings(v: Record<string, unknown>): {
@@ -1188,6 +1203,13 @@ function judgmentBatchCheckpoint(
           workflowStage: 'designer-review',
         }]
       : []),
+    ...(task.securityNeeded
+      ? [{
+          role: 'security',
+          binding: models.security,
+          workflowStage: 'security-review',
+        }]
+      : []),
   ];
   return {
     taskId: task.id,
@@ -1433,6 +1455,7 @@ function stageForGateRejection(feedback: GateRejectionFeedback): RoleStage | und
     return 'implementation';
   }
   if (feedback.rejectedArtifact === 'design-review' || feedback.rejectedRole === 'designer') return 'design';
+  if (feedback.rejectedArtifact === 'security-review' || feedback.rejectedRole === 'security') return 'review';
   if (feedback.rejectedRole === 'reviewer') return 'review';
   if (feedback.rejectedRole === 'tech-lead') return 'tech-spec';
   if (feedback.rejectedRole === 'pm') return 'spec';
@@ -2382,6 +2405,49 @@ export function buildProductionTeamTaskDeps(
       );
     },
 
+    security: async ({
+      task,
+      diff,
+      spec,
+      context,
+      tests,
+      coderHandoffNotes,
+      findingsLedger,
+      reviewState,
+      judgmentContext,
+      judgmentBatchId,
+    }) => {
+      const findingsBlock = formatFindingsLedger(findingsLedger);
+      const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
+      const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
+        ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
+        ...(testsBlock !== undefined ? ['', `## Tests\n\n${testsBlock}`] : []),
+        ...(context !== undefined
+          ? ['', `## Project context\n\n${scrubPathsInText(context)}`]
+          : []),
+        ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
+        ...(findingsBlock !== '' ? ['', findingsBlock] : []),
+      ].join('\n');
+      return judge(
+        'security',
+        models.security,
+        SECURITY_INSTRUCTION,
+        body,
+        task.id,
+        'security-review',
+        judgmentBatchId,
+        (reply) => {
+          requireGateVerdict(reply, 'security-review');
+          return parseGateVerdict(reply, 'security-review');
+        },
+        getJudgmentBatchCheckpoint(task, judgmentBatchId),
+      );
+    },
+
     acceptWithRationale: async ({
       task,
       spec,
@@ -2632,10 +2698,8 @@ export interface TaskWorkflowRunnerArgs {
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
-/** Map a selected `tasks.md` task onto the workflow's SizedTask. tasks.md
- *  carries no sizing metadata, so v1 uses conservative defaults: tests
- *  required, no designer (spec req 24's non-flagged default). */
-function toSizedTask(task: SelectedTask): SizedTask {
+/** Map a selected `tasks.md` task onto the workflow's SizedTask. */
+export function toSizedTask(task: SelectedTask): SizedTask {
   const manualLiveGate = isManualLiveGateTask(task);
   return {
     id: task.id,
@@ -2643,6 +2707,7 @@ function toSizedTask(task: SelectedTask): SizedTask {
     testStrategy: manualLiveGate ? 'manual-live-gate' : 'code-tests-required',
     validationPolicy: task.validationPolicy ?? 'required',
     designerNeeded: false,
+    securityNeeded: task.securityNeeded === true,
     roles: manualLiveGate ? ['human'] : ['qa', 'tech-lead', 'coder', 'reviewer'],
   };
 }
@@ -2732,6 +2797,8 @@ function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding 
       return models.reviewer;
     case 'designer':
       return models.designer;
+    case 'security':
+      return models.security;
     case 'adjudicator':
       return models.adjudicator;
     default:

@@ -51,6 +51,7 @@ import {
   destroyWorktree as defaultDestroyWorktree,
   defaultRunGit,
   getProductConfig,
+  resolveCheckedOutWorkBranch,
   verifyWorktreeProvisioning,
   worktreeProvisioningTerminalReason,
   type CloseoutValidationStrategy,
@@ -86,6 +87,7 @@ import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
 import {
+  legacyWorkBranchName,
   VALID_SLUG,
   worktreePathFor,
   type SandboxSpec,
@@ -208,7 +210,12 @@ import {
   treeForCommit,
   verifyTaskBaseTree,
 } from './canonical-git.js';
-import { withBaseBranchLock } from './work-run-merge-lock.js';
+import {
+  canonicalRepoId,
+  hasConcurrentBaseBranchRun,
+  withBaseBranchLock,
+} from './work-run-merge-lock.js';
+import { withRunLeaseContext } from './lease-lifecycle.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import { rebuildRegistry } from './registry-rebuild.js';
 import { resolveLiveWorkProject } from './work-project.js';
@@ -431,8 +438,11 @@ export async function preflightOrchestratedRecovery(
   } catch {
     return { kind: 'not-resumable', reason: 'product recovery configuration is unavailable' };
   }
-  const expectedBranch = workBranchName(project);
-  if (cursor.worktreePath !== expectedPath || cursor.branch !== expectedBranch || cursor.baseBranch !== expectedBaseBranch) {
+  const expectedBranches = new Set([
+    workBranchName(product, project),
+    legacyWorkBranchName(project),
+  ]);
+  if (cursor.worktreePath !== expectedPath || !expectedBranches.has(cursor.branch) || cursor.baseBranch !== expectedBaseBranch) {
     return { kind: 'not-resumable', reason: 'resumable cursor does not match the expected worktree and branch' };
   }
   try {
@@ -453,7 +463,7 @@ export async function preflightOrchestratedRecovery(
   if (registeredBranch === null) {
     return { kind: 'not-resumable', reason: 'worktree is not registered on the expected branch' };
   }
-  if (registeredBranch !== expectedBranch) {
+  if (registeredBranch !== cursor.branch) {
     return { kind: 'not-resumable', reason: 'worktree is registered on a different branch' };
   }
 
@@ -618,6 +628,7 @@ export interface ShutdownParkDeps {
   preflightRecovery: (mutation: MutationDescriptor<OrchestratedWorkPayload>) => Promise<OrchestratedRecoveryPreflightResult>;
   runGit: GitRunner;
   worktreeExists: (path: string) => boolean;
+  resolveWorkBranch: (product: string, project: string, worktreePath: string) => Promise<string>;
   writeTerminal: (descriptor: MutationDescriptor, event: MutationEvent) => void;
   resolveBaseBranch: (product: string) => string;
   resolveWorktreePath: (product: string, project: string) => string;
@@ -635,6 +646,8 @@ export function defaultShutdownParkDeps(): ShutdownParkDeps {
     preflightRecovery: preflightOrchestratedRecovery,
     runGit: defaultRunGit,
     worktreeExists: existsSync,
+    resolveWorkBranch: (product, project, worktree) =>
+      resolveCheckedOutWorkBranch({ product, project, worktree, runGit: defaultRunGit }),
     writeTerminal: writeRecoveredTerminalMutation,
     resolveBaseBranch: (product) => {
       try {
@@ -684,7 +697,6 @@ export async function parkInFlightOrchestratedRuns(
       const payload = descriptor.payload as OrchestratedWorkPayload;
       const projectSlug = payload.projectSlug;
       const product = payload.product ?? 'rune';
-      const branch = workBranchName(projectSlug);
       const baseBranch = deps.resolveBaseBranch(product);
       const worktreePath = deps.resolveWorktreePath(product, projectSlug);
       if (!deps.worktreeExists(worktreePath)) {
@@ -695,13 +707,22 @@ export async function parkInFlightOrchestratedRuns(
         result.skipped.push(descriptor.id);
         continue;
       }
-
       const wipSha = await commitWorktreeWip(deps.runGit, worktreePath, {
         message: `rune(${product}): WIP — shutdown park — ${projectSlug}`,
         logLabel: 'shutdown WIP commit',
         product,
         projectSlug,
       });
+      let branch = workBranchName(product, projectSlug);
+      try {
+        branch = await deps.resolveWorkBranch(product, projectSlug, worktreePath);
+      } catch (err) {
+        log.warn('orchestrated-work-runner: shutdown park branch resolution failed; using namespaced fallback', {
+          id: descriptor.id,
+          project: projectSlug,
+          error: (err as Error).message,
+        });
+      }
       const reason =
         wipSha === null
           ? 'parked at shutdown: process restart interrupted task execution'
@@ -2369,7 +2390,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     const deps = runtimeDeps;
     const recovery = recoveryRedispatchOptions.get(descriptor);
     recoveryRedispatchOptions.delete(descriptor);
-    const branch = recovery?.branch ?? workBranchName(projectSlug);
+    let branch = recovery?.branch ?? workBranchName(product, projectSlug);
     let terminalStatePersisted = false;
     const persistTerminalStateOnce = (terminal: MutationEvent): void => {
       if (terminalStatePersisted) return;
@@ -2500,6 +2521,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             worktreeRoot: config.WORKTREE_ROOT,
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
           });
+          branch = sandbox.branch ?? branch;
         }
       } catch (err) {
         const detail = (err as Error).message;
@@ -2573,6 +2595,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let validationCommandProfiles: ValidationCommandProfile[] = [];
       let validationAdapters: ValidationAdapter[] = [];
       let validationCwd: string | undefined;
+      let scopeRoots: string[] | undefined;
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
         baseBranch = productConfig.baseBranch;
@@ -2581,6 +2604,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
         validationAdapters = productConfig.validationAdapters ?? [];
         validationCwd = productConfig.validationCwd;
+        scopeRoots = productConfig.scopeRoots;
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
       } catch (err) {
         if ((err as Error).message.includes('invalid closeoutValidationStrategy')) {
@@ -2678,13 +2702,18 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             durationMs: Date.now() - startedAtMs,
             exitFact: 'clean-exit',
           });
-          const hasConcurrentRun = (): boolean =>
-            [...activeRuns.values()].some(
-              (h) =>
-                (h.descriptor.kind === 'orchestrated-work' || h.descriptor.kind === 'work-run') &&
-                h.descriptor.id !== descriptor.id &&
-                ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'rune') === product &&
-                h.descriptor.status === 'running',
+          const repoId = await canonicalRepoId(repoPath);
+          const hasConcurrentRun = (): Promise<boolean> =>
+            hasConcurrentBaseBranchRun(
+              activeRuns.values(),
+              descriptor.id,
+              repoId,
+              baseBranch,
+              new Set(['orchestrated-work', 'work-run']),
+              (candidateProduct) => {
+                const candidate = getProductConfig(candidateProduct, config.PRODUCTS_CONFIG_FILE);
+                return { repoPath: candidate.repoPath, baseBranch: candidate.baseBranch };
+              },
             );
 
           const effects: FinalizerEffects = {
@@ -2826,7 +2855,20 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             recordGateValidationReceipt: (receipt) =>
               writeGateValidationReceipt(deps.workRunsDir, descriptor.id, receipt),
             gate: () =>
-              withBaseBranchLock(product, baseBranch, async () => {
+              withRunLeaseContext({
+                run: {
+                  id: descriptor.id,
+                  kind: descriptor.kind,
+                  product,
+                  project: projectSlug,
+                  status: 'running',
+                  startedAt: descriptor.createdAt,
+                  lastHeartbeatAt: new Date().toISOString(),
+                },
+                operationId: 'integration-finalize',
+                cancelled: ctx.cancel,
+                onCancel: ctx.onCancel,
+              }, () => withBaseBranchLock(repoId, baseBranch, async () => {
                 const verdict = await deps.runGate({
                   product,
                   repoPath,
@@ -2837,15 +2879,17 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   validationCommandProfiles,
                   validationAdapters,
                   ...(validationCwd !== undefined ? { validationCwd } : {}),
+                  ...(scopeRoots !== undefined ? { scopeRoots } : {}),
+                  sourceWorktree: runSandbox.worktree,
                   tasksRemaining: gateTasksRemaining,
-                  concurrentRun: hasConcurrentRun(),
+                  concurrentRun: await hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
                   validationArtifactsDir: join(deps.workRunsDir, descriptor.id, 'validation-diagnostics'),
                   cancelled: ctx.cancel,
                 });
                 gateValidationReceipt = verdict.validationReceipt;
                 return verdict;
-              }),
+              })),
             cancelled: ctx.cancel,
             alert: (reason) => {
               gateHeldReason = reason;

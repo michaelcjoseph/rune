@@ -917,11 +917,14 @@
     const startMs = Date.parse(wr.startedAt ?? '');
     const elapsed = Number.isFinite(startMs) ? fmtDuration(Math.max(0, Date.now() - startMs)) : '';
     const head = elapsed ? `running · ${escHtml(elapsed)}` : 'running';
+    const waiting = wr.waitingOn
+      ? ` <span class="workrun-waiting">· waiting on ${escHtml(wr.waitingOn)}</span>`
+      : '';
     const lines = (Array.isArray(wr.lastOutput) ? wr.lastOutput : [])
       .map(l => escHtml(String(l))).join('<br>');
     const out = lines ? `<div class="cockpit-workrun-output">${lines}</div>` : '';
     return `<div class="cockpit-workrun">` +
-      `<div class="cockpit-workrun-line">${head}${link}</div>` +
+      `<div class="cockpit-workrun-line">${head}${waiting}${link}</div>` +
       out +
       `</div>`;
   }

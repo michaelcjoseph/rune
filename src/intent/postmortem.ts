@@ -38,6 +38,7 @@ const ROLE_OWNERSHIP: Record<RoleName, string> = {
   coder: 'implementation of the selected task',
   reviewer: 'independent code review, weighted to objection classes usage cannot surface',
   designer: 'UX/UI/front-end review',
+  security: 'security review of trust boundaries, credentials, containment, and fail-closed behavior',
   adjudicator: 'tie-break rulings on reviewer-vs-tech-lead splits over a diff',
 };
 

@@ -42,6 +42,7 @@ export type RoleName =
   | 'coder'
   | 'reviewer'
   | 'designer'
+  | 'security'
   | 'adjudicator';
 
 /** Canonical role inventory, the spec's ownership table in slug form. */
@@ -52,6 +53,7 @@ export const ROLE_NAMES: readonly RoleName[] = [
   'coder',
   'reviewer',
   'designer',
+  'security',
   'adjudicator',
 ] as const;
 

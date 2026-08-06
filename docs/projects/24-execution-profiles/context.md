@@ -40,4 +40,27 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-Start with: Add canonical repository identity resolution using the realpath of git-common-dir, with a deterministic realpath(repoPath) fallback, and rekey every base-branch lock acquisition and concurrent-run fact from product/baseBranch to repoId/baseBranch (acquisition sites: `work-runner.ts`, `orchestrated-work-runner.ts`, `work-run-release.ts`, `recovery-finalize-runner.ts`). Tests prove products sharing a repository contend (rune/rune-mcp; writing/brand) and distinct repositories do not. Note: security-role-integration must land before scope-boundary-gate (the first security-tagged task).
+- tech-lead repaired test intent: src/jobs/execution-profile.test.ts
+- eserved legacy behavior for unprofiled products.
+- Updated architecture/configuration documentation.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 354 files passed; 6,351 tests passed; 8 todo
+- QA profile tests — 23 passed
+- `git diff --check` — clean
+- No tests removed
+- No commit created
+- coder self-review (revised): Persisted hash-pinned profiles on mutation descriptors so recovered runs retain their original contract, propagated snapshots through supervision transitions, and added regression coverage. npm run build and npm test passed (354 files, 6,352 tests; 8 todo). No tests removed.
+- ts.json`.
+- Added direct snapshot hash and unknown-field rejection tests.
+- Updated architecture documentation.
+
+Validation:
+
+- `npm run build` — passed
+- `npm test` — 354 files passed; 6,361 tests passed; 8 todo
+- Staged and unstaged `git diff --check` — clean
+- No tests removed
+- No commit created

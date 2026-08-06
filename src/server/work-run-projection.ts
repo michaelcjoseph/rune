@@ -36,6 +36,7 @@ import type { WorkOutcome } from '../jobs/work-run-classify.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { WorkRunProjection, WorkRunOutcome } from '../intent/cockpit.js';
 import type { SupervisedRun } from '../intent/supervision.js';
+import { waitingResourceLabel } from '../intent/lease-presentation.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('work-run-projection');
@@ -119,6 +120,7 @@ function buildProjection(
     NonNullable<ReturnType<typeof readWorkRunSummary>>,
     'trigger' | 'disposition' | 'contextFailure' | 'gateValidationReceipt'
   >,
+  waitingOn?: string,
 ): WorkRunProjection {
   const transcriptPath = join(dir, id, 'transcript.jsonl');
   const hasTranscript = existsSync(transcriptPath);
@@ -129,6 +131,7 @@ function buildProjection(
     lastOutput: hasTranscript ? readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES) : [],
     startedAt,
     transcriptUrl: hasTranscript ? `/api/work-runs/${id}/transcript` : null,
+    ...(waitingOn !== undefined ? { waitingOn } : {}),
     ...(terminal?.trigger !== undefined ? { trigger: terminal.trigger } : {}),
     ...(terminal?.disposition !== undefined ? { disposition: terminal.disposition } : {}),
     ...(terminal?.contextFailure !== undefined
@@ -222,7 +225,15 @@ export function readWorkRunProjections(
       if (!Number.isNaN(existingTs) && (Number.isNaN(activeTs) || existingTs > activeTs)) continue;
     }
     // In-flight → no terminal verdict yet (outcome/reason null).
-    out[slug] = buildProjection(dir, run.id, null, null, run.startedAt ?? '');
+    out[slug] = buildProjection(
+      dir,
+      run.id,
+      null,
+      null,
+      run.startedAt ?? '',
+      undefined,
+      waitingResourceLabel(run.waitingOn),
+    );
   }
   if (rows.length > 0 || activeRuns.length > 0) {
     log.debug('readWorkRunProjections', {

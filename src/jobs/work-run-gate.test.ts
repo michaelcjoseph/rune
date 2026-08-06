@@ -94,6 +94,16 @@ describe('evaluateGate — hard merge gate (P1.5)', () => {
     });
   });
 
+  it('fails closed with a machine-readable scope-violation carrying only offending relative paths', () => {
+    expect(evaluateGate(greenFacts({
+      scopeViolation: { offendingPaths: ['docs/unrelated.md', 'src/link-out'] },
+    }))).toEqual({
+      ok: false,
+      reason: 'scope-violation',
+      offendingPaths: ['docs/unrelated.md', 'src/link-out'],
+    });
+  });
+
   it('is ordered first-failure-wins: missing-validation-command precedes every other failure', () => {
     // Everything red at once — the fail-closed missing-command check wins.
     const allRed = greenFacts({

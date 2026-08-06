@@ -34,6 +34,7 @@ import {
   createProductionTaskWorkflowRunner as createProductionTaskWorkflowRunnerRaw,
   parseCoderSelfReviewResult,
   resolveTeamRoleModels,
+  toSizedTask,
   type JudgmentModelCall,
   type TeamRoleModels,
   type TeamTaskSeams,
@@ -53,8 +54,11 @@ import {
   type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
-import type { SelectedTask } from '../intent/orch-task-select.js';
-import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
+import { selectNextTask, type SelectedTask } from '../intent/orch-task-select.js';
+import {
+  MANUAL_LIVE_GATE_MARKER,
+  sizedTasksToMarkdown,
+} from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 import { isExecutionCheckpoint } from '../intent/execution-failure.js';
@@ -293,7 +297,7 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
     const policy = loadRealPolicy();
 
     // Judgment roles adjudicate on anthropic, through the Claude CLI.
-    for (const role of ['pm', 'tech-lead', 'reviewer', 'designer']) {
+    for (const role of ['pm', 'tech-lead', 'reviewer', 'designer', 'security']) {
       const entry = registryEntryForRole(policy, role);
       expect(entry.provider, role).toBe('anthropic');
       expect(entry.format, role).toBe('claude');
@@ -317,6 +321,11 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
     expect(models.pm).toMatchObject({ alias: declared['pm'], provider: 'anthropic' });
     expect(models.techLead).toMatchObject({ alias: declared['tech-lead'], provider: 'anthropic' });
     expect(models.designer).toMatchObject({ alias: declared['designer'], provider: 'anthropic' });
+    expect((models as TeamRoleModels & { security?: unknown }).security).toMatchObject({
+      alias: declared['security'],
+      provider: 'anthropic',
+      format: 'claude',
+    });
     // The reviewer resolves to its declared default even under the
     // distinct-from-coder-provider filter — it is not downgraded to a fallback.
     expect(models.reviewer).toMatchObject({ alias: declared['reviewer'], provider: 'anthropic' });
@@ -2462,6 +2471,67 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(designer).not.toHaveProperty('pass');
   });
 
+  it('assembles and parses the production security review seam', async () => {
+    let securityMessage = '';
+    const securityFinding = {
+      class: 'security' as const,
+      severity: 'medium' as const,
+      location: 'src/security.ts:12',
+      rationale: 'the untrusted path can cross the execution boundary',
+      reversible: true,
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, message }) => {
+        if (role !== 'security') return GREEN_JUDGMENT_REPLY;
+        securityMessage = message;
+        return [
+          '```security-review',
+          JSON.stringify({
+            outcome: 'fail',
+            findings: [securityFinding],
+            notes: 'execution containment remains bypassable',
+          }),
+          '```',
+        ].join('\n');
+      },
+    }));
+    const findingsLedger: FindingsLedgerEntry[] = [{
+      ...securityFinding,
+      id: 'finding-security-boundary',
+      sourceGate: 'security',
+      raisedRound: 1,
+      status: 'open',
+    }];
+
+    const verdict = await deps.security!({
+      task: { ...sizedTask, securityNeeded: true },
+      diff: 'diff --git a/src/security.ts b/src/security.ts',
+      spec: 'security spec',
+      tests: ['src/security.test.ts'],
+      coderHandoffNotes: ['wired the fail-closed execution boundary'],
+      findingsLedger,
+      reviewState: {
+        hash: 'security-review-hash',
+        baseTree: '1111111111111111111111111111111111111111',
+        currentTree: '2222222222222222222222222222222222222222',
+        changedPaths: ['src/security.ts'],
+      },
+    });
+
+    expect(verdict).toMatchObject({
+      outcome: 'fail',
+      findings: [securityFinding],
+      notes: 'execution containment remains bypassable',
+    });
+    expect(securityMessage).toContain('## Task\n\ndemo task');
+    expect(securityMessage).toContain('## Complete task implementation relative to durable task base');
+    expect(securityMessage).toContain('## Spec\n\nsecurity spec');
+    expect(securityMessage).toContain('## Tests\n\nsrc/security.test.ts');
+    expect(securityMessage).toContain('## Coder handoff notes');
+    expect(securityMessage).toContain('## Open findings ledger for this round');
+    expect(securityMessage).toContain('finding-security-boundary');
+  });
+
   it('normalizes omitted tech-lead and designer reversible flags to false at the production role boundary', async () => {
     const techLeadFinding = {
       class: 'data-integrity',
@@ -3552,6 +3622,29 @@ describe('no-stub regression (Phase 8)', () => {
     expect(evidence.blockedReason).toMatch(/manual\/live release gate/i);
     expect(evidence.blockedReason).toMatch(/operator evidence/i);
     expect(preflightExecution).not.toHaveBeenCalled();
+  });
+
+  it('round-trips combined manual-live and security markers into workflow metadata', () => {
+    const markdown = sizedTasksToMarkdown([{
+      id: 'live-security-gate',
+      text: 'Operator verifies the security boundary',
+      phase: 'Phase 3 - Release',
+      testStrategy: 'manual-live-gate',
+      validationPolicy: 'reviewed-no-validation',
+      designerNeeded: false,
+      securityNeeded: true,
+      roles: ['human'],
+    }]);
+    const selected = selectNextTask(markdown);
+
+    expect(selected.kind).toBe('task');
+    if (selected.kind !== 'task') return;
+    expect(selected.task.text).toMatch(/_\(security review\)_ \*\(manual\/live - not automatable\)\*$/);
+    expect(toSizedTask(selected.task)).toMatchObject({
+      testStrategy: 'manual-live-gate',
+      roles: ['human'],
+      securityNeeded: true,
+    });
   });
 
   it('blocks on typed preflight evidence before any judgment or execution role', async () => {

@@ -176,6 +176,8 @@ const mockWithBaseBranchLock = vi.fn(
 );
 vi.mock('./work-run-merge-lock.js', () => ({
   withBaseBranchLock: mockWithBaseBranchLock,
+  canonicalRepoId: async (repoPath: string) => repoPath,
+  hasConcurrentBaseBranchRun: async () => false,
   baseBranchLockKey: (p: string, b: string) => `${p}:${b}`,
 }));
 
@@ -1197,7 +1199,7 @@ describe('workRunApplier', () => {
       });
     });
 
-    it('calls createWorktree with product=rune, project=slug, branch=rune-work/<slug>', async () => {
+    it('calls createWorktree with product=rune, project=slug, branch=rune-work/<product>/<slug>', async () => {
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });
       mockSpawn.mockReturnValue(fakeChild);
@@ -1221,7 +1223,7 @@ describe('workRunApplier', () => {
       // Stable per-PROJECT branch (NOT per-run-id), so the next run resumes this
       // branch instead of re-forking off main and restarting from Phase 1
       // (docs/projects/bugs.md). Independent of the run id.
-      expect(callArgs.branch).toBe('rune-work/06-webview');
+      expect(callArgs.branch).toBe('rune-work/rune/06-webview');
     });
 
     it('adds a RESUME note to the agent prompt when createWorktree resumed an existing branch', async () => {
@@ -1829,7 +1831,7 @@ describe('workRunApplier', () => {
       expect(forensicsCalledAtTerminal).toBe(true);
       const opts = runForensicsSpy.mock.calls[0]![0] as any;
       expect(opts.worktree).toBe(FAKE_WORKTREE);
-      expect(opts.branch).toBe('rune-work/06-webview'); // stable per-project branch
+      expect(opts.branch).toBe('rune-work/rune/06-webview'); // stable product/project branch
       expect(opts.outDir).toBe('/tmp/test-work-runs/mut-forensics');
       // The default git stub reports a clean tree → noop → nonClean false.
       expect(opts.nonClean).toBe(false);
@@ -2098,7 +2100,7 @@ describe('workRunApplier', () => {
       expect(mockDestroyWorktree).toHaveBeenCalledTimes(1);
     });
 
-    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(product, baseBranch) (RED until wiring)', async () => {
+    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(repoId, baseBranch)', async () => {
       setupBranchComplete();
       mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
 
@@ -2110,9 +2112,9 @@ describe('workRunApplier', () => {
       // Hold mode leaves the gated-merge effects undefined → RED.
       expect(typeof effects.gate).toBe('function');
       // The real gated-merge finalizer the wiring routes through invokes the gate
-      // effect, which acquires the per-product/per-base-branch lock and runs the
+      // effect, which acquires the per-repository/per-base-branch lock and runs the
       // gate inside it.
-      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('rune', 'main', expect.any(Function));
+      expect(mockWithBaseBranchLock).toHaveBeenCalledWith(TEST_PROJECT_ROOT, 'main', expect.any(Function));
       expect(mockRunGate).toHaveBeenCalledWith(expect.objectContaining({
         validationCommands: ['npm run build', 'npm test'],
         validationAdapters: [{ command: 'npm test', runner: 'vitest' }],
@@ -2228,23 +2230,28 @@ describe('workRunApplier', () => {
       expect(refreshRegistrySpy).toHaveBeenCalledOnce();
     });
 
-    it('surfaces the gate-held reason on the terminal event when the gate refuses (never a silent drop)', async () => {
-      setupBranchComplete();
-      // Gate refuses → run holds at branch-complete, never merges.
-      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
-      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+    it.each(['tests-red', 'scope-violation'] as const)(
+      'surfaces %s as the meaningful gate-held reason on the terminal event when the gate refuses',
+      async (reason) => {
+        setupBranchComplete();
+        // Gate refuses → run holds at branch-complete, never merges.
+        mockRunGate.mockResolvedValueOnce(reason === 'scope-violation'
+          ? { ok: false, reason, offendingPaths: ['outside-scope.txt'] }
+          : { ok: false, reason });
+        mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
 
-      const events: any[] = [];
-      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
-        events.push(event);
-      }
+        const events: any[] = [];
+        for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
+          events.push(event);
+        }
 
-      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
-      expect(terminal.data.outcome).toBe('branch-complete');
-      expect(terminal.data.merged).toBe(false);
-      expect(terminal.data.gateHeldReason).toBe('tests-red');
-      expect(refreshRegistrySpy).not.toHaveBeenCalled();
-    });
+        const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+        expect(terminal.data.outcome).toBe('branch-complete');
+        expect(terminal.data.merged).toBe(false);
+        expect(terminal.data.gateHeldReason).toBe(reason);
+        expect(refreshRegistrySpy).not.toHaveBeenCalled();
+      },
+    );
 
     it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {
       const { recordWorkRunPhase, readLastWorkRunPhase } = setupBranchComplete();

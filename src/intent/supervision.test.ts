@@ -115,8 +115,16 @@ describe('supervision — visibility surface (test-plan §10)', () => {
 
 describe('supervision — crashed runs (test-plan §10)', () => {
   it('transitions a crashed run to a terminal failed state — never stuck running', () => {
-    const crashed = markCrashed(run({ status: 'running' }));
+    const crashed = markCrashed(run({
+      status: 'running',
+      waitingOn: {
+        resource: { type: 'base-branch', key: 'repo-a:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-01-15T00:05:00.000Z',
+      },
+    }));
     expect(crashed.status).toBe('failed');
+    expect(crashed).not.toHaveProperty('waitingOn');
     // A crashed run is no longer active in the visibility surface.
     expect(getVisibility([crashed], HEARTBEAT_MS, NOW).active).toEqual([]);
   });
@@ -133,7 +141,16 @@ describe('supervision — crashed runs (test-plan §10)', () => {
 
 describe('supervision — restart recovery (test-plan §10)', () => {
   it('marks a run that was running at restart as unknown — not falsely running forever', () => {
-    expect(recoverRun(run({ status: 'running' })).status).toBe('unknown');
+    const recovered = recoverRun(run({
+      status: 'running',
+      waitingOn: {
+        resource: { type: 'base-branch', key: 'repo-a:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-01-15T00:05:00.000Z',
+      },
+    }));
+    expect(recovered.status).toBe('unknown');
+    expect(recovered).not.toHaveProperty('waitingOn');
   });
 
   it('leaves a run in a terminal or blocked state unchanged across a restart', () => {

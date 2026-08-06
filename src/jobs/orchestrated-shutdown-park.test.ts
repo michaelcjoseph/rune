@@ -78,6 +78,7 @@ function makeDeps(overrides: Partial<ShutdownParkDeps> = {}): ShutdownParkDeps &
     preflightRecovery: vi.fn(async () => ({ kind: 'not-resumable' as const, reason: 'missing cursor' })),
     runGit: dirtyGitStub(),
     worktreeExists: vi.fn(() => true),
+    resolveWorkBranch: vi.fn(async () => 'rune-work/rune/21-parallel-product-chats'),
     writeTerminal: vi.fn(),
     resolveBaseBranch: vi.fn(() => 'main'),
     resolveWorktreePath: vi.fn(() => WORKTREE),
@@ -114,7 +115,7 @@ describe('parkInFlightOrchestratedRuns', () => {
       product: 'rune',
       parked: true,
       operatorWorktreePath: WORKTREE,
-      branch: 'rune-work/21-parallel-product-chats',
+      branch: 'rune-work/rune/21-parallel-product-chats',
       baseBranch: 'main',
       preserveBranch: true,
       preserveWorktree: true,
@@ -142,6 +143,51 @@ describe('parkInFlightOrchestratedRuns', () => {
     expect(deps.runGit).not.toHaveBeenCalled();
     // The mutation must stay `running` on disk — recovery reads only running.
     expect(descriptor.status).toBe('running');
+  });
+
+  it('records the effective legacy branch when a legacy worktree must be parked', async () => {
+    const descriptor = runningDescriptor();
+    const legacyBranch = 'rune-work/21-parallel-product-chats';
+    const deps = makeDeps({
+      listActiveRuns: () => [handleFor(descriptor)],
+      resolveWorkBranch: vi.fn(async () => legacyBranch),
+    });
+
+    await parkInFlightOrchestratedRuns(deps);
+
+    const [, event] = deps.writeTerminal.mock.calls[0] as [MutationDescriptor, MutationEvent];
+    expect(event.data).toMatchObject({ branch: legacyBranch });
+  });
+
+  it('commits WIP before branch resolution and still parks with fallback metadata when HEAD is unsupported', async () => {
+    const descriptor = runningDescriptor();
+    const order: string[] = [];
+    const runGit = vi.fn(async (args: string[]) => {
+      order.push(args[0]!);
+      if (args[0] === 'status') return { stdout: ' M src/index.ts\n', stderr: '' };
+      if (args[0] === 'rev-parse') return { stdout: 'abcdef1234567890\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const deps = makeDeps({
+      listActiveRuns: () => [handleFor(descriptor)],
+      runGit,
+      resolveWorkBranch: vi.fn(async () => {
+        order.push('resolve-work-branch');
+        throw new Error("worktree is checked out on unsupported work branch 'HEAD'");
+      }),
+    });
+
+    const result = await parkInFlightOrchestratedRuns(deps);
+
+    expect(result).toEqual({ parked: [descriptor.id], resumable: [], skipped: [] });
+    expect(order).toEqual(['status', 'add', 'commit', 'rev-parse', 'resolve-work-branch']);
+    const [, event] = deps.writeTerminal.mock.calls[0] as [MutationDescriptor, MutationEvent];
+    expect(event.data).toMatchObject({
+      branch: 'rune-work/rune/21-parallel-product-chats',
+      preserveBranch: true,
+      preserveWorktree: true,
+    });
+    expect((event.data as { reason: string }).reason).toContain('WIP preserved as abcdef1');
   });
 
   it('parks a clean worktree without a WIP commit; reason carries no sha', async () => {

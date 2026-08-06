@@ -13,6 +13,7 @@ import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
 import { readFileSync } from 'node:fs';
 import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '../intent/cockpit.js';
+import { waitingResourceLabel } from '../intent/lease-presentation.js';
 import { buildHomePulse } from '../intent/home-pulse.js';
 import { buildProductDeepView, type ProductDeepViewWorkRun } from '../intent/product-deep-view.js';
 import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
@@ -2084,6 +2085,7 @@ function handleApiWorkRunLive(res: ServerResponse, id: string): void {
   const transcript = readLiveTranscriptSnapshot(id);
   const target = supervisedRunTarget(run);
   const agents = agentsFromTaskRecords(readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, id));
+  const waitingOn = waitingResourceLabel(run.waitingOn);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     runId: id,
@@ -2096,6 +2098,7 @@ function handleApiWorkRunLive(res: ServerResponse, id: string): void {
     parkedQuestion: run.parkedQuestion,
     agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
     lastLogLines: transcript.lastLogLines,
+    ...(waitingOn !== undefined ? { waitingOn } : {}),
     ts: new Date().toISOString(),
   }));
 }

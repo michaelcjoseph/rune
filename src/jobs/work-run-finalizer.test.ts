@@ -1536,6 +1536,7 @@ describe('runFinalizer — gated-merge gate: each condition stops at branch-comp
     'concurrent-run',
     'missing-validation-command',
     'validation-timeout',
+    'scope-violation',
   ];
 
   it.each(FAIL_REASONS)(
@@ -1543,7 +1544,9 @@ describe('runFinalizer — gated-merge gate: each condition stops at branch-comp
     async (reason) => {
       const ev = branchCompleteEvent();
       const { effects } = makeEffects(ev, {
-        gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason })),
+        gate: vi.fn(async (): Promise<GateResult> => reason === 'scope-violation'
+          ? { ok: false, reason, offendingPaths: ['outside-scope.txt'] }
+          : { ok: false, reason }),
       });
 
       const result = await runFinalizer(gatedMergeInput(), effects);

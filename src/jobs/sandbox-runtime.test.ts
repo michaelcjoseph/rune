@@ -43,6 +43,8 @@ import {
   vitestCacheDirFor,
   removeVitestCache,
   verifyWorktreeProvisioning,
+  resolveCheckedOutWorkBranch,
+  resolveExistingWorkBranch,
   defaultRunGit,
   type ProductConfig,
   type GitRunner,
@@ -165,6 +167,69 @@ function porcelainListing(worktreePath: string): string {
   return `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/main\n\n`;
 }
 
+describe('resolveCheckedOutWorkBranch', () => {
+  it.each([
+    'rune-work/assay/01-probe',
+    'rune-work/01-probe',
+  ])('accepts the supported effective branch shape %s', async (branch) => {
+    const runGit = vi.fn<GitRunner>(async () => ({ stdout: `${branch}\n`, stderr: '' }));
+
+    await expect(resolveCheckedOutWorkBranch({
+      product: 'assay',
+      project: '01-probe',
+      worktree: '/tmp/worktrees/assay/01-probe',
+      runGit,
+    })).resolves.toBe(branch);
+  });
+
+  it('rejects an unrelated or detached branch during recovery', async () => {
+    const runGit = vi.fn<GitRunner>(async () => ({ stdout: 'main\n', stderr: '' }));
+
+    await expect(resolveCheckedOutWorkBranch({
+      product: 'assay',
+      project: '01-probe',
+      worktree: '/tmp/worktrees/assay/01-probe',
+      runGit,
+    })).rejects.toThrow(/unsupported work branch/);
+  });
+});
+
+describe('resolveExistingWorkBranch', () => {
+  it('resolves the namespaced branch from repository refs without consulting worktree HEAD', async () => {
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'rev-parse') throw new Error('absent worktree HEAD must not be consulted');
+      if (args.at(-1) === 'refs/heads/rune-work/assay/01-probe') {
+        return { stdout: 'namespaced-sha refs/heads/rune-work/assay/01-probe\n', stderr: '' };
+      }
+      throw new Error('missing ref');
+    });
+
+    await expect(resolveExistingWorkBranch({
+      product: 'assay',
+      project: '01-probe',
+      repoPath: '/tmp/repos/assay',
+      runGit,
+    })).resolves.toBe('rune-work/assay/01-probe');
+    expect(runGit).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the legacy repository ref when the namespaced ref is absent', async () => {
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.at(-1) === 'refs/heads/rune-work/01-probe') {
+        return { stdout: 'legacy-sha refs/heads/rune-work/01-probe\n', stderr: '' };
+      }
+      throw new Error('missing ref');
+    });
+
+    await expect(resolveExistingWorkBranch({
+      product: 'assay',
+      project: '01-probe',
+      repoPath: '/tmp/repos/assay',
+      runGit,
+    })).resolves.toBe('rune-work/01-probe');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Temp dir management
 // ---------------------------------------------------------------------------
@@ -244,6 +309,25 @@ describe('readProductsConfig', () => {
       },
     });
     expect(() => readProductsConfig(configPath)).toThrow(/invalid product slug|\.\.\/etc/i);
+  });
+
+  it('rejects configured product keys that collide after branch sanitization', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      'rune mcp': {
+        repoPath: '/fake/repo',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+      },
+      'rune-mcp': {
+        repoPath: '/fake/repo',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/both normalize to 'rune-mcp'/);
   });
 
   it('rejects an entry missing the required repoPath', () => {
@@ -658,6 +742,73 @@ describe('readProductsConfig — validationCwd', () => {
   });
 });
 
+// Scope roots are deliberately separate from scopePath: the latter selects a
+// run's working directory, while these patterns constrain the files its work
+// may change. Keep this parser-level contract here so malformed policy never
+// reaches the merge gate.
+describe('readProductsConfig — scopeRoots', () => {
+  it('defaults change-validation roots to scopePath without changing the working-directory field', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: 'docs/rune',
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: 'docs/rune',
+      scopeRoots: ['docs/rune'],
+    });
+  });
+
+  it('normalizes a legacy scopePath only for its derived change-validation root', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: './docs/rune/',
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: './docs/rune/',
+      scopeRoots: ['docs/rune'],
+    });
+  });
+
+  it('preserves explicit repo-relative scope-root patterns instead of conflating them with scopePath', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: 'docs/rune',
+        scopeRoots: ['apps/site/**', 'packages/content/*.md'],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: 'docs/rune',
+      scopeRoots: ['apps/site/**', 'packages/content/*.md'],
+    });
+  });
+
+  it.each([
+    ['not-an-array', 'apps/site/**'],
+    ['absolute path', ['/private/outside']],
+    ['traversal', ['../outside']],
+    ['embedded traversal', ['apps/../outside']],
+    ['empty root', ['']],
+    ['non-string member', ['apps/site/**', 42]],
+  ])('fails closed for %s scopeRoots', (_label, scopeRoots) => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopeRoots,
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/scopeRoots/i);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // readProductsConfig — product policy schema (project 19, W2 Phase 4)
 //
@@ -942,6 +1093,33 @@ describe('createWorktree', () => {
     expect(spec.baseSha).toBe(headSha);
   });
 
+  it('does not probe the legacy work namespace for a non-work branch caller', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args.at(-1) === 'refs/heads/rune-work/01-growth') {
+        throw new Error('legacy work branch must not be probed');
+      }
+      if (args[0] === 'show-ref') throw new Error('requested branch absent');
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+        return { stdout: 'freshhead123\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: 'feature/operator-fix',
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    expect(runGit.mock.calls.some(
+      ([args]) => args.at(-1) === 'refs/heads/rune-work/01-growth',
+    )).toBe(false);
+  });
+
   it('with branch: throws (mentioning the product repo) when rev-parse HEAD fails', async () => {
     const configPath = writeProductsJson(tmpDir);
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
@@ -1037,6 +1215,81 @@ describe('createWorktree', () => {
     expect(spec.baseSha).toBe(tip);
     expect(spec.baseReconciled).toBeUndefined();
     expect(spec.resumed).toBe(true);
+  });
+
+  it('RESUMES a legacy per-project work branch when the new namespaced branch does not exist', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const tip = 'legacytip0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const legacyBranch = 'rune-work/01-growth';
+    const namespacedBranch = 'rune-work/aura/01-growth';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      // The resume probe is `show-ref --verify refs/heads/<branch>` — key on
+      // the fully-qualified ref, not the bare branch name.
+      if (args[0] === 'show-ref' && args.at(-1) === `refs/heads/${legacyBranch}`) {
+        return { stdout: `${tip} refs/heads/${legacyBranch}\n`, stderr: '' };
+      }
+      if (args[0] === 'show-ref' && args.at(-1) === `refs/heads/${namespacedBranch}`) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: 'freshhead123\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${baseTip}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: namespacedBranch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).not.toContain('-b');
+    expect(addCall[0][addCall[0].length - 1]).toBe(legacyBranch);
+    expect(spec.resumed).toBe(true);
+    expect(spec.baseSha).toBe(tip);
+  });
+
+  it('RESUMES the namespaced branch when BOTH it and the legacy per-project branch exist', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const namespacedTip = 'nstip0987654321fedcba0987654321fedcba0000';
+    const legacyTip = 'legacytip0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const legacyBranch = 'rune-work/01-growth';
+    const namespacedBranch = 'rune-work/aura/01-growth';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref' && args.at(-1) === `refs/heads/${namespacedBranch}`) {
+        return { stdout: `${namespacedTip} refs/heads/${namespacedBranch}\n`, stderr: '' };
+      }
+      if (args[0] === 'show-ref' && args.at(-1) === `refs/heads/${legacyBranch}`) {
+        return { stdout: `${legacyTip} refs/heads/${legacyBranch}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${baseTip}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: namespacedBranch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // Legacy fallback is for a MISSING namespaced branch only — once the
+    // namespaced branch exists it always wins, so a stale legacy branch can
+    // never shadow committed namespaced work.
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).not.toContain('-b');
+    expect(addCall[0][addCall[0].length - 1]).toBe(namespacedBranch);
+    expect(spec.resumed).toBe(true);
+    expect(spec.baseSha).toBe(namespacedTip);
   });
 
   it('RESUME: frees the branch from the main checkout (clean tree) before worktree add', async () => {

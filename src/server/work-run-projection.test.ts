@@ -75,6 +75,28 @@ function activeRun(
 }
 
 describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
+  it('projects a persisted lease wait as a safe minimal waiting indicator', () => {
+    const id = 'lease-waiting-001';
+    const waitingRun = {
+      ...activeRun(id, '24-execution-profiles', '2026-08-05T12:00:00.000Z'),
+      waitingOn: {
+        resource: { type: 'base-branch', key: '/private/operator/repositories/aura:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-08-05T12:01:00.000Z',
+      },
+    };
+
+    const projection = readWorkRunProjections(dir, indexFile, undefined, [waitingRun as SupervisedRun]);
+    expect(projection['24-execution-profiles']).toMatchObject({
+      mutationId: id,
+      outcome: null,
+      waitingOn: 'base branch',
+    });
+    // The run record may retain an opaque diagnostic key, but the operator
+    // projection must never turn it into a host-path disclosure.
+    expect(JSON.stringify(projection['24-execution-profiles'])).not.toContain('/private/operator');
+  });
+
   it('projects structured terminal trigger and parked disposition', () => {
     const id = 'terminal-trigger-001';
     mkdirSync(join(dir, id), { recursive: true });

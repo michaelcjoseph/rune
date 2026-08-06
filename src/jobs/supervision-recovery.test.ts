@@ -102,6 +102,26 @@ describe('recoverSupervisedRuns', () => {
     expect(readAllRuns(filePath)[0]!.status).toBe('blocked-on-human');
   });
 
+  it('clears stale waiting metadata from a blocked-on-human run at boot', () => {
+    writeAllRuns([makeRun('run-blocked-waiter', {
+      status: 'blocked-on-human',
+      waitingOn: {
+        resource: { type: 'base-branch', key: '<path:123456789abc>' },
+        operationId: 'released-finalize',
+        waitingSince: '2026-08-05T12:01:00.000Z',
+      },
+    })], filePath);
+
+    const result = recoverSupervisedRuns(filePath);
+
+    expect(result).toEqual({ transitioned: 0, total: 1 });
+    expect(readAllRuns(filePath)[0]).toMatchObject({
+      id: 'run-blocked-waiter',
+      status: 'blocked-on-human',
+    });
+    expect(readAllRuns(filePath)[0]).not.toHaveProperty('waitingOn');
+  });
+
   it('leaves an already-unknown run untouched (idempotent)', () => {
     writeAllRuns([makeRun('run-unknown', { status: 'unknown' })], filePath);
 
@@ -172,6 +192,12 @@ describe('recoverAndFinalizeStaleRuns (P0.4)', () => {
     return {
       readRuns: () => readAllRuns(filePath),
       writeRuns: (runs) => writeAllRuns(runs, filePath),
+      writeRunLeaseState: (run) => {
+        const runs = readAllRuns(filePath);
+        writeAllRuns(runs.map(candidate => candidate.id === run.id ? run : candidate), filePath);
+      },
+      releaseRunLease: vi.fn(),
+      reportBlockedEnvironment: vi.fn(),
       finalizeStaleRun: vi.fn(finalize),
     };
   }
@@ -302,5 +328,52 @@ describe('recoverAndFinalizeStaleRuns (P0.4)', () => {
     expect(byId['run-good']).toBe('completed');
     // The failed run is left as-is (still running) rather than crashing recovery.
     expect(byId['run-bad']).toBe('running');
+  });
+
+  it('recovers persisted waiters in waitingSince order with disk order as the tie-break', async () => {
+    const waiting = (waitingSince: string): NonNullable<SupervisedRun['waitingOn']> => ({
+      resource: { type: 'base-branch', key: 'repo-a:main' },
+      operationId: 'recovery-finalize',
+      waitingSince,
+    });
+    writeAllRuns([
+      makeRun('same-time-first', { waitingOn: waiting('2026-08-05T12:02:00.000Z') }),
+      makeRun('oldest', { waitingOn: waiting('2026-08-05T12:01:00.000Z') }),
+      makeRun('same-time-second', { waitingOn: waiting('2026-08-05T12:02:00.000Z') }),
+    ], filePath);
+    const order: string[] = [];
+    const deps = makeDeps(async run => {
+      order.push(run.id);
+      return 'completed';
+    });
+
+    await recoverAndFinalizeStaleRuns(deps);
+
+    expect(order).toEqual(['oldest', 'same-time-first', 'same-time-second']);
+    expect(readAllRuns(filePath).every(run => run.waitingOn === undefined)).toBe(true);
+    expect(deps.releaseRunLease).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears stale waiting metadata and reports remediation when waiter recovery fails', async () => {
+    const waitingOn: NonNullable<SupervisedRun['waitingOn']> = {
+      resource: { type: 'base-branch', key: 'missing-repo:main' },
+      operationId: 'recovery-finalize',
+      waitingSince: '2026-08-05T12:01:00.000Z',
+    };
+    writeAllRuns([makeRun('missing-waiter', { waitingOn })], filePath);
+    const deps = makeDeps(async () => {
+      throw new Error('repository no longer exists');
+    });
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    expect(result).toMatchObject({ finalized: 0, failedToFinalize: 1 });
+    expect(readAllRuns(filePath)[0]).not.toHaveProperty('waitingOn');
+    expect(deps.reportBlockedEnvironment).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'missing-waiter',
+      resource: { type: 'base-branch', key: 'missing-repo:main' },
+      remediation: expect.stringMatching(/verify.*base branch.*retry/i),
+    }));
+    expect(deps.releaseRunLease).toHaveBeenCalledWith('missing-waiter');
   });
 });
