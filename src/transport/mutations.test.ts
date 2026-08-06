@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SupervisedRun } from '../intent/supervision.js';
+import type { ExecutionProfile } from '../jobs/execution-profile.js';
 import type { ApplyContext, MutationKind } from './mutations.js';
 
 // --- Mocks before any dynamic imports ---
@@ -19,11 +20,20 @@ vi.mock('../jobs/mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
 }));
 
+const mockReadProductExecutionProfile = vi.hoisted(() =>
+  vi.fn<() => ExecutionProfile | undefined>(() => undefined),
+);
+vi.mock('../jobs/execution-profile.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../jobs/execution-profile.js')>()),
+  readProductExecutionProfile: mockReadProductExecutionProfile,
+}));
+
 vi.mock('../config.js', () => ({
   default: {
     TELEGRAM_USER_ID: 42,
     LOGS_DIR: '/test/logs',
     SUPERVISED_RUNS_FILE: '/test/logs/supervised-runs.json',
+    PRODUCTS_CONFIG_FILE: '/test/products.json',
   },
 }));
 
@@ -102,6 +112,7 @@ async function* failedGen(id: string): AsyncIterable<any> {
 describe('mutations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadProductExecutionProfile.mockReturnValue(undefined);
     // Clear the module-level registry and active runs between tests
     activeRuns.clear();
     // Note: applierRegistry is module-level — we re-register per test as needed
@@ -168,6 +179,49 @@ describe('mutations', () => {
       expect(typeof descriptor.createdAt).toBe('string');
     });
 
+    it('preserves legacy product-less work runs without consulting products config', async () => {
+      registerApplier(makeApplier({
+        kind: 'work-run',
+        autoApprove: false,
+        validateResult: { ok: true },
+      }));
+
+      const result = await createMutation(
+        'work-run',
+        { projectSlug: 'legacy-project' },
+        'webview',
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockReadProductExecutionProfile).not.toHaveBeenCalled();
+      expect((result as { ok: true; descriptor: any }).descriptor)
+        .not.toHaveProperty('profileSnapshot');
+    });
+
+    it('rejects an explicit product run when its execution profile cannot be resolved', async () => {
+      mockReadProductExecutionProfile.mockImplementationOnce(() => {
+        throw new Error('products config unavailable');
+      });
+      registerApplier(makeApplier({
+        kind: 'work-run',
+        autoApprove: false,
+        validateResult: { ok: true },
+      }));
+
+      const result = await createMutation(
+        'work-run',
+        { projectSlug: 'profiled-project', product: 'brand' },
+        'webview',
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        reason: 'execution profile could not be resolved',
+      });
+      expect(mockAppendMutationLine).not.toHaveBeenCalled();
+      expect(mockUpsertRun).not.toHaveBeenCalled();
+    });
+
     it('calls appendMutationLine with pending status on successful creation', async () => {
       const applier = makeApplier({ kind: 'work-run', autoApprove: false, validateResult: { ok: true } });
       registerApplier(applier);
@@ -177,6 +231,47 @@ describe('mutations', () => {
       expect(mockAppendMutationLine).toHaveBeenCalledOnce();
       const [firstArg] = mockAppendMutationLine.mock.calls[0]!;
       expect(firstArg.status).toBe('pending');
+    });
+
+    it('persists the resolved profile snapshot on both the mutation and supervised run', async () => {
+      mockReadProductExecutionProfile.mockReturnValueOnce({
+        profileVersion: 1,
+        toolchains: [],
+        provisioning: { steps: [] },
+        validation: {
+          selectors: [{ tier: 'fast', always: true }],
+          checks: [{
+            id: 'unit',
+            argv: ['npm', 'test'],
+            network: 'offline',
+            required: true,
+            tier: 'fast',
+          }],
+        },
+      });
+      registerApplier(makeApplier({
+        kind: 'orchestrated-work',
+        autoApprove: false,
+        validateResult: { ok: true },
+      }));
+
+      const result = await createMutation(
+        'orchestrated-work',
+        { projectSlug: 'profiled-project', product: 'brand' },
+        'webview',
+      );
+
+      expect(result.ok).toBe(true);
+      const descriptor = (result as { ok: true; descriptor: any }).descriptor;
+      expect(descriptor.profileSnapshot).toMatchObject({
+        productId: 'brand',
+        resolvedAt: descriptor.createdAt,
+        profileHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(mockAppendMutationLine.mock.calls[0]![0].profileSnapshot)
+        .toEqual(descriptor.profileSnapshot);
+      expect(mockUpsertRun.mock.calls[0]![0].profileSnapshot)
+        .toEqual(descriptor.profileSnapshot);
     });
 
     it('does NOT call applier.apply when autoApprove is false', async () => {

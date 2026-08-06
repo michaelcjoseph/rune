@@ -7,6 +7,11 @@ import { createLogger } from '../utils/logger.js';
 import { runTargetFromDescriptor } from '../intent/run-target.js';
 import config from '../config.js';
 import {
+  createResolvedProfileSnapshot,
+  readProductExecutionProfile,
+  type ResolvedProfileSnapshot,
+} from '../jobs/execution-profile.js';
+import {
   NotificationBus,
   buildRunLogEventFromTranscriptTail,
   buildRunProgressEventFromCommitPoll,
@@ -71,6 +76,9 @@ function buildSupervisedRun(
     startedAt: d.createdAt,
     lastHeartbeatAt: nowIso,
   };
+  if (d.profileSnapshot !== undefined) {
+    run.profileSnapshot = d.profileSnapshot;
+  }
   if (lastChildAliveAt !== undefined) {
     run.lastChildAliveAt = lastChildAliveAt;
   }
@@ -85,6 +93,22 @@ function buildSupervisedRun(
     run.operatorWorktreePath = operatorWorktreePath;
   }
   return run;
+}
+
+function snapshotExecutionProfile(d: MutationDescriptor, product: string | undefined) {
+  if (d.kind !== 'work-run' && d.kind !== 'orchestrated-work') return undefined;
+  // Product-less work runs predate products.json-backed execution contracts
+  // and retain that legacy behavior. Their supervision display still defaults
+  // to Rune, but mutation creation must not acquire a new config dependency.
+  if (product === undefined) return undefined;
+  const profile = readProductExecutionProfile(config.PRODUCTS_CONFIG_FILE, product);
+  return profile === undefined
+    ? undefined
+    : createResolvedProfileSnapshot({
+        productId: product,
+        profile,
+        resolvedAt: d.createdAt,
+      });
 }
 
 function parkedOperatorWorktreePath(event: MutationEvent): string | undefined {
@@ -289,6 +313,8 @@ export interface MutationDescriptor<P = Record<string, unknown>> {
   createdAt: string;
   status: MutationStatus;
   error?: string;
+  /** Immutable execution contract persisted with every run state transition. */
+  profileSnapshot?: ResolvedProfileSnapshot;
   /**
    * Work-run terminal verdict (project 11), distinct from `status` (which stays
    * within its fixed enum). Copied off the terminal MutationEvent by
@@ -573,6 +599,18 @@ export async function createMutation(
     createdAt: new Date().toISOString(),
     status: 'pending',
   };
+
+  try {
+    const product = typeof payload['product'] === 'string' ? payload['product'] : undefined;
+    const profileSnapshot = snapshotExecutionProfile(descriptor, product);
+    if (profileSnapshot !== undefined) descriptor.profileSnapshot = profileSnapshot;
+  } catch (error) {
+    log.warn('createMutation: execution profile could not be snapshotted', {
+      id: descriptor.id,
+      error: (error as Error).message,
+    });
+    return { ok: false, reason: 'execution profile could not be resolved' };
+  }
 
   appendMutationSnapshot(descriptor);
 

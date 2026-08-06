@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   createResolvedProfileSnapshot,
   parseExecutionProfile,
+  parseResolvedProfileSnapshot,
 } from './execution-profile.js';
 import { readProductsConfig } from './sandbox-runtime.js';
 
@@ -371,12 +372,31 @@ describe('execution-profile schema', () => {
 
     const recovered = JSON.parse(JSON.stringify(snapshot));
 
-    expect(parseExecutionProfile(recovered.profile)).toEqual(snapshot.profile);
-    expect(createResolvedProfileSnapshot({
-      productId: recovered.productId,
-      profile: recovered.profile,
-      resolvedAt: recovered.resolvedAt,
-    }).profileHash).toBe(recovered.profileHash);
+    expect(parseResolvedProfileSnapshot(recovered)).toEqual(snapshot);
+  });
+
+  it('rejects a persisted snapshot whose profile no longer matches its hash', () => {
+    const snapshot = structuredClone(createResolvedProfileSnapshot({
+      productId: 'brand',
+      profile: completeProfile,
+      resolvedAt: '2026-08-05T17:00:00.000Z',
+    })) as any;
+    snapshot.profile.validation.checks[0].argv.push('--tampered');
+
+    expect(() => parseResolvedProfileSnapshot(snapshot)).toThrow(/hash|match/i);
+  });
+
+  it('rejects unknown persisted snapshot fields', () => {
+    const snapshot = {
+      ...createResolvedProfileSnapshot({
+        productId: 'brand',
+        profile: completeProfile,
+        resolvedAt: '2026-08-05T17:00:00.000Z',
+      }),
+      futureField: true,
+    };
+
+    expect(() => parseResolvedProfileSnapshot(snapshot)).toThrow(/unknown field/i);
   });
 
   it('returns no snapshot for an unprofiled product, preserving the legacy runner path', () => {

@@ -50,6 +50,7 @@ import {
   assertManagedWorktreeFile,
   readManagedWorktreeFile,
 } from './managed-worktree-fs.js';
+import { parseExecutionProfile, type ExecutionProfile } from './execution-profile.js';
 
 const log = createLogger('sandbox-runtime');
 
@@ -152,6 +153,8 @@ export interface ProductConfig {
   /** Optional read-only MCP registration granted only to artifact-role
    *  executor sessions (QA and coder). Unknown values fail config parsing. */
   artifactMcp?: ArtifactMcpPolicy;
+  /** Versioned acceptance contract. Absent products retain legacy validation behavior. */
+  executionProfile?: ExecutionProfile;
 }
 
 /** Pluggable git runner — production wraps `execFile('git', …)`, tests inject
@@ -499,6 +502,9 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
         : {}),
       ...(entry['artifactMcp'] === 'rune-kb-readonly'
         ? { artifactMcp: entry['artifactMcp'] }
+        : {}),
+      ...(entry['executionProfile'] !== undefined
+        ? { executionProfile: parseExecutionProfile(entry['executionProfile']) }
         : {}),
     };
   }

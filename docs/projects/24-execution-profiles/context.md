@@ -40,25 +40,27 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-- nd recovery closeout paths.
-- Preserved meaningful `gateHeldReason` rendering.
+- tech-lead repaired test intent: src/jobs/execution-profile.test.ts
+- eserved legacy behavior for unprofiled products.
+- Updated architecture/configuration documentation.
 
 Validation:
 
 - `npm run build` — passed
-- Targeted QA — 393 tests passed
-- `npm test` — 353 files passed; 6,321 tests passed; 8 todo
-- Staged and unstaged `git diff --check` — clean
+- `npm test` — 354 files passed; 6,351 tests passed; 8 todo
+- QA profile tests — 23 passed
+- `git diff --check` — clean
 - No tests removed
 - No commit created
-- coder self-review (revised): Required scope-violation results to carry offending paths, followed chained symlinks to detect eventual escapes, and allowed contained directory symlinks. npm run build and npm test passed (353 files, 6,323 tests; 8 todo). No tests removed.
-- d recovery closeout wiring coverage and corrected staged-change documentation.
+- coder self-review (revised): Persisted hash-pinned profiles on mutation descriptors so recovered runs retain their original contract, propagated snapshots through supervision transitions, and added regression coverage. npm run build and npm test passed (354 files, 6,352 tests; 8 todo). No tests removed.
+- ts.json`.
+- Added direct snapshot hash and unknown-field rejection tests.
+- Updated architecture documentation.
 
 Validation:
 
 - `npm run build` — passed
-- Targeted QA — 417 tests passed
-- `npm test` — 353 files passed; 6,328 tests passed; 8 todo
+- `npm test` — 354 files passed; 6,361 tests passed; 8 todo
 - Staged and unstaged `git diff --check` — clean
 - No tests removed
 - No commit created

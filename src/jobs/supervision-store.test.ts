@@ -18,12 +18,14 @@ import {
 import {
   compactSupervisedRuns,
   readAllRuns,
+  readAllRunsBounded,
   writeAllRuns,
   upsertRun,
   writeRunLeaseState,
   recordRunActivity,
   removeRun,
 } from './supervision-store.js';
+import { createResolvedProfileSnapshot } from './execution-profile.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helper
@@ -39,6 +41,28 @@ function makeRun(id: string, overrides: Partial<SupervisedRun> = {}): Supervised
     lastHeartbeatAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
+}
+
+function makeProfileSnapshot(productId = 'aura') {
+  return createResolvedProfileSnapshot({
+    productId,
+    resolvedAt: '2026-08-05T17:00:00.000Z',
+    profile: {
+      profileVersion: 1,
+      toolchains: [],
+      provisioning: { steps: [] },
+      validation: {
+        selectors: [{ tier: 'fast', always: true }],
+        checks: [{
+          id: 'unit',
+          argv: ['npm', 'test'],
+          network: 'offline',
+          required: true,
+          tier: 'fast',
+        }],
+      },
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +131,70 @@ describe('readAllRuns', () => {
   it('returns [] when the JSON root value is a scalar number', () => {
     writeFileSync(filePath, '42', 'utf8');
     expect(readAllRuns(filePath)).toEqual([]);
+  });
+});
+
+describe('persisted execution profile snapshots', () => {
+  it('round-trips a verified snapshot through ordinary and bounded reads', () => {
+    const run = makeRun('profile-valid', { profileSnapshot: makeProfileSnapshot() });
+    writeAllRuns([run], filePath);
+
+    expect(readAllRuns(filePath)).toEqual([run]);
+    expect(readAllRunsBounded(filePath)).toEqual({ runs: [run], complete: true });
+  });
+
+  it('keeps a run with a tampered snapshot, marks it unusable, and reports an incomplete bounded read', () => {
+    const run = makeRun('profile-tampered', { profileSnapshot: makeProfileSnapshot() });
+    const persisted = structuredClone(run) as any;
+    persisted.profileSnapshot.profile.validation.checks[0].argv.push('--tampered');
+    writeFileSync(filePath, JSON.stringify([persisted]), 'utf8');
+
+    const [reloaded] = readAllRuns(filePath);
+    expect(reloaded).toMatchObject({ id: run.id, profileSnapshotInvalid: true });
+    expect(reloaded).not.toHaveProperty('profileSnapshot');
+    expect(readAllRunsBounded(filePath)).toMatchObject({
+      runs: [{ id: run.id, profileSnapshotInvalid: true }],
+      complete: false,
+    });
+  });
+
+  it('keeps and marks a run whose snapshot product differs from the run product', () => {
+    const mismatched = makeRun('profile-mismatch', {
+      product: 'aura',
+      profileSnapshot: makeProfileSnapshot('brand'),
+    });
+    writeFileSync(filePath, JSON.stringify([mismatched]), 'utf8');
+
+    const [reloaded] = readAllRuns(filePath);
+    expect(reloaded).toMatchObject({
+      id: mismatched.id,
+      product: 'aura',
+      profileSnapshotInvalid: true,
+    });
+    expect(reloaded).not.toHaveProperty('profileSnapshot');
+    expect(readAllRunsBounded(filePath).complete).toBe(false);
+  });
+
+  it('does not erase an invalid-snapshot run when another run is upserted', () => {
+    const invalid = makeRun('profile-preserved', { profileSnapshot: makeProfileSnapshot() });
+    const persisted = structuredClone(invalid) as any;
+    persisted.profileSnapshot.profileHash = '0'.repeat(64);
+    writeFileSync(filePath, JSON.stringify([persisted]), 'utf8');
+
+    upsertRun(makeRun('different-run'), filePath);
+
+    expect(readAllRuns(filePath)).toMatchObject([
+      { id: invalid.id, profileSnapshotInvalid: true },
+      { id: 'different-run' },
+    ]);
+  });
+
+  it('continues to load a legacy run with no profile snapshot', () => {
+    const legacy = makeRun('legacy-run');
+    writeFileSync(filePath, JSON.stringify([legacy]), 'utf8');
+
+    expect(readAllRuns(filePath)).toEqual([legacy]);
+    expect(readAllRunsBounded(filePath)).toEqual({ runs: [legacy], complete: true });
   });
 });
 

@@ -20,6 +20,7 @@
  */
 
 import type { WorkRunTarget } from './run-target.js';
+import type { ResolvedProfileSnapshot } from '../jobs/execution-profile.js';
 
 /**
  * Status of a supervised run. `running` / `blocked-on-human` are in-progress; `completed` /
@@ -66,6 +67,14 @@ export interface SupervisedRun {
    * {@link lastChildAliveAt} as the truer liveness signal when present.
    */
   lastHeartbeatAt: string;
+  /** Immutable execution contract captured when the run was created. */
+  profileSnapshot?: ResolvedProfileSnapshot;
+  /**
+   * The persisted execution contract could not be verified on reload. The run
+   * row remains durable for recovery/visibility, but profile-aware consumers
+   * must treat this as unusable rather than consulting current product config.
+   */
+  profileSnapshotInvalid?: true;
   /** Durable queue diagnostic only; never proof that this process owns a lease. */
   waitingOn?: SupervisedRunWaitingOn;
   /**
