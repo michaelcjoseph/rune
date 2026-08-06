@@ -23,6 +23,29 @@ type NetworkMode =
 
 type Tier = "fast" | "native-compile" | "simulator" | "manual-live";
 
+// Profile-facing resource names; the lease scheduler maps "simulator" →
+// LeaseType "ios-simulator" and "emulator" → "android-emulator". "base-branch"
+// leases are orchestrator-internal and never profile-declarable.
+type ResourceType =
+  | "simulator"
+  | "emulator"
+  | "cache-dir"
+  | "port-range"
+  | "build-capacity"
+  | "device";
+
+interface ResourceRequirement {
+  type: ResourceType;
+  key: string;
+  capacity?: number; // semantic default 1, applied at lease-request time — never materialized by the parser
+  scope: "step" | "run"; // lease scope is mandatory; a resource without one is rejected
+}
+
+interface ArtifactSpec {
+  id: string;
+  path: string; // relative to the run's artifact root; absolute or escaping paths rejected
+}
+
 interface CommandSpec {
   id: string;
   argv: [string, ...string[]];
@@ -94,6 +117,10 @@ The validator rejects:
 - selectors that can leave the mandatory fast tier unselected;
 - artifact paths outside the declared run artifact root;
 - invalid lease scope or unsupported profile versions.
+
+The parser validates and returns the profile without materializing optional
+defaults (e.g. `capacity`), so a valid profile round-trips value-identical —
+`profileHash` stability depends on this.
 
 Each run persists its resolved snapshot before preflight. Recovery reads the snapshot, not current `products.json`.
 
