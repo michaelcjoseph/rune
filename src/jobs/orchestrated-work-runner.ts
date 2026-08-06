@@ -2595,6 +2595,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       let validationCommandProfiles: ValidationCommandProfile[] = [];
       let validationAdapters: ValidationAdapter[] = [];
       let validationCwd: string | undefined;
+      let scopeRoots: string[] | undefined;
       let closeoutValidationStrategy: CloseoutValidationStrategy = 'product-commands';
       try {
         baseBranch = productConfig.baseBranch;
@@ -2603,6 +2604,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
         validationAdapters = productConfig.validationAdapters ?? [];
         validationCwd = productConfig.validationCwd;
+        scopeRoots = productConfig.scopeRoots;
         closeoutValidationStrategy = productConfig.closeoutValidationStrategy ?? 'product-commands';
       } catch (err) {
         if ((err as Error).message.includes('invalid closeoutValidationStrategy')) {
@@ -2877,6 +2879,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                   validationCommandProfiles,
                   validationAdapters,
                   ...(validationCwd !== undefined ? { validationCwd } : {}),
+                  ...(scopeRoots !== undefined ? { scopeRoots } : {}),
+                  sourceWorktree: runSandbox.worktree,
                   tasksRemaining: gateTasksRemaining,
                   concurrentRun: await hasConcurrentRun(),
                   commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

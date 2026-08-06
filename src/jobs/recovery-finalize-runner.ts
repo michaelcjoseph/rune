@@ -409,6 +409,8 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             ...(product.validationCwd !== undefined
               ? { validationCwd: product.validationCwd }
               : {}),
+            ...(product.scopeRoots !== undefined ? { scopeRoots: product.scopeRoots } : {}),
+            sourceWorktree: worktree,
             tasksRemaining: gateTasksRemaining,
             concurrentRun: await hasConcurrentRun(),
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

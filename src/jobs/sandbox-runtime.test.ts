@@ -742,6 +742,73 @@ describe('readProductsConfig — validationCwd', () => {
   });
 });
 
+// Scope roots are deliberately separate from scopePath: the latter selects a
+// run's working directory, while these patterns constrain the files its work
+// may change. Keep this parser-level contract here so malformed policy never
+// reaches the merge gate.
+describe('readProductsConfig — scopeRoots', () => {
+  it('defaults change-validation roots to scopePath without changing the working-directory field', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: 'docs/rune',
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: 'docs/rune',
+      scopeRoots: ['docs/rune'],
+    });
+  });
+
+  it('normalizes a legacy scopePath only for its derived change-validation root', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: './docs/rune/',
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: './docs/rune/',
+      scopeRoots: ['docs/rune'],
+    });
+  });
+
+  it('preserves explicit repo-relative scope-root patterns instead of conflating them with scopePath', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopePath: 'docs/rune',
+        scopeRoots: ['apps/site/**', 'packages/content/*.md'],
+      },
+    });
+
+    expect(readProductsConfig(configPath)['writing']).toMatchObject({
+      scopePath: 'docs/rune',
+      scopeRoots: ['apps/site/**', 'packages/content/*.md'],
+    });
+  });
+
+  it.each([
+    ['not-an-array', 'apps/site/**'],
+    ['absolute path', ['/private/outside']],
+    ['traversal', ['../outside']],
+    ['embedded traversal', ['apps/../outside']],
+    ['empty root', ['']],
+    ['non-string member', ['apps/site/**', 42]],
+  ])('fails closed for %s scopeRoots', (_label, scopeRoots) => {
+    const configPath = writeProductsJson(tmpDir, {
+      writing: {
+        repoPath: '/fake/workspace/site',
+        scopeRoots,
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/scopeRoots/i);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // readProductsConfig — product policy schema (project 19, W2 Phase 4)
 //

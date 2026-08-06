@@ -40,30 +40,25 @@ Canonical interfaces, data contracts, and mechanics live in [tech-spec.md](tech-
 
 ## Next Task Handoff
 
-- s, findings, checkpoints, and preflight coverage.
-- Updated structural architecture documentation.
+- nd recovery closeout paths.
+- Preserved meaningful `gateHeldReason` rendering.
 
 Validation:
 
 - `npm run build` — passed
-- Targeted QA suite — 371 passed
-- `npm test` — 353 files passed; 6,299 tests passed; 8 todo
-- `git diff --check` — clean
+- Targeted QA — 393 tests passed
+- `npm test` — 353 files passed; 6,321 tests passed; 8 todo
+- Staged and unstaged `git diff --check` — clean
 - No tests removed
 - No commit created
-- sts passed; 8 todo.
-- Final affected suite rerun — 146 tests passed.
-- Staged and unstaged diff checks — clean.
-- No tests removed and no commit created.
-
-A redundant second full-suite invocation stalled before emitting test progress and was interrupted; the completed full-suite run above was green.
--  regression test.
-- Added direct production security prompt/parsing coverage.
-- Centralized the designer-review marker constant.
-- No tests removed and no commit created.
+- coder self-review (revised): Required scope-violation results to carry offending paths, followed chained symlinks to detect eventual escapes, and allowed contained directory symlinks. npm run build and npm test passed (353 files, 6,323 tests; 8 todo). No tests removed.
+- d recovery closeout wiring coverage and corrected staged-change documentation.
 
 Validation:
 
 - `npm run build` — passed
-- `npm test` — 353 files passed; 6,304 tests passed; 8 todo
-- `git diff --check` — clean
+- Targeted QA — 417 tests passed
+- `npm test` — 353 files passed; 6,328 tests passed; 8 todo
+- Staged and unstaged `git diff --check` — clean
+- No tests removed
+- No commit created

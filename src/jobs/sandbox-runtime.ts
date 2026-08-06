@@ -108,6 +108,9 @@ export interface ProductConfig {
   repoPath: string;
   /** Optional repo-relative scope for products sharing a repository. */
   scopePath?: string;
+  /** Repo-relative path patterns constraining files a run may change. Unlike
+   * `scopePath`, these do not change the run's working directory. */
+  scopeRoots?: string[];
   /** Branch a fresh worktree is based on when no explicit branch is given. */
   baseBranch: string;
   /** Absolute path of the product's scoped credentials file (A1.2 wires this). */
@@ -222,6 +225,59 @@ function parseContainerCapabilities(
   };
 }
 
+function parseScopeRoots(
+  slug: string,
+  configPath: string,
+  rawScopeRoots: unknown,
+  scopePath: string | undefined,
+): string[] | undefined {
+  const derivedScopeRoot = scopePath
+    ?.replace(/^(?:\.\/)+/, '')
+    .replace(/\/+$/, '');
+  const configured = rawScopeRoots === undefined
+    ? (derivedScopeRoot === undefined ? undefined : [derivedScopeRoot])
+    : rawScopeRoots;
+  if (configured === undefined) return undefined;
+  if (!Array.isArray(configured) || configured.length === 0) {
+    throw new Error(
+      `readProductsConfig: product '${slug}' has invalid scopeRoots in ${configPath} — ` +
+        'expected a non-empty array of repo-relative patterns',
+    );
+  }
+
+  const roots: string[] = [];
+  for (const value of configured) {
+    if (typeof value !== 'string') {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid scopeRoots in ${configPath} — ` +
+          'every pattern must be a string',
+      );
+    }
+    const segments = value.split('/');
+    if (
+      value.length === 0 ||
+      value !== value.trim() ||
+      value.startsWith('/') ||
+      /^[A-Za-z]:[\\/]/.test(value) ||
+      value.includes('\\') ||
+      value.includes('\0') ||
+      segments.some((segment) => segment === '' || segment === '.' || segment === '..')
+    ) {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid scopeRoots pattern in ${configPath} — ` +
+          'patterns must be normalized repo-relative paths without traversal',
+      );
+    }
+    roots.push(value);
+  }
+  if (new Set(roots).size !== roots.length) {
+    throw new Error(
+      `readProductsConfig: product '${slug}' has duplicate scopeRoots in ${configPath}`,
+    );
+  }
+  return roots;
+}
+
 /**
  * Read and parse `policies/products.json`. Tilde-expands `repoPath` and
  * `credentialsFile` for each entry. A malformed file or a missing file throws
@@ -282,6 +338,10 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
         `readProductsConfig: product '${slug}' is missing required field 'repoPath' in ${path}`,
       );
     }
+    const scopePath = typeof entry['scopePath'] === 'string' && entry['scopePath']
+      ? entry['scopePath']
+      : undefined;
+    const scopeRoots = parseScopeRoots(slug, path, entry['scopeRoots'], scopePath);
     const closeoutValidationStrategy = entry['closeoutValidationStrategy'] ?? 'product-commands';
     if (closeoutValidationStrategy !== 'vitest-related' && closeoutValidationStrategy !== 'product-commands') {
       throw new Error(
@@ -414,9 +474,8 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
         ? { containerCapabilities: parseContainerCapabilities(slug, path, entry['containerCapabilities']) }
         : {}),
       repoPath,
-      ...(typeof entry['scopePath'] === 'string' && entry['scopePath']
-        ? { scopePath: entry['scopePath'] }
-        : {}),
+      ...(scopePath !== undefined ? { scopePath } : {}),
+      ...(scopeRoots !== undefined ? { scopeRoots } : {}),
       baseBranch: String(entry['baseBranch'] ?? 'main'),
       credentialsFile: expandTilde(String(entry['credentialsFile'] ?? '')),
       egressAllowlist: Array.isArray(entry['egressAllowlist'])

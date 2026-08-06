@@ -217,7 +217,17 @@ function baseState(): {
   };
 }
 
-function gateOpts(over: Partial<GateRuntimeOpts> = {}): GateRuntimeOpts {
+/** Scope fields are added by the execution-profiles scope-boundary task. The
+ * runtime must consume them before validation; keeping them in this fixture
+ * makes the real Git tests red until that wiring exists. */
+type ScopeGateOpts = GateRuntimeOpts & {
+  scopeRoots?: string[];
+  scopePath?: string;
+  /** The task worktree, used to include staged run changes. */
+  sourceWorktree?: string;
+};
+
+function gateOpts(over: Partial<ScopeGateOpts> = {}): ScopeGateOpts {
   return {
     product: 'rune',
     repoPath,
@@ -228,6 +238,7 @@ function gateOpts(over: Partial<GateRuntimeOpts> = {}): GateRuntimeOpts {
     tasksRemaining: 0,
     concurrentRun: false,
     commandTimeoutMs: 600_000,
+    sourceWorktree: repoPath,
     ...over,
   };
 }
@@ -252,6 +263,12 @@ beforeEach(() => {
   // WITHOUT touching this repo's `main`.
   execFileSync('git', ['init', '-q', '-b', BASE, repoPath]);
   writeFileSync(join(repoPath, TRACKED_FILE), 'base-line\n');
+  mkdirSync(join(repoPath, 'src'));
+  mkdirSync(join(repoPath, 'docs'));
+  mkdirSync(join(repoPath, 'private'));
+  writeFileSync(join(repoPath, 'src', 'owned.ts'), 'export const owned = true;\n');
+  writeFileSync(join(repoPath, 'docs', 'outside.md'), '# outside\n');
+  writeFileSync(join(repoPath, 'private', 'secret.txt'), 'not in product scope\n');
   git(repoPath, 'add', '.');
   git(repoPath, 'commit', '-q', '-m', 'base commit');
 
@@ -368,6 +385,185 @@ describe('runGate — test before mutating main (P1.5)', () => {
     // (The actual `git merge` happens in work-run-finalizer.ts AFTER this.)
     expect(baseState()).toEqual(before);
     expect(existsSync(integrationWorktree)).toBe(false);
+  });
+
+  describe('scope boundary (execution profiles)', () => {
+    const allowedRoots = ['src/**', 'app.txt'];
+
+    async function expectScopeViolation(expectedPath: string, opts: Partial<ScopeGateOpts> = {}) {
+      const runValidationCommand = vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        outputTail: '',
+      }));
+
+      const result = await runGate(gateOpts({ scopeRoots: allowedRoots, ...opts }), {
+        runGit: defaultRunGit,
+        runValidationCommand,
+      });
+
+      // The result is an API contract, not a diagnostic string: paths remain
+      // repository-relative so the gate can be surfaced without host-path leaks.
+      expect(result).toEqual({
+        ok: false,
+        reason: 'scope-violation',
+        offendingPaths: [expectedPath],
+      });
+      expect(JSON.stringify(result)).not.toContain(repoPath);
+      // A known-bad change must not burn a closeout validation run.
+      expect(runValidationCommand).not.toHaveBeenCalled();
+      expect(existsSync(integrationWorktree)).toBe(false);
+    }
+
+    it('allows a product-owned change and derives it from the merge base rather than attributing later base-branch changes', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      writeFileSync(join(repoPath, 'src', 'feature.ts'), 'export const feature = true;\n');
+      git(repoPath, 'add', 'src/feature.ts');
+      git(repoPath, 'commit', '-q', '-m', 'change owned source');
+
+      // This unrelated commit lands after the work branch split. Comparing the
+      // branch to the base tip rather than their merge base would falsely blame
+      // the run for this path outside its declared roots.
+      git(repoPath, 'checkout', '-q', BASE);
+      writeFileSync(join(repoPath, 'docs', 'upstream-only.md'), '# upstream only\n');
+      git(repoPath, 'add', 'docs/upstream-only.md');
+      git(repoPath, 'commit', '-q', '-m', 'unrelated upstream docs change');
+
+      const runValidationCommand = vi.fn(async () => ({
+        exitCode: 0,
+        timedOut: false,
+        outputTail: '',
+      }));
+      const result = await runGate(gateOpts({ scopeRoots: allowedRoots }), {
+        runGit: defaultRunGit,
+        runValidationCommand,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(runValidationCommand).toHaveBeenCalledOnce();
+    });
+
+    it('rejects a committed change outside the declared roots with a scrubbed relative path', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      writeFileSync(join(repoPath, 'docs', 'unrelated.md'), '# unrelated\n');
+      git(repoPath, 'add', 'docs/unrelated.md');
+      git(repoPath, 'commit', '-q', '-m', 'touch unrelated docs');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('docs/unrelated.md');
+    });
+
+    it('rejects a staged outside-root change as well as committed branch history', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      writeFileSync(join(repoPath, 'docs', 'staged-only.md'), '# staged only\n');
+      git(repoPath, 'add', 'docs/staged-only.md');
+
+      await expectScopeViolation('docs/staged-only.md');
+    });
+
+    it('rejects a rename whose destination leaves the permitted roots', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      git(repoPath, 'mv', 'src/owned.ts', 'docs/moved.ts');
+      git(repoPath, 'commit', '-q', '-m', 'move owned source outside scope');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('docs/moved.ts');
+    });
+
+    it('rejects deleting a file outside the permitted roots', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      git(repoPath, 'rm', '-q', 'docs/outside.md');
+      git(repoPath, 'commit', '-q', '-m', 'delete unrelated docs file');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('docs/outside.md');
+    });
+
+    it('rejects an in-scope link whose target escapes the permitted roots without exposing that target', async () => {
+      const outsideTarget = join(tmpRoot, 'outside-secret.txt');
+      writeFileSync(outsideTarget, 'outside the repository\n');
+      git(repoPath, 'checkout', '-q', BRANCH);
+      symlinkSync(outsideTarget, join(repoPath, 'src', 'link-out'));
+      git(repoPath, 'add', 'src/link-out');
+      git(repoPath, 'commit', '-q', '-m', 'add escaping link');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('src/link-out');
+    });
+
+    it('examines a symlink at a literal app-router bracket path', async () => {
+      const outsideTarget = join(tmpRoot, 'outside-app-router.txt');
+      writeFileSync(outsideTarget, 'outside the repository\n');
+      git(repoPath, 'checkout', '-q', BRANCH);
+      mkdirSync(join(repoPath, 'app', '[id]'), { recursive: true });
+      symlinkSync(outsideTarget, join(repoPath, 'app', '[id]', 'page.tsx'));
+      git(repoPath, 'add', '--all');
+      git(repoPath, 'commit', '-q', '-m', 'add app-router escaping link');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('app/[id]/page.tsx', { scopeRoots: ['app/**', 'app.txt'] });
+    });
+
+    it('selects a wildcard-named symlink exactly instead of an earlier pathspec decoy', async () => {
+      const outsideTarget = join(tmpRoot, 'outside-wildcard.txt');
+      writeFileSync(outsideTarget, 'outside the repository\n');
+      git(repoPath, 'checkout', '-q', BRANCH);
+      writeFileSync(join(repoPath, 'src', 'z!x'), 'pathspec decoy\n');
+      symlinkSync(outsideTarget, join(repoPath, 'src', 'z*'));
+      git(repoPath, 'add', 'src/z!x', 'src/z*');
+      git(repoPath, 'commit', '-q', '-m', 'add literal wildcard escaping link');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('src/z*');
+    });
+
+    it('allows an in-scope symlink target, including a directory-constraining trailing slash', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      mkdirSync(join(repoPath, 'src', 'owned-dir'));
+      writeFileSync(join(repoPath, 'src', 'owned-dir', 'file.ts'), 'export {};\n');
+      symlinkSync('owned-dir/', join(repoPath, 'src', 'link-in'));
+      git(repoPath, 'add', 'src/owned-dir/file.ts', 'src/link-in');
+      git(repoPath, 'commit', '-q', '-m', 'add contained link');
+
+      const result = await runGate(gateOpts({ scopeRoots: allowedRoots }), {
+        runGit: defaultRunGit,
+        runValidationCommand: vi.fn(async () => ({
+          exitCode: 0,
+          timedOut: false,
+          outputTail: '',
+        })),
+      });
+
+      expect(result).toMatchObject({ ok: true });
+    });
+
+    it('follows an in-scope symlink chain and rejects an eventual target outside the permitted roots', async () => {
+      git(repoPath, 'checkout', '-q', BASE);
+      symlinkSync('../private/secret.txt', join(repoPath, 'src', 'existing-link-out'));
+      git(repoPath, 'add', 'src/existing-link-out');
+      git(repoPath, 'commit', '-q', '-m', 'base contains an escaping link');
+      git(repoPath, 'branch', '-f', BRANCH, BASE);
+
+      git(repoPath, 'checkout', '-q', BRANCH);
+      symlinkSync('existing-link-out', join(repoPath, 'src', 'new-link'));
+      git(repoPath, 'add', 'src/new-link');
+      git(repoPath, 'commit', '-q', '-m', 'chain through existing link');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('src/new-link');
+    });
+
+    it('skips staged-only inspection when a recovery worktree is gone and still returns a typed committed violation', async () => {
+      git(repoPath, 'checkout', '-q', BRANCH);
+      writeFileSync(join(repoPath, 'docs', 'recovered-outside.md'), '# recovered outside\n');
+      git(repoPath, 'add', 'docs/recovered-outside.md');
+      git(repoPath, 'commit', '-q', '-m', 'commit recovered outside change');
+      git(repoPath, 'checkout', '-q', BASE);
+
+      await expectScopeViolation('docs/recovered-outside.md', {
+        sourceWorktree: join(tmpRoot, 'already-reaped-worktree'),
+      });
+    });
   });
 
   it('runs validation in the integration worktree, not the product repo checkout', async () => {

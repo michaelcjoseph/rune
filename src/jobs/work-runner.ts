@@ -683,6 +683,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         let validationCommandProfiles: ValidationCommandProfile[] = [];
         let validationAdapters: ValidationAdapter[] = [];
         let validationCwd: string | undefined;
+        let scopeRoots: string[] | undefined;
         try {
           const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
           baseBranch = productConfig.baseBranch;
@@ -691,6 +692,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           validationCommandProfiles = productConfig.validationCommandProfiles ?? [];
           validationAdapters = productConfig.validationAdapters ?? [];
           validationCwd = productConfig.validationCwd;
+          scopeRoots = productConfig.scopeRoots;
         } catch (err) {
           log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
             id: descriptor.id,
@@ -929,6 +931,8 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 validationCommandProfiles,
                 validationAdapters,
                 ...(validationCwd !== undefined ? { validationCwd } : {}),
+                ...(scopeRoots !== undefined ? { scopeRoots } : {}),
+                sourceWorktree: worktreeDir,
                 tasksRemaining: gateTasksRemaining,
                 // Live read inside the lock — accurate at gate time, not a stale
                 // finalize-setup snapshot.

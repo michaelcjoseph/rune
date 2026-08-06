@@ -39,12 +39,24 @@ export type GateFailReason =
   | 'missing-validation-command'
   | 'validation-timeout'
   | 'profile-unavailable'
-  | 'validation-cancelled';
+  | 'validation-cancelled'
+  | 'scope-violation';
 
 /** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
 export type GateResult =
   | { ok: true; validationReceipt?: GateValidationReceipt }
-  | { ok: false; reason: GateFailReason; validationReceipt?: GateValidationReceipt };
+  | {
+      ok: false;
+      reason: Exclude<GateFailReason, 'scope-violation'>;
+      validationReceipt?: GateValidationReceipt;
+    }
+  | {
+      ok: false;
+      reason: 'scope-violation';
+      validationReceipt?: GateValidationReceipt;
+      /** Scrubbed repo-relative paths that made this gate result fail. */
+      offendingPaths: string[];
+    };
 
 /** The facts the gate decides on, gathered by the runtime before `evaluateGate`. */
 export interface GateFacts {
@@ -64,6 +76,8 @@ export interface GateFacts {
   validationCancelled: boolean;
   /** Required host validation capability failed deterministic admission. */
   profileUnavailable?: boolean;
+  /** Changed paths or symlink targets escaped the configured product scope. */
+  scopeViolation?: { offendingPaths: string[] };
   /** Merging the branch onto the base conflicts / the base relationship is unsound. */
   mergeConflict: boolean;
 }
@@ -93,6 +107,13 @@ export function evaluateGate(facts: GateFacts): GateResult {
   // Another run owns the base branch — bail before burning an expensive
   // validation run that would race the shared `main`.
   if (facts.concurrentRun) return { ok: false, reason: 'concurrent-run' };
+  if (facts.scopeViolation) {
+    return {
+      ok: false,
+      reason: 'scope-violation',
+      offendingPaths: facts.scopeViolation.offendingPaths,
+    };
+  }
   // A conflicting branch can't be set up cleanly in the integration worktree, so
   // validating pre-merge code is moot — the conflict probe wins over the result.
   if (facts.mergeConflict) return { ok: false, reason: 'merge-conflict' };

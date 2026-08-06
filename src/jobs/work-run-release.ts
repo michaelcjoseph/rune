@@ -524,6 +524,8 @@ async function coldFinalizeGatedMergeProd(
           ...(product.validationCwd !== undefined
             ? { validationCwd: product.validationCwd }
             : {}),
+          ...(product.scopeRoots !== undefined ? { scopeRoots: product.scopeRoots } : {}),
+          sourceWorktree: worktreePath,
           tasksRemaining: productFacts.transitions.tasksRemaining,
           concurrentRun: await hasConcurrentRun(run.id, repoId, baseBranch),
           commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,

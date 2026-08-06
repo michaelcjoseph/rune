@@ -2230,23 +2230,28 @@ describe('workRunApplier', () => {
       expect(refreshRegistrySpy).toHaveBeenCalledOnce();
     });
 
-    it('surfaces the gate-held reason on the terminal event when the gate refuses (never a silent drop)', async () => {
-      setupBranchComplete();
-      // Gate refuses → run holds at branch-complete, never merges.
-      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
-      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+    it.each(['tests-red', 'scope-violation'] as const)(
+      'surfaces %s as the meaningful gate-held reason on the terminal event when the gate refuses',
+      async (reason) => {
+        setupBranchComplete();
+        // Gate refuses → run holds at branch-complete, never merges.
+        mockRunGate.mockResolvedValueOnce(reason === 'scope-violation'
+          ? { ok: false, reason, offendingPaths: ['outside-scope.txt'] }
+          : { ok: false, reason });
+        mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
 
-      const events: any[] = [];
-      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
-        events.push(event);
-      }
+        const events: any[] = [];
+        for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
+          events.push(event);
+        }
 
-      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
-      expect(terminal.data.outcome).toBe('branch-complete');
-      expect(terminal.data.merged).toBe(false);
-      expect(terminal.data.gateHeldReason).toBe('tests-red');
-      expect(refreshRegistrySpy).not.toHaveBeenCalled();
-    });
+        const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+        expect(terminal.data.outcome).toBe('branch-complete');
+        expect(terminal.data.merged).toBe(false);
+        expect(terminal.data.gateHeldReason).toBe(reason);
+        expect(refreshRegistrySpy).not.toHaveBeenCalled();
+      },
+    );
 
     it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {
       const { recordWorkRunPhase, readLastWorkRunPhase } = setupBranchComplete();

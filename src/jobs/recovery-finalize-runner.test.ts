@@ -455,6 +455,33 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(runGate).toHaveBeenCalledOnce();
   });
 
+  it('carries scope roots and the recorded worktree into a gated recovery closeout', async () => {
+    const runGate = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'scope-violation' as const,
+      offendingPaths: ['docs/outside.md'],
+    }));
+    const { io } = makeIO({
+      getProduct: () => ({ ...PRODUCT, scopeRoots: ['src/**'] }),
+      readLastPhase: () => 'transcript-flushed',
+      runGate,
+    });
+    const run = makeRun({
+      waitingOn: {
+        resource: { type: 'base-branch', key: '/tmp/repo:main' },
+        operationId: 'integration-finalize',
+        waitingSince: '2026-08-05T12:00:00.000Z',
+      },
+    });
+
+    await __finalizeStaleRunForTest(run, io);
+
+    expect(runGate).toHaveBeenCalledWith(expect.objectContaining({
+      scopeRoots: ['src/**'],
+      sourceWorktree: '/tmp/worktrees/rune/15-work-run-finalizer',
+    }));
+  });
+
   it('a branch with commits but unchecked tasks → partial (still a terminal completed status)', async () => {
     const run = makeRun();
     const { io, captured } = makeIO({
