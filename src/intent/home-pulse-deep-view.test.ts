@@ -12,6 +12,8 @@ type WorkRunFixture = {
   startedAt?: string;
   transcriptExists?: boolean;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
+  reason?: string;
+  adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
   relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
   relatedTestDiagnostics?: Array<{
     taskId: string;
@@ -320,6 +322,51 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
       runId: `run-${storedOutcome}`,
       outcome: expected,
     });
+  });
+
+  // A `failed` outcome on the Home card is ambiguous on its own: an adjudication
+  // operational hold is Rune's failure, not the product's.
+  it('projects the typed adjudication state onto the most recent run', async () => {
+    const { buildHomePulse } = await import('./home-pulse.js');
+    const adjudicationFailure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+    };
+    const pulseFor = (extra: Record<string, unknown>) => buildHomePulse(
+      deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn(() => [
+          {
+            runId: 'run-adjudication',
+            product: 'aura',
+            target: { kind: 'project', slug: '01-mvp' },
+            outcome: 'failed',
+            endedAt: '2026-06-23T11:30:00.000Z',
+            ...extra,
+          },
+        ]),
+      }),
+    ).products.find((p: any) => p.name === 'aura')?.mostRecentRun;
+
+    expect(pulseFor({ adjudicationFailure })).toMatchObject({
+      outcome: 'failed',
+      adjudicationFailure,
+    });
+    expect(pulseFor({ adjudicationUpheldFail: true })).toMatchObject({
+      outcome: 'failed',
+      adjudicationUpheldFail: true,
+    });
+    // A plain failure claims neither state.
+    expect(pulseFor({})).not.toHaveProperty('adjudicationFailure');
+    expect(pulseFor({})).not.toHaveProperty('adjudicationUpheldFail');
+    // A corrupt row claiming both resolves to the operational hold alone.
+    const both = pulseFor({ adjudicationFailure, adjudicationUpheldFail: true });
+    expect(both).toMatchObject({ adjudicationFailure });
+    expect(both).not.toHaveProperty('adjudicationUpheldFail');
   });
 
   it('surfaces a parked run only as active state and attention, never as a terminal outcome', async () => {
@@ -812,6 +859,41 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       outcome: 'failed',
       contextFailure,
       disposition: { kind: 'preserved', wipSha: 'abcdef1234567' },
+    });
+  });
+
+  it('projects typed adjudication operational failures into Cockpit run history', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const adjudicationFailure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+    };
+    const reason = 'Adjudication operational hold: adjudication-output-invalid (invalid output after 2 attempts)';
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [{
+          runId: 'run-invalid-adjudication',
+          product: 'aura',
+          target: { kind: 'project', slug: '01-mvp' },
+          outcome: 'failed',
+          endedAt: '2026-08-06T11:45:00.000Z',
+          reason,
+          adjudicationFailure,
+        }]),
+      }),
+    });
+
+    expect(view.runs[0]).toMatchObject({
+      runId: 'run-invalid-adjudication',
+      outcome: 'failed',
+      reason,
+      adjudicationFailure,
     });
   });
 

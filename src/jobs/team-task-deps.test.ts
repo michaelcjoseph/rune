@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto';
 import {
   buildProductionTeamTaskDeps as buildProductionTeamTaskDepsRaw,
   createProductionTaskWorkflowRunner as createProductionTaskWorkflowRunnerRaw,
+  parseAdjudication,
   parseCoderSelfReviewResult,
   resolveTeamRoleModels,
   toSizedTask,
@@ -451,6 +452,11 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
 
     expect(models).toHaveLength(2);
     expect(models[1]).toBe(models[0]);
+    expect(capRuling.status).toBe('ruling');
+    expect(repeatRuling.status).toBe('ruling');
+    if (capRuling.status === 'operational-failure' || repeatRuling.status === 'operational-failure') {
+      throw new Error('expected admissible rulings');
+    }
     expect(capRuling.execution).toEqual(repeatRuling.execution);
     expect(capRuling.execution).toEqual({ modelAlias: models[0], provider: 'openai' });
     // Only the repeat prompt carries the "already raised" note.
@@ -629,48 +635,143 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(called).toBe(false);
   });
 
-  it('adjudicateSplit fails closed to an empty rationale on an unparseable reply', async () => {
-    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
-      judgmentCall: async () => 'no fenced adjudication block here',
-    }));
+  describe('adjudication artifact contract', () => {
+    const fenced = (json: string) => ['```adjudication', json, '```'].join('\n');
 
-    const ruling = await deps.adjudicateSplit!({
-      task: sizedTask,
-      dissentingRole: 'reviewer',
-      concurringRole: 'tech-lead',
-      dissentingVerdict: { outcome: 'fail', findings: [], notes: 'the release ordering is unsafe' },
-      concurringVerdict: { outcome: 'pass', findings: [] },
-      escalate: false,
+    it.each([
+      ['missing-fence', 'plain prose', 'missing-fence'],
+      ['invalid-fence', '```adjudication\n{}', 'invalid-fence'],
+      ['invalid-json', fenced('{not json}'), 'invalid-json'],
+      ['unsupported-verdict', fenced('{"upholds":"unresolved","rationale":"cannot tell"}'), 'unsupported-verdict'],
+      ['blank-rationale', fenced('{"upholds":"pass","rationale":"   "}'), 'blank-rationale'],
+      ['missing-finding', fenced('{"upholds":"fail","rationale":"the fail stands"}'), 'missing-finding'],
+      ['malformed-finding', fenced('{"upholds":"fail","rationale":"the fail stands","finding":{"class":"security"}}'), 'malformed-finding'],
+      ['incomplete-evidence', fenced('{"upholds":"fail","rationale":"the fail stands","finding":{"class":"security","severity":"high","location":"unknown","rationale":"security issue"}}'), 'incomplete-finding-evidence'],
+    ])('rejects %s with a bounded diagnostic', (_label, artifact, code) => {
+      expect(parseAdjudication(artifact)).toEqual({ status: 'invalid', code });
     });
 
-    expect(ruling.upholds).toBe('fail');
-    expect(ruling.rationale).toBe('');
-    expect(ruling.finding).toBeUndefined();
-    // Still carries the trusted executor identity — a parse failure is not an
-    // execution failure.
-    expect(ruling.execution).toBeDefined();
-  });
-
-  it('adjudicateSplit treats the deliberate "unresolved" escape hatch as fail-closed, not a pass', async () => {
-    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
-      judgmentCall: async () => [
-        '```adjudication',
-        '{"upholds": "unresolved", "rationale": "the artifacts do not settle it"}',
-        '```',
-      ].join('\n'),
-    }));
-
-    const ruling = await deps.adjudicateSplit!({
-      task: sizedTask,
-      dissentingRole: 'reviewer',
-      concurringRole: 'tech-lead',
-      dissentingVerdict: { outcome: 'fail', findings: [], notes: 'ambiguous ordering' },
-      concurringVerdict: { outcome: 'pass', findings: [] },
-      escalate: false,
+    it('accepts pass and evidence-complete fail rulings', () => {
+      expect(parseAdjudication(fenced(
+        '{"upholds":"pass","rationale":"the guard settles the disputed path"}',
+      ))).toMatchObject({ status: 'valid', ruling: { upholds: 'pass' } });
+      expect(parseAdjudication(fenced(JSON.stringify({
+        upholds: 'fail',
+        rationale: 'the release ordering remains unsafe',
+        finding: {
+          class: 'concurrency',
+          severity: 'medium',
+          location: 'src/lease.ts:42',
+          rationale: 'holder abort releases the lease while protected work can still execute',
+          reversible: true,
+        },
+      })))).toMatchObject({
+        status: 'valid',
+        ruling: { upholds: 'fail', finding: { location: 'src/lease.ts:42' } },
+      });
     });
 
-    expect(ruling.upholds).toBe('fail');
-    expect(ruling.rationale).toBe('');
+    it('retries one invalid artifact with immutable evidence and retains only diagnostics', async () => {
+      const calls: Array<{ model: string; message: string; systemPrompt: string }> = [];
+      const events: WorkflowActivityEvent[] = [];
+      const replies = [
+        'no fenced adjudication block here',
+        fenced('{"upholds":"pass","rationale":"the guard settles the disputed path"}'),
+      ];
+      const models = resolveTeamRoleModels(loadRealPolicy());
+      const deps = buildProductionTeamTaskDeps({
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        models,
+        emit: (event) => events.push(event),
+      }, makeSeams({
+          judgmentCall: async ({ model, message, systemPrompt }) => {
+            calls.push({ model, message, systemPrompt });
+            return replies.shift()!;
+          },
+        }));
+      const result = await deps.adjudicateSplit!({
+        task: sizedTask,
+        dissentingRole: 'reviewer',
+        concurringRole: 'tech-lead',
+        dissentingVerdict: { outcome: 'fail', findings: [], notes: 'unsafe ordering' },
+        concurringVerdict: { outcome: 'pass', findings: [] },
+        escalate: false,
+        judgmentContext: {
+          task: sizedTask,
+          diff: 'immutable diff evidence',
+          spec: 'immutable spec evidence',
+          tests: ['immutable test evidence'],
+          projectContext: 'immutable project context',
+          qa: { kind: 'tests-written', testIds: ['src/lease.test.ts'] },
+          reviewState: {
+            hash: '3'.repeat(64),
+            baseTree: '1'.repeat(40),
+            currentTree: '2'.repeat(40),
+            changedPaths: ['src/lease.ts'],
+          },
+          findingsLedger: [],
+          coderHandoffNotes: [],
+          artifactPass: 'first-pass',
+        },
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.model).toBe(calls[0]?.model);
+      expect(calls[1]?.message).toBe(calls[0]?.message);
+      expect(calls[1]?.systemPrompt).toContain('previous response did not satisfy');
+      expect(result).toMatchObject({ status: 'ruling', upholds: 'pass' });
+      expect(JSON.stringify(result)).not.toContain('no fenced adjudication');
+      expect(events).toContainEqual(expect.objectContaining({
+        data: expect.objectContaining({
+          event: 'adjudication-attempt-invalid',
+          attempt: 1,
+          diagnostic: 'missing-fence',
+        }),
+      }));
+      expect(JSON.stringify(events)).not.toContain('no fenced adjudication');
+    });
+
+    it('exhausts after two invalid artifacts and stops immediately on provider failure', async () => {
+      const invalidCall = vi.fn(async () => 'raw secret invalid output');
+      const invalidDeps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+        judgmentCall: invalidCall,
+      }));
+      const input = {
+        task: sizedTask,
+        dissentingRole: 'reviewer' as const,
+        concurringRole: 'tech-lead' as const,
+        dissentingVerdict: { outcome: 'fail' as const, findings: [], notes: 'unsafe' },
+        concurringVerdict: { outcome: 'pass' as const, findings: [] },
+        escalate: false,
+      };
+      const invalid = await invalidDeps.adjudicateSplit!(input);
+      expect(invalidCall).toHaveBeenCalledTimes(2);
+      expect(invalid).toMatchObject({
+        status: 'operational-failure',
+        failure: {
+          code: 'adjudication-output-invalid',
+          cause: 'invalid-artifact',
+          attempts: [
+            { attempt: 1, code: 'missing-fence' },
+            { attempt: 2, code: 'missing-fence' },
+          ],
+        },
+      });
+      expect(JSON.stringify(invalid)).not.toContain('raw secret');
+
+      const failedCall = vi.fn(async () => { throw new Error('provider raw secret'); });
+      const failedDeps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+        judgmentCall: failedCall,
+      }));
+      const failed = await failedDeps.adjudicateSplit!(input);
+      expect(failedCall).toHaveBeenCalledTimes(1);
+      expect(failed).toMatchObject({
+        status: 'operational-failure',
+        failure: { cause: 'provider-failure', attempts: [{ attempt: 1, code: 'provider-failure' }] },
+      });
+      expect(JSON.stringify(failed)).not.toContain('provider raw secret');
+    });
   });
 
   describe('coder-self-review result contract', () => {
@@ -3580,9 +3681,14 @@ describe('no-stub regression (Phase 8)', () => {
 
       const evidence = await run(selectedTask, { handoff: 'h', contextMd: 'c' });
 
-      expect(evidence.outcome).toBe('blocked');
+      expect(evidence.outcome).toBe('failed');
       expect(evidence.rolesInvoked).toEqual([]);
-      expect(evidence.blockedReason).toMatch(/required adjudicator.*unavailable/i);
+      expect(evidence.failureReason).toMatch(/Adjudication operational hold/i);
+      expect(evidence.adjudicationFailure).toMatchObject({
+        code: 'adjudication-output-invalid',
+        cause: 'unavailable',
+        attempts: [],
+      });
       expect(preflightExecution).not.toHaveBeenCalled();
     } finally {
       await rm(dir, { recursive: true, force: true });

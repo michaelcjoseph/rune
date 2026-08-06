@@ -1129,6 +1129,11 @@ function readNewCockpitRecentWorkRuns(): ProductDeepViewWorkRun[] {
         : { kind: 'project', slug: project },
       outcome: summary?.outcome ?? row.outcome,
       endedAt: summary?.endedAt ?? row.endedAt,
+      ...(summary?.reason ? { reason: summary.reason } : {}),
+      ...(summary?.adjudicationFailure
+        ? { adjudicationFailure: summary.adjudicationFailure }
+        : {}),
+      ...(summary?.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
       transcriptExists: Boolean(summary?.transcriptPath),
       ...(summary?.contextFailure ? { contextFailure: summary.contextFailure } : {}),
       ...(summary?.disposition ? { disposition: summary.disposition } : {}),

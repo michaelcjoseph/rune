@@ -485,10 +485,25 @@ function gateValidationStatus(run) {
     (profiles ? ` · ${profiles}` : '');
 }
 
+function adjudicationStatus(run) {
+  if (run.adjudicationFailure?.code === 'adjudication-output-invalid') {
+    return 'Adjudication operational hold · adjudication-output-invalid';
+  }
+  if (run.adjudicationUpheldFail === true) return 'Adjudicator upheld fail';
+  // Legacy fallback ONLY: runs whose summary predates `adjudicationUpheldFail`
+  // carry the distinction just in the reason prose. New runs never reach this
+  // branch, so a wording change upstream can no longer silently drop the label.
+  if (/adjudicator upheld .*fail/i.test(run.reason || '')) {
+    return 'Adjudicator upheld fail';
+  }
+  return '';
+}
+
 function renderRuns(view, liveRuns = {}) {
   const history = list(view.runs).map((run) => {
     const relatedStatus = relatedTestStatus(run);
     const gateStatus = gateValidationStatus(run);
+    const adjudication = adjudicationStatus(run);
     return `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
       `<div class="deep-row-head">` +
         `<strong>${escHtml(run.runId)}</strong>` +
@@ -528,6 +543,12 @@ function renderRuns(view, liveRuns = {}) {
       (gateStatus
         ? `<div class="deep-run-meta deep-run-validation">` +
             `<span>${escHtml(gateStatus)}</span>` +
+          `</div>`
+        : '') +
+      (adjudication
+        ? `<div class="deep-run-meta deep-run-adjudication">` +
+            `<span>${escHtml(adjudication)}</span>` +
+            (run.reason ? `<span>${escHtml(run.reason)}</span>` : '') +
           `</div>`
         : '') +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +

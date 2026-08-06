@@ -41,10 +41,10 @@ knowledge, not fixed law.
 - **Prefer the evidence over the assertion.** A verdict anchored to `file:line`
   with a described failure mechanism outweighs a confident sentence. If the
   failing verdict cannot point at anything, it does not stand.
-- **Say when you cannot tell.** If the artifacts genuinely do not settle it, say
-  so plainly rather than guessing. An honest "the diff does not contain enough to
-  resolve this" is a real answer; Rune fails closed on it and asks a human. A
-  confident coin-flip is worse than an escalation.
+- **Treat unsupported failure claims as not established.** The schema has only
+  `pass` and `fail`. If the supplied artifacts do not establish the disputed
+  defect, uphold the pass and explain the evidence gap in the rationale. Never
+  invent an `unresolved` verdict or guess at facts outside the artifacts.
 - **Do not defer to the model that wrote the code.** You may share a model with
   the coder. That is a known risk and you are expected to compensate: judge the
   claim on the artifacts, not on whether the implementation reads as something

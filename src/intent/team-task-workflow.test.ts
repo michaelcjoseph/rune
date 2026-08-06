@@ -1461,10 +1461,24 @@ describe('team-task-workflow — split adjudication', () => {
 
     expect(ev.outcome).toBe('blocked');
     expect(ev.adjudications?.[0]?.upheld).toBe('fail');
+    // Typed, so downstream surfaces never have to pattern-match the prose.
+    expect(ev.adjudicationUpheldFail).toBe(true);
+    expect(ev.adjudicationFailure).toBeUndefined();
     // The ruling's finding survives as concrete blocking evidence.
     expect(ev.findingsLedger.some(
       (entry) => entry.status === 'open' && entry.location === disputed.location,
     )).toBe(true);
+  });
+
+  // The two terminal adjudication states are mutually exclusive: an operational
+  // hold must never masquerade as an adjudicated product failure downstream.
+  it('an operational adjudication failure never sets the upheld-fail marker', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async () => ({ upholds: 'fail', rationale: '   ', finding: disputed }),
+    }));
+
+    expect(ev.adjudicationUpheldFail).toBeUndefined();
+    expect(ev.adjudicationFailure?.code).toBe('adjudication-output-invalid');
   });
 
   it('upholding the pass files the dissent as a follow-up rather than dropping it', async () => {
@@ -1508,7 +1522,7 @@ describe('team-task-workflow — split adjudication', () => {
     expect(escalations).toEqual([true]);
   });
 
-  it('fails closed when no adjudicator is wired', async () => {
+  it('retains the optional legacy fallback when no adjudication seam is wired', async () => {
     const events: WorkflowActivityEvent[] = [];
     const ev = await runTeamTaskWorkflow(
       codeTask,
@@ -1517,12 +1531,13 @@ describe('team-task-workflow — split adjudication', () => {
     );
 
     expect(ev.outcome).toBe('blocked');
-    expect(ev.adjudications?.[0]?.failClosedReason).toBe('no adjudicator is wired');
+    expect(ev).not.toHaveProperty('adjudications');
+    expect(ev).not.toHaveProperty('adjudicationFailure');
     expect(ev.rolesInvoked).not.toContain('adjudicator');
     expect(events.some((event) => event.data?.['role'] === 'adjudicator')).toBe(false);
   });
 
-  it('retains the severity-loop fallback for a findings-backed split without an adjudicator', async () => {
+  it('retains the legacy severity-loop fallback for a findings-backed split without a seam', async () => {
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, makeDeps({
       reviewer: async () => ({
         outcome: 'fail',
@@ -1532,21 +1547,50 @@ describe('team-task-workflow — split adjudication', () => {
     }));
 
     expect(ev.outcome).toBe('ready-for-closeout');
-    expect(ev.adjudications?.[0]?.failClosedReason).toBe('no adjudicator is wired');
+    expect(ev).not.toHaveProperty('adjudications');
   });
 
-  it('fails closed when the adjudicator throws', async () => {
+  it('returns a typed operational failure when the adjudicator throws', async () => {
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
       adjudicateSplit: async () => {
         throw new Error('provider unavailable');
       },
     }));
 
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.adjudications?.[0]?.failClosedReason).toContain('provider unavailable');
+    expect(ev.outcome).toBe('failed');
+    expect(ev.loopExitReason).toBe('operational');
+    expect(ev.adjudicationFailure).toMatchObject({
+      code: 'adjudication-output-invalid',
+      cause: 'provider-failure',
+      attempts: [{ attempt: 1, code: 'provider-failure' }],
+    });
+    expect(JSON.stringify(ev)).not.toContain('provider unavailable');
+    expect(ev.adjudications?.[0]).not.toHaveProperty('upheld');
   });
 
-  it('fails closed on an unusable ruling rather than reading it as a pass', async () => {
+  it('returns a typed operational failure when the adjudicator reports unavailable', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
+      adjudicateSplit: async () => ({
+        status: 'operational-failure',
+        failure: {
+          code: 'adjudication-output-invalid',
+          cause: 'unavailable',
+          attempts: [],
+        },
+      }),
+    }));
+
+    expect(ev).toMatchObject({
+      outcome: 'failed',
+      loopExitReason: 'operational',
+      adjudicationFailure: { cause: 'unavailable' },
+      failureReason: expect.stringContaining('Adjudication operational hold'),
+    });
+    expect(ev.adjudications?.[0]).not.toHaveProperty('upheld');
+    expect(ev).not.toHaveProperty('rejectionFeedback');
+  });
+
+  it('records unusable legacy seam rulings as operational failures, never substantive fails', async () => {
     for (const ruling of [
       { upholds: 'pass' as const, rationale: '   ' },
       { upholds: 'fail' as const, rationale: 'it is broken' }, // upheld fail, no finding
@@ -1555,8 +1599,12 @@ describe('team-task-workflow — split adjudication', () => {
       const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, splitDeps({
         adjudicateSplit: async () => ruling,
       }));
-      expect(ev.outcome, JSON.stringify(ruling)).toBe('blocked');
-      expect(ev.adjudications?.[0]?.failClosedReason).toBeDefined();
+      expect(ev.outcome, JSON.stringify(ruling)).toBe('failed');
+      expect(ev.loopExitReason).toBe('operational');
+      expect(ev.adjudicationFailure?.code).toBe('adjudication-output-invalid');
+      expect(ev.adjudications?.[0]).not.toHaveProperty('upheld');
+      expect(ev.findingsLedger).toEqual([]);
+      expect(ev).not.toHaveProperty('rejectionFeedback');
     }
   });
 
@@ -1589,9 +1637,12 @@ describe('team-task-workflow — split adjudication', () => {
         }),
       }));
 
-      expect(ev.outcome, JSON.stringify(finding)).toBe('blocked');
-      expect(ev.adjudications?.[0]?.failClosedReason).toContain('lacks');
-      expect(ev.adjudications?.[0]?.upheld).toBe('fail');
+      expect(ev.outcome, JSON.stringify(finding)).toBe('failed');
+      expect(ev.adjudicationFailure).toMatchObject({
+        cause: 'invalid-artifact',
+        attempts: [{ code: 'incomplete-finding-evidence' }],
+      });
+      expect(ev.adjudications?.[0]).not.toHaveProperty('upheld');
       // The ungrounded finding never reaches the ledger or the coder feedback.
       expect(ev.findingsLedger.some((entry) => entry.location === finding.location)).toBe(false);
     }

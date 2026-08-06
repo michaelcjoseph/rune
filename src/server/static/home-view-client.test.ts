@@ -678,6 +678,61 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html.indexOf('no-op run')).toBeLessThan(html.indexOf('backlog warning'));
   });
 
+  // A run held for invalid adjudicator output lands as `failed`, which on its own
+  // reads as a product defect. The card must say which failure it was, off typed
+  // state rather than the reason prose.
+  it('distinguishes an adjudication operational hold from an adjudicated fail on the card', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+    const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+
+    const cardFor = (mostRecentRun: Record<string, unknown>) => renderHomeView({
+      available: true,
+      products: [{
+        name: 'aura',
+        repoBacked: true,
+        counts: { activeProjects: 1, openBugs: 0, openIdeas: 0, backlogWarnings: 0 },
+        mostRecentRun,
+        attention: [],
+      }],
+    });
+
+    const hold = cardFor({
+      runId: 'run-hold-1',
+      outcome: 'failed',
+      endedAt: '2026-06-23T13:00:00.000Z',
+      adjudicationFailure: {
+        code: 'adjudication-output-invalid',
+        cause: 'invalid-artifact',
+        attempts: [{ attempt: 1, code: 'missing-fence' }, { attempt: 2, code: 'blank-rationale' }],
+      },
+    });
+    expect(hold).toMatch(/data-adjudication=["']operational-hold["']/);
+    expect(hold).toContain('adjudication operational hold');
+    expect(hold).not.toContain('upheld fail');
+
+    const upheld = cardFor({
+      runId: 'run-upheld-1',
+      outcome: 'failed',
+      endedAt: '2026-06-23T13:00:00.000Z',
+      adjudicationUpheldFail: true,
+    });
+    expect(upheld).toMatch(/data-adjudication=["']upheld-fail["']/);
+    expect(upheld).toContain('adjudicator upheld fail');
+    expect(upheld).not.toContain('operational hold');
+
+    // An ordinary failure stays unannotated.
+    const plain = cardFor({
+      runId: 'run-plain-1',
+      outcome: 'failed',
+      endedAt: '2026-06-23T13:00:00.000Z',
+    });
+    expect(plain).not.toMatch(/data-adjudication=/);
+
+    // The hold reads as a warning, the adjudicated fail as an error.
+    expect(css).toMatch(/\.home-adjudication--hold[\s\S]*?--warning/);
+    expect(css).toMatch(/\.home-adjudication--upheld-fail[\s\S]*?--error/);
+  });
+
   it('does not render chat, logs, or Fix controls on the Home pulse', async () => {
     const { renderHomeView } = await import('./home-view.js');
 

@@ -17,6 +17,7 @@ import {
   SEVERITY_LOOP_HARD_BUDGET,
   type CoderSelfReviewRecord,
   type AdjudicationRecord,
+  type AdjudicationFailure,
   type DowngradedFinding,
   type GateVerdict,
   type JudgmentOutcomeEvidence,
@@ -74,6 +75,8 @@ export interface TaskRunRecord {
   acceptance?: PmAcceptance;
   /** Durable tie-break rulings, bounded to the workflow round budget. */
   adjudications?: AdjudicationRecord[];
+  /** Typed operational adjudication stop. Optional for historical records. */
+  adjudicationFailure?: AdjudicationFailure;
   /** Durable evidence-contract downgrades and their reasons. */
   downgradedFindings?: DowngradedFinding[];
   /** Successful worktree coder self-reviews. Optional for historical JSONL. */
@@ -129,18 +132,11 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       ? {
           adjudications: input.adjudications
             .slice(0, SEVERITY_LOOP_HARD_BUDGET)
-            .map((record) => ({
-              ...record,
-              signature: durableText(record.signature),
-              rationale: durableText(record.rationale),
-              ...(record.executedModelAlias !== undefined
-                ? { executedModelAlias: durableText(record.executedModelAlias) }
-                : {}),
-              ...(record.failClosedReason !== undefined
-                ? { failClosedReason: durableText(record.failClosedReason) }
-                : {}),
-            })),
+            .map(durableAdjudicationRecord),
         }
+      : {}),
+    ...(input.adjudicationFailure !== undefined
+      ? { adjudicationFailure: durableAdjudicationFailure(input.adjudicationFailure) }
       : {}),
     ...(input.downgradedFindings !== undefined
       ? {
@@ -212,6 +208,52 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
 
 function durableText(value: string): string {
   return scrubGenericAbsolutePaths(scrubAbsolutePaths(value)).slice(0, 2_000);
+}
+
+function durableAdjudicationRecord(record: AdjudicationRecord): AdjudicationRecord {
+  const base = {
+    round: record.round,
+    dissentingRole: record.dissentingRole,
+    concurringRole: record.concurringRole,
+    signature: durableText(record.signature),
+    escalated: record.escalated,
+    ...(record.executedModelAlias !== undefined
+      ? { executedModelAlias: durableText(record.executedModelAlias) }
+      : {}),
+    ...(record.executedProvider !== undefined
+      ? { executedProvider: record.executedProvider }
+      : {}),
+  };
+  if (record.status === 'operational-failure') {
+    return {
+      ...base,
+      status: 'operational-failure',
+      failure: durableAdjudicationFailure(record.failure),
+    };
+  }
+  return {
+    ...base,
+    status: 'ruling',
+    upheld: record.upheld,
+    rationale: durableText(record.rationale),
+  };
+}
+
+function durableAdjudicationFailure(failure: AdjudicationFailure): AdjudicationFailure {
+  return {
+    code: 'adjudication-output-invalid',
+    cause: failure.cause,
+    attempts: failure.attempts.slice(0, 2).map((attempt) => ({
+      attempt: attempt.attempt,
+      code: attempt.code,
+    })),
+    ...(failure.executedModelAlias !== undefined
+      ? { executedModelAlias: durableText(failure.executedModelAlias) }
+      : {}),
+    ...(failure.executedProvider !== undefined
+      ? { executedProvider: failure.executedProvider }
+      : {}),
+  };
 }
 
 function durableFinding(finding: ObjectionFinding): ObjectionFinding {

@@ -38,6 +38,9 @@ export interface RunSummaryRow {
   target: ProductDeepViewTarget;
   outcome: ProductDeepViewOutcome;
   endedAt: string;
+  reason?: string;
+  adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
+  adjudicationUpheldFail?: true;
   transcriptUrl?: string;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;
@@ -115,6 +118,9 @@ export interface ProductDeepViewWorkRun {
   target?: ProductDeepViewTarget;
   outcome: StoredProductDeepViewOutcome;
   endedAt: string;
+  reason?: string;
+  adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
+  adjudicationUpheldFail?: true;
   transcriptExists?: boolean;
   transcriptUrl?: string | null;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
@@ -476,6 +482,9 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       };
       const transcriptUrl = transcriptUrlForRun(run, id);
       if (transcriptUrl) row.transcriptUrl = transcriptUrl;
+      if (run.reason) row.reason = run.reason;
+      if (run.adjudicationFailure) row.adjudicationFailure = run.adjudicationFailure;
+      if (run.adjudicationUpheldFail === true) row.adjudicationUpheldFail = true;
       if (run.contextFailure) row.contextFailure = run.contextFailure;
       if (run.relatedTestDiagnostic) row.relatedTestDiagnostic = run.relatedTestDiagnostic;
       if (run.relatedTestDiagnostics) row.relatedTestDiagnostics = run.relatedTestDiagnostics;

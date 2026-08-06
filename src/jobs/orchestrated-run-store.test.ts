@@ -248,6 +248,78 @@ describe('orchestrated run store', () => {
     ]);
   });
 
+  it('round-trips discriminated adjudication failures without raw model output', async () => {
+    const failure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+      executedModelAlias: 'gpt-adjudicator',
+      executedProvider: 'openai' as const,
+    };
+    const record = readyRecord({
+      outcome: 'failed',
+      commitSha: null,
+      adjudicationFailure: {
+        ...failure,
+        rawOutput: 'secret raw adjudicator response',
+      } as typeof failure,
+      adjudications: [{
+        status: 'operational-failure',
+        round: 1,
+        dissentingRole: 'reviewer',
+        concurringRole: 'tech-lead',
+        signature: 'notes: ordering concern',
+        escalated: false,
+        executedModelAlias: 'gpt-adjudicator',
+        executedProvider: 'openai',
+        failure,
+      }],
+    });
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-adjudication-failure', record);
+    const [restored] = await readRecords(tmpDir, 'mut-adjudication-failure');
+
+    expect(restored?.adjudicationFailure).toEqual(failure);
+    expect(restored?.adjudications?.[0]).toMatchObject({
+      status: 'operational-failure',
+      failure,
+    });
+    expect(restored?.adjudications?.[0]).not.toHaveProperty('upheld');
+    expect(readFileSync(
+      join(tmpDir, 'mut-adjudication-failure', 'task-records.jsonl'),
+      'utf8',
+    )).not.toContain('secret raw adjudicator response');
+  });
+
+  it('normalizes historical status-less adjudication records as rulings', async () => {
+    const historical = readyRecord({
+      adjudications: [{
+        round: 1,
+        dissentingRole: 'reviewer',
+        concurringRole: 'tech-lead',
+        signature: 'notes: ordering concern',
+        upheld: 'fail',
+        rationale: 'the release ordering is unsafe',
+        escalated: false,
+      }],
+    });
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-historical-adjudication', historical);
+
+    await expect(readRecords(tmpDir, 'mut-historical-adjudication')).resolves.toEqual([
+      expect.objectContaining({
+        adjudications: [expect.objectContaining({
+          status: 'ruling',
+          upheld: 'fail',
+          rationale: 'the release ordering is unsafe',
+        })],
+      }),
+    ]);
+  });
+
   it('keeps historical TaskRunRecords without coderSelfReviews readable', async () => {
     const legacy = readyRecord();
     delete legacy.coderSelfReviews;

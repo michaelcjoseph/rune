@@ -3271,6 +3271,81 @@ describe('project-orchestrator — closeout repair loop', () => {
     },
   );
 
+  it('routes invalid adjudication output to a WIP-preserving operational hold', async () => {
+    const failure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+      executedModelAlias: 'gpt-adjudicator',
+      executedProvider: 'openai' as const,
+    };
+    const h = makeHarness({
+      worktreePath: '/tmp/rune-worktrees/aura/adjudication-hold',
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        outcome: 'failed',
+        failureReason: 'Adjudication operational hold: adjudication-output-invalid (invalid output after 2 attempts)',
+        loopExitReason: 'operational',
+        adjudicationFailure: failure,
+        adjudications: [{
+          status: 'operational-failure',
+          round: 1,
+          dissentingRole: 'reviewer',
+          concurringRole: 'tech-lead',
+          signature: 'notes: ordering concern',
+          escalated: false,
+          executedModelAlias: 'gpt-adjudicator',
+          executedProvider: 'openai',
+          failure,
+        }],
+      }),
+    });
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('Adjudication operational hold'),
+      preserveBranch: true,
+      preserveWorktree: true,
+      adjudicationFailure: failure,
+      handoff: {
+        taskRecords: [expect.objectContaining({
+          outcome: 'failed',
+          adjudicationFailure: failure,
+          adjudications: [expect.objectContaining({ status: 'operational-failure' })],
+        })],
+      },
+    });
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+
+  // The substantive counterpart: an ADMISSIBLE upheld fail is an ordinary
+  // product block, and carries the typed marker so surfaces can tell it apart
+  // from the operational hold above without reading the reason prose.
+  it('carries a typed marker on an adjudicator-upheld substantive block', async () => {
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        outcome: 'blocked',
+        blockedReason: "adjudicator upheld reviewer's fail: the lease leaks on abort",
+        loopExitReason: 'hard-budget',
+        adjudicationUpheldFail: true,
+      }),
+    });
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({ kind: 'blocked', adjudicationUpheldFail: true });
+    expect(result).not.toHaveProperty('adjudicationFailure');
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+
   it('exhausts the repair budget, WIP-commits, and PARKS blocked-on-human with branch and worktree preserved', async () => {
     let workflowRuns = 0;
     const commitWip = vi.fn(async () => ({

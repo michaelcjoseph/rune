@@ -3474,6 +3474,13 @@ function buildOrchestratedSummary(args: {
   const gateValidationReceipt = isGateValidationReceipt(data['gateValidationReceipt'])
     ? data['gateValidationReceipt']
     : undefined;
+  const adjudicationFailure = data['adjudicationFailure'] &&
+      typeof data['adjudicationFailure'] === 'object' &&
+      (data['adjudicationFailure'] as Record<string, unknown>)['code'] ===
+        'adjudication-output-invalid'
+    ? result?.kind === 'held' ? result.adjudicationFailure : undefined
+    : undefined;
+  const adjudicationUpheldFail = data['adjudicationUpheldFail'] === true ? true as const : undefined;
   const cancelReason = trigger.kind === 'cancellation' ? trigger.cancellationSource : data['cancelReason'];
   const exit: ExitFacts = {
     exitCode:
@@ -3522,6 +3529,8 @@ function buildOrchestratedSummary(args: {
     ...(contextFailure !== undefined ? { contextFailure } : {}),
     ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
     ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
+    ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
+    ...(adjudicationUpheldFail !== undefined ? { adjudicationUpheldFail } : {}),
     ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
   };
 }
@@ -3702,11 +3711,13 @@ function mapResultToTerminal(
     const executionFailure = result.executionFailure;
     const contextFailure = result.contextFailure;
     const relatedTestDiagnostic = result.relatedTestDiagnostic;
+    const adjudicationFailure = result.adjudicationFailure;
     return term(
       mutationId,
       executionFailure === undefined &&
           contextFailure === undefined &&
-          relatedTestDiagnostic === undefined
+          relatedTestDiagnostic === undefined &&
+          adjudicationFailure === undefined
         ? 'completed'
         : 'failed',
       {
@@ -3724,6 +3735,7 @@ function mapResultToTerminal(
       } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+      ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
     });
   }
   if (result.kind === 'cancelled') {
@@ -3769,6 +3781,7 @@ function mapResultToTerminal(
       ...(result.relatedTestDiagnostic !== undefined
         ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
         : {}),
+      ...(result.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
     });
   }
   // blocked
@@ -3778,6 +3791,7 @@ function mapResultToTerminal(
     ...(result.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
       : {}),
+    ...(result.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
   });
 }
 

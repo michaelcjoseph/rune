@@ -350,6 +350,78 @@ describe('writeSummary', () => {
     expect(JSON.stringify(restored)).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 
+  it('round-trips typed adjudication failure evidence and rejects malformed variants', () => {
+    const adjudicationFailure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+      executedModelAlias: 'gpt-adjudicator',
+      executedProvider: 'openai' as const,
+    };
+    const summary = makeSummary({
+      id: 'adjudication-output-invalid',
+      outcome: 'failed',
+      reason: 'Adjudication operational hold: adjudication-output-invalid',
+      adjudicationFailure,
+    });
+    writeSummary(join(tmpDir, summary.id), summary);
+
+    expect(readWorkRunSummary(tmpDir, summary.id)).toMatchObject({ adjudicationFailure });
+
+    const malformed = makeSummary({ id: 'adjudication-output-malformed' }) as unknown as Record<string, unknown>;
+    malformed['adjudicationFailure'] = {
+      ...adjudicationFailure,
+      attempts: [{ attempt: 3, code: 'raw-output-secret' }],
+    };
+    mkdirSync(join(tmpDir, 'adjudication-output-malformed'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'adjudication-output-malformed', 'summary.json'),
+      JSON.stringify(malformed),
+    );
+    expect(readWorkRunSummaryResult(tmpDir, 'adjudication-output-malformed')).toEqual({
+      status: 'invalid',
+    });
+  });
+
+  it('round-trips the adjudicator-upheld-fail marker and fails closed on abuse of it', () => {
+    const upheld = makeSummary({
+      id: 'adjudication-upheld-fail',
+      outcome: 'failed',
+      reason: "orchestration blocked on \"task\": adjudicator upheld reviewer's fail: leaks",
+      adjudicationUpheldFail: true,
+    });
+    writeSummary(join(tmpDir, upheld.id), upheld);
+    expect(readWorkRunSummary(tmpDir, upheld.id)).toMatchObject({ adjudicationUpheldFail: true });
+
+    // Only the literal `true` is admissible — a truthy string must not ride
+    // through the summary spread and light up the Cockpit label.
+    const truthy = makeSummary({ id: 'adjudication-upheld-truthy' }) as unknown as Record<string, unknown>;
+    truthy['adjudicationUpheldFail'] = 'yes';
+    mkdirSync(join(tmpDir, 'adjudication-upheld-truthy'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'adjudication-upheld-truthy', 'summary.json'),
+      JSON.stringify(truthy),
+    );
+    expect(readWorkRunSummaryResult(tmpDir, 'adjudication-upheld-truthy')).toEqual({
+      status: 'invalid',
+    });
+
+    // The two terminal adjudication states are mutually exclusive.
+    const both = makeSummary({ id: 'adjudication-both' }) as unknown as Record<string, unknown>;
+    both['adjudicationUpheldFail'] = true;
+    both['adjudicationFailure'] = {
+      code: 'adjudication-output-invalid',
+      cause: 'unavailable',
+      attempts: [],
+    };
+    mkdirSync(join(tmpDir, 'adjudication-both'), { recursive: true });
+    writeFileSync(join(tmpDir, 'adjudication-both', 'summary.json'), JSON.stringify(both));
+    expect(readWorkRunSummaryResult(tmpDir, 'adjudication-both')).toEqual({ status: 'invalid' });
+  });
+
   it('round-trips a bounded conflict sample with its larger total count', () => {
     const id = 'bounded-context-conflicts';
     const checkpoint = { kind: 'committed' as const, sha: 'abcdef1234567' };

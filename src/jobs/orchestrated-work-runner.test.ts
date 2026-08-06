@@ -1057,6 +1057,96 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(false);
     });
 
+    it('persists invalid adjudication as failure truth with preserved WIP', async () => {
+      const adjudicationFailure = {
+        code: 'adjudication-output-invalid' as const,
+        cause: 'invalid-artifact' as const,
+        attempts: [
+          { attempt: 1 as const, code: 'missing-fence' as const },
+          { attempt: 2 as const, code: 'blank-rationale' as const },
+        ],
+        executedModelAlias: 'gpt-adjudicator',
+        executedProvider: 'openai' as const,
+      };
+      inject({
+        kind: 'held',
+        reason: 'Adjudication operational hold: adjudication-output-invalid (invalid output after 2 attempts)',
+        handoff: {
+          runId: 'mut-1',
+          project: 'demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
+          taskRecords: [],
+        },
+        branch: 'rune-work/demo',
+        preserveBranch: true,
+        preserveWorktree: true,
+        adjudicationFailure,
+      });
+      let persistedSummary: Record<string, unknown> | undefined;
+      __setOrchestratedRuntimeForTest({
+        writeSummary: (_dir, summary) => {
+          persistedSummary = summary as unknown as Record<string, unknown>;
+        },
+        appendIndexRow: () => {},
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+      expect(terminal).toMatchObject({
+        kind: 'failed',
+        data: {
+          held: true,
+          adjudicationFailure,
+          trigger: {
+            kind: 'failure',
+            reason: expect.stringContaining('Adjudication operational hold'),
+          },
+          disposition: { kind: 'preserved' },
+        },
+      });
+      expect(persistedSummary).toMatchObject({
+        outcome: 'failed',
+        reason: expect.stringContaining('Adjudication operational hold'),
+        adjudicationFailure,
+        disposition: { kind: 'preserved' },
+      });
+      expect(persistedSummary).not.toHaveProperty('adjudicationUpheldFail');
+      expect(destroyed).toBe(false);
+    });
+
+    // The substantive block travels the OTHER terminal path (blocked, not held),
+    // so its typed marker needs its own proof it survives to the summary.
+    it('carries the adjudicator-upheld-fail marker through to the persisted summary', async () => {
+      inject({
+        kind: 'blocked',
+        reason: "adjudicator upheld reviewer's fail: the release ordering remains unsafe",
+        task: { id: 't1', text: 'argv-command-executor', section: 'Phase 1' },
+        adjudicationUpheldFail: true,
+      });
+      let persistedSummary: Record<string, unknown> | undefined;
+      __setOrchestratedRuntimeForTest({
+        writeSummary: (_dir, summary) => {
+          persistedSummary = summary as unknown as Record<string, unknown>;
+        },
+        appendIndexRow: () => {},
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+      expect(terminal).toMatchObject({
+        kind: 'failed',
+        data: { adjudicationUpheldFail: true },
+      });
+      expect(persistedSummary).toMatchObject({
+        outcome: 'failed',
+        adjudicationUpheldFail: true,
+      });
+      expect(persistedSummary).not.toHaveProperty('adjudicationFailure');
+    });
+
     it('derives contextFile from the resolved project directory, not the requested slug', async () => {
       let seenContextFile: string | undefined;
       __setOrchestratedRuntimeForTest({

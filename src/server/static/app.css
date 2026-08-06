@@ -285,6 +285,26 @@ body[data-view="product"] #product-root {
   background: var(--warning-bg);
   color: var(--warning);
 }
+.home-adjudication {
+  display: inline-block;
+  margin-left: .4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .06rem .42rem;
+  font-size: .74rem;
+  line-height: 1.4;
+}
+/* An operational hold is Rune's failure, not the product's — warning, not error. */
+.home-adjudication--hold {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.home-adjudication--upheld-fail {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+}
 .home-unavailable {
   padding: 1rem;
   border: 1px solid var(--border);

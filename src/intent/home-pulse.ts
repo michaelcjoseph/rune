@@ -20,6 +20,13 @@ export interface HomeMostRecentRun {
   runId: string;
   outcome: HomePulseOutcome;
   endedAt: string;
+  /** Adjudication never produced an admissible ruling — a Rune-side operational
+   *  hold, NOT a product defect. Projected so the Home card can say so instead
+   *  of showing a bare `failed`. */
+  adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
+  /** An admissible ruling upheld the fail — a substantive product block. Mutually
+   *  exclusive with `adjudicationFailure`. */
+  adjudicationUpheldFail?: true;
 }
 
 export type AttentionSignal =
@@ -72,6 +79,8 @@ export interface HomePulseWorkRun {
   target?: HomeRunTarget;
   outcome: StoredWorkRunOutcome;
   endedAt: string;
+  adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
+  adjudicationUpheldFail?: true;
 }
 
 export interface HomePulseDeps {
@@ -226,6 +235,13 @@ export function buildHomePulse(deps: HomePulseDeps): HomePulse {
         runId: runId(latest),
         outcome: mapOutcome(latest.outcome),
         endedAt: latest.endedAt,
+        // Mutually exclusive upstream; project defensively so a corrupt row can
+        // never claim both terminal adjudication states on the Home card.
+        ...(latest.adjudicationFailure
+          ? { adjudicationFailure: latest.adjudicationFailure }
+          : latest.adjudicationUpheldFail === true
+            ? { adjudicationUpheldFail: true as const }
+            : {}),
       };
     }
 

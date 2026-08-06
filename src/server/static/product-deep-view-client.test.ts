@@ -1871,6 +1871,61 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).not.toContain('Merge validation failed');
   });
 
+  it('distinguishes an adjudication operational hold from an admissible upheld fail', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [
+        {
+          runId: 'run-invalid-adjudication',
+          target: { kind: 'project', slug: '24-execution-profiles' },
+          outcome: 'failed',
+          endedAt: '2026-08-06T12:00:00.000Z',
+          reason: 'Adjudication operational hold: adjudication-output-invalid (invalid output after 2 attempts)',
+          adjudicationFailure: {
+            code: 'adjudication-output-invalid',
+            cause: 'invalid-artifact',
+            attempts: [
+              { attempt: 1, code: 'missing-fence' },
+              { attempt: 2, code: 'blank-rationale' },
+            ],
+          },
+        },
+        {
+          runId: 'run-upheld-fail',
+          target: { kind: 'project', slug: '24-execution-profiles' },
+          outcome: 'failed',
+          endedAt: '2026-08-06T11:00:00.000Z',
+          reason: 'adjudicator upheld reviewer fail: the release ordering remains unsafe',
+        },
+      ],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('Adjudication operational hold · adjudication-output-invalid');
+    expect(html).toContain('invalid output after 2 attempts');
+    expect(html).toContain('Adjudicator upheld fail');
+    expect(html.match(/deep-run-adjudication/g)).toHaveLength(2);
+  });
+
+  // The label must come off the typed marker, not the reason prose — a reworded
+  // blockedReason upstream is exactly the silent breakage this guards against.
+  it('labels an upheld fail from the typed marker regardless of the reason wording', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-typed-upheld',
+        target: { kind: 'project', slug: '24-execution-profiles' },
+        outcome: 'failed',
+        endedAt: '2026-08-06T12:00:00.000Z',
+        // Deliberately does NOT match the legacy /adjudicator upheld .*fail/i prose.
+        reason: 'orchestration blocked on "argv-command-executor": the split was resolved against it',
+        adjudicationUpheldFail: true,
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('Adjudicator upheld fail');
+    expect(html).not.toContain('Adjudication operational hold');
+  });
+
   it('renders the final Cockpit label for every related-test diagnostic state', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
     const states = [

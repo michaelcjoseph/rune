@@ -137,12 +137,29 @@ function isProductChatOutputFrame(frame) {
     frame.product.length > 0;
 }
 
+// Why the Home card carries this at all: an adjudication operational hold lands
+// as a `failed` outcome, so without a note the card reads as a product defect
+// when nothing about the product failed. Derived from typed state only.
+function renderAdjudicationNote(run) {
+  if (run.adjudicationFailure?.code === 'adjudication-output-invalid') {
+    return `<span class="home-adjudication home-adjudication--hold" data-adjudication="operational-hold">` +
+      `adjudication operational hold</span>`;
+  }
+  if (run.adjudicationUpheldFail === true) {
+    return `<span class="home-adjudication home-adjudication--upheld-fail" data-adjudication="upheld-fail">` +
+      `adjudicator upheld fail</span>`;
+  }
+  return '';
+}
+
 function renderProductCard(product, unreadProducts = new Set()) {
   const counts = product.counts || {};
   const warnings = counts.backlogWarnings || 0;
   const attention = (product.attention || []).map(renderAttention).filter(Boolean).join('');
   const outcome = product.mostRecentRun
-    ? `<div class="home-outcome">Recent: ${escHtml(product.mostRecentRun.outcome)} - ${escHtml(product.mostRecentRun.runId)}</div>`
+    ? `<div class="home-outcome">Recent: ${escHtml(product.mostRecentRun.outcome)} - ${escHtml(product.mostRecentRun.runId)}` +
+      renderAdjudicationNote(product.mostRecentRun) +
+      `</div>`
     : '<div class="home-outcome muted">No completed runs</div>';
   const repoLabel = product.repoBacked ? 'repo-backed' : 'not repo-backed - tracked';
   const unread = unreadProducts.has(product.name);

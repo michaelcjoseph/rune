@@ -350,9 +350,121 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
         target: { kind: 'project', slug: '01-mvp' },
         outcome: 'failed',
         endedAt: '2026-06-23T11:30:00.000Z',
+        reason: 'tests failed',
         transcriptUrl: '/api/work-runs/run-failed/transcript',
       },
     ]);
+  });
+
+  it('surfaces a typed adjudication operational-hold failure in the product runs view', async () => {
+    const adjudicationFailure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [
+        { attempt: 1 as const, code: 'missing-fence' as const },
+        { attempt: 2 as const, code: 'blank-rationale' as const },
+      ],
+      executedModelAlias: 'gpt-adjudicator',
+      executedProvider: 'openai' as const,
+    };
+    const adjudicationRow = {
+      id: 'run-adjudication-invalid',
+      project: '01-mvp',
+      outcome: 'failed',
+      durationMs: 600000,
+      startedAt: '2026-06-23T13:00:00.000Z',
+      endedAt: '2026-06-23T13:30:00.000Z',
+    };
+    const adjudicationSummary = {
+      id: 'run-adjudication-invalid',
+      product: 'aura',
+      project: '01-mvp',
+      outcome: 'failed',
+      reason: 'Adjudication operational hold: adjudication-output-invalid (invalid output after 2 attempts)',
+      adjudicationFailure,
+      exit: { code: 1, signal: null },
+      workProduct: {},
+      baseSha: 'abc',
+      branch: 'work',
+      startedAt: '2026-06-23T13:00:00.000Z',
+      endedAt: '2026-06-23T13:30:00.000Z',
+      transcriptPath: '/test/logs/work-runs/run-adjudication-invalid/transcript.jsonl',
+      forensicsPath: '/test/logs/work-runs/run-adjudication-invalid/forensics.json',
+    };
+
+    mockIndexRows.unshift(adjudicationRow as any);
+    (mockSummariesById as Record<string, any>)['run-adjudication-invalid'] = adjudicationSummary;
+    try {
+      const res = await makeRequest('/api/products/aura', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.runs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: 'run-adjudication-invalid',
+            outcome: 'failed',
+            reason: adjudicationSummary.reason,
+            adjudicationFailure,
+          }),
+        ]),
+      );
+    } finally {
+      mockIndexRows.shift();
+      delete (mockSummariesById as Record<string, any>)['run-adjudication-invalid'];
+    }
+  });
+
+  // The Home card shows only the most recent run, so the same distinction has to
+  // survive the narrower HomePulse projection — otherwise an operational hold is
+  // indistinguishable from a product failure on the first screen the user sees.
+  it('carries the typed adjudication state onto mostRecentRun at GET /api/home', async () => {
+    const adjudicationFailure = {
+      code: 'adjudication-output-invalid' as const,
+      cause: 'invalid-artifact' as const,
+      attempts: [{ attempt: 1 as const, code: 'missing-fence' as const }],
+    };
+    const row = {
+      id: 'run-home-adjudication',
+      project: '01-mvp',
+      outcome: 'failed',
+      durationMs: 600000,
+      startedAt: '2026-06-23T14:00:00.000Z',
+      endedAt: '2026-06-23T14:30:00.000Z',
+    };
+    const summary = {
+      id: 'run-home-adjudication',
+      product: 'aura',
+      project: '01-mvp',
+      outcome: 'failed',
+      reason: 'Adjudication operational hold: adjudication-output-invalid (invalid output after 1 attempt)',
+      adjudicationFailure,
+      exit: { code: 1, signal: null },
+      workProduct: {},
+      baseSha: 'abc',
+      branch: 'work',
+      startedAt: '2026-06-23T14:00:00.000Z',
+      endedAt: '2026-06-23T14:30:00.000Z',
+      transcriptPath: '/test/logs/work-runs/run-home-adjudication/transcript.jsonl',
+      forensicsPath: '/test/logs/work-runs/run-home-adjudication/forensics.json',
+    };
+
+    mockIndexRows.unshift(row as any);
+    (mockSummariesById as Record<string, any>)['run-home-adjudication'] = summary;
+    try {
+      const res = await makeRequest('/api/home', AUTH);
+
+      expect(res.status).toBe(200);
+      const aura = res.body.products.find((p: any) => p.name === 'aura');
+      expect(aura.mostRecentRun).toMatchObject({
+        runId: 'run-home-adjudication',
+        outcome: 'failed',
+        adjudicationFailure,
+      });
+      expect(aura.mostRecentRun).not.toHaveProperty('adjudicationUpheldFail');
+    } finally {
+      mockIndexRows.shift();
+      delete (mockSummariesById as Record<string, any>)['run-home-adjudication'];
+    }
   });
 
   it('surfaces terminal writing pipeline state metadata in the writing product operations/runs view', async () => {

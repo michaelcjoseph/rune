@@ -37,7 +37,14 @@ import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 import { readJsonlTail } from './jsonl-tail.js';
 import type { WorkRunTarget } from '../intent/run-target.js';
 import type { OperationCancellation } from '../cancellation.js';
-import type { JudgmentOutcomeEvidence } from '../intent/team-task-workflow.js';
+import type {
+  AdjudicationFailure,
+  JudgmentOutcomeEvidence,
+} from '../intent/team-task-workflow.js';
+// Runtime value, same rationale as `PHASE_ORDER` above: the workflow does NOT
+// import this module, so there is no cycle, and deriving the allowlist from the
+// declaring module keeps a new diagnostic code from falling out of validation.
+import { ADJUDICATION_DIAGNOSTIC_CODES } from '../intent/team-task-workflow.js';
 import {
   isExecutionTerminalDisposition,
   isExecutionTerminalTrigger,
@@ -171,6 +178,12 @@ export interface WorkRunSummary {
   contextFailure?: ContextCloseoutFailure;
   /** Related-test host-conflict/fallback evidence, absent on legacy runs. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  /** Typed operational adjudication stop, absent on historical/unrelated runs. */
+  adjudicationFailure?: AdjudicationFailure;
+  /** An admissible ruling upheld the dissenting fail — a substantive adjudicated
+   *  product block, the counterpart to `adjudicationFailure`. Absent on runs
+   *  written before this field existed (surfaces fall back to the reason text). */
+  adjudicationUpheldFail?: true;
   /** Bounded per-task related-test evidence for successful multi-task runs. */
   relatedTestDiagnostics?: RelatedTestTaskDiagnostic[];
 }
@@ -274,6 +287,10 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     (parsed as Record<string, unknown>)['relatedTestDiagnostics'];
   const rawGateValidationReceipt =
     (parsed as Record<string, unknown>)['gateValidationReceipt'];
+  const rawAdjudicationFailure =
+    (parsed as Record<string, unknown>)['adjudicationFailure'];
+  const rawAdjudicationUpheldFail =
+    (parsed as Record<string, unknown>)['adjudicationUpheldFail'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -316,6 +333,19 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const gateValidationReceipt = isGateValidationReceipt(rawGateValidationReceipt)
     ? rawGateValidationReceipt
     : undefined;
+  const adjudicationFailure = parseAdjudicationFailure(rawAdjudicationFailure);
+  const adjudicationFailureValid =
+    rawAdjudicationFailure === undefined || adjudicationFailure !== undefined;
+  // Only the literal `true` (or absence) is admissible: a truthy-but-wrong value
+  // must fail the summary closed rather than ride through the `s` spread below.
+  const adjudicationUpheldFailValid =
+    rawAdjudicationUpheldFail === undefined || rawAdjudicationUpheldFail === true;
+  const adjudicationUpheldFail = rawAdjudicationUpheldFail === true ? true as const : undefined;
+  // A run cannot be BOTH an operational adjudication hold and an adjudicated
+  // upheld fail — they are the two mutually exclusive terminal adjudication
+  // states, so a summary claiming both is corrupt.
+  const adjudicationStateConsistent =
+    adjudicationFailure === undefined || adjudicationUpheldFail === undefined;
   if (
     s.id === id &&
     typeof s.product === 'string' &&
@@ -325,7 +355,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     cancellationValid && judgmentOutcomesValid &&
     triggerValid && dispositionValid && contextFailureValid &&
     relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
-    relatedTestProjectionConsistent
+    relatedTestProjectionConsistent && adjudicationFailureValid &&
+    adjudicationUpheldFailValid && adjudicationStateConsistent
   ) {
     const {
       gateValidationReceipt: _untrustedGateValidationReceipt,
@@ -338,6 +369,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
       ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),
+      ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
+      ...(adjudicationUpheldFail !== undefined ? { adjudicationUpheldFail } : {}),
       ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
     } as WorkRunSummary;
     if (
@@ -351,6 +384,40 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   }
   log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
   return { status: 'invalid' };
+}
+
+const ADJUDICATION_DIAGNOSTIC_CODE_SET = new Set<string>(ADJUDICATION_DIAGNOSTIC_CODES);
+
+function parseAdjudicationFailure(value: unknown): AdjudicationFailure | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    record['code'] !== 'adjudication-output-invalid' ||
+    !['invalid-artifact', 'provider-failure', 'unavailable'].includes(String(record['cause'])) ||
+    !Array.isArray(record['attempts']) || record['attempts'].length > 2
+  ) return undefined;
+  const attempts = record['attempts'].flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const attempt = item as Record<string, unknown>;
+    if ((attempt['attempt'] !== 1 && attempt['attempt'] !== 2) ||
+        !ADJUDICATION_DIAGNOSTIC_CODE_SET.has(String(attempt['code']))) return [];
+    return [{
+      attempt: attempt['attempt'] as 1 | 2,
+      code: attempt['code'] as AdjudicationFailure['attempts'][number]['code'],
+    }];
+  });
+  if (attempts.length !== record['attempts'].length) return undefined;
+  return {
+    code: 'adjudication-output-invalid',
+    cause: record['cause'] as AdjudicationFailure['cause'],
+    attempts,
+    ...(typeof record['executedModelAlias'] === 'string'
+      ? { executedModelAlias: record['executedModelAlias'].slice(0, 2_000) }
+      : {}),
+    ...(record['executedProvider'] === 'anthropic' || record['executedProvider'] === 'openai'
+      ? { executedProvider: record['executedProvider'] }
+      : {}),
+  };
 }
 
 function parseContextCloseoutFailure(value: unknown): ContextCloseoutFailure | undefined {

@@ -81,7 +81,7 @@ import {
   type ExecutionFailure,
 } from './execution-failure.js';
 import type { TaskValidationFailure } from './task-validation.js';
-import type { ReviewSurfaceFailure } from './team-task-workflow.js';
+import type { AdjudicationFailure, ReviewSurfaceFailure } from './team-task-workflow.js';
 import type {
   DurableValidationReceipt,
   FullSuiteAttestation,
@@ -251,6 +251,7 @@ export type OrchestrationResult =
       executionFailure?: ExecutionFailure;
       contextFailure?: ContextCloseoutFailure;
       relatedTestDiagnostic?: RelatedTestDiagnostic;
+      adjudicationFailure?: AdjudicationFailure;
     }
   | {
       kind: 'blocked';
@@ -260,6 +261,9 @@ export type OrchestrationResult =
       executionFailure?: ExecutionFailure;
       taskValidationFailure?: TaskValidationFailure;
       relatedTestDiagnostic?: RelatedTestDiagnostic;
+      /** An admissible adjudicator ruling upheld the fail — a substantive
+       *  product block, NOT the `adjudicationFailure` operational hold. */
+      adjudicationUpheldFail?: true;
     }
   | {
       kind: 'cancelled';
@@ -1155,6 +1159,9 @@ function taskRecordFromEvidence(
     ...(evidence.adjudications !== undefined
       ? { adjudications: evidence.adjudications }
       : {}),
+    ...(evidence.adjudicationFailure !== undefined
+      ? { adjudicationFailure: evidence.adjudicationFailure }
+      : {}),
     ...(evidence.downgradedFindings !== undefined
       ? { downgradedFindings: evidence.downgradedFindings }
       : {}),
@@ -1192,7 +1199,7 @@ function taskRecordFromEvidence(
 }
 
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
-  return evidence.executionFailure !== undefined;
+  return evidence.executionFailure !== undefined || evidence.adjudicationFailure !== undefined;
 }
 
 /** Terminal routing for task evidence that did not reach ready-for-closeout:
@@ -1235,7 +1242,10 @@ async function resolveNonCloseoutEvidence(
       deps,
       evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
       taskRecords,
-      { executionFailure: evidence.executionFailure },
+      {
+        executionFailure: evidence.executionFailure,
+        adjudicationFailure: evidence.adjudicationFailure,
+      },
     );
   }
   const parked = maybeParkedRun(deps, evidence);
@@ -1244,6 +1254,7 @@ async function resolveNonCloseoutEvidence(
     reason: evidence.blockedReason ?? evidence.failureReason ?? 'task did not reach closeout',
     task,
     ...(parked !== undefined ? { parked } : {}),
+    ...(evidence.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true as const } : {}),
   };
 }
 
@@ -1358,6 +1369,7 @@ interface OperationalHoldDetails {
   executionFailure?: ExecutionFailure;
   contextFailure?: ContextCloseoutFailure;
   relatedTestDiagnostic?: RelatedTestDiagnostic;
+  adjudicationFailure?: AdjudicationFailure;
 }
 
 function buildOperationalHold(
@@ -1366,7 +1378,7 @@ function buildOperationalHold(
   taskRecords: TaskRunRecord[],
   details: OperationalHoldDetails = {},
 ): Extract<OrchestrationResult, { kind: 'held' }> {
-  const { executionFailure, contextFailure, relatedTestDiagnostic } = details;
+  const { executionFailure, contextFailure, relatedTestDiagnostic, adjudicationFailure } = details;
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
     project: deps.project,
@@ -1388,6 +1400,7 @@ function buildOperationalHold(
     ...(executionFailure !== undefined ? { executionFailure } : {}),
     ...(contextFailure !== undefined ? { contextFailure } : {}),
     ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+    ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
   };
 }
 

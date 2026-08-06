@@ -49,15 +49,20 @@ import { extractFencedJson } from '../intent/planning-roles-wiring.js';
 import { runGateTriggeredLearning } from '../intent/gate-learning.js';
 import { writeGateLearningLesson } from '../intent/learning-write-path.js';
 import { runPostMortem } from '../intent/postmortem.js';
+import { evidenceGapsForFinding } from '../intent/finding-evidence.js';
 import type { FeedbackRecord, RoleStage } from '../intent/feedback-record.js';
 import {
   mapObjectionSeverityToOutcome,
   ExecutionFailureError,
   RoleCancellationError,
   ValidationProfileUnavailableError,
+  adjudicationOperationalReason,
   runTeamTaskWorkflow,
   SELF_REVIEW_NOTE_MAX_CHARS,
   type AcceptWithRationaleResult,
+  type AdjudicationAttemptDiagnostic,
+  type AdjudicationFailure,
+  type AdjudicationResult,
   type AdjudicationRuling,
   type ObjectionClass,
   type ObjectionFinding,
@@ -695,10 +700,6 @@ const ADJUDICATOR_INSTRUCTION = [
   'described failure mechanism outweighs a confident sentence. If the failing',
   'verdict cannot point at anything in the diff, it does not stand.',
   '',
-  'If the artifacts genuinely do not settle it, set upholds to "unresolved". That',
-  'is an honest answer and Rune fails closed to a human on it. A confident guess',
-  'is worse.',
-  '',
   'When you uphold the FAIL you MUST include `finding` — the objection restated',
   'with a concrete location, so the coder knows exactly what to change.',
   '',
@@ -706,6 +707,14 @@ const ADJUDICATOR_INSTRUCTION = [
   '```adjudication',
   '{"upholds": "pass", "rationale": "<why the artifacts settle it this way>", "finding": {"class": "concurrency", "severity": "high", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change>", "reversible": true}}',
   '```',
+].join('\n');
+
+const ADJUDICATOR_CORRECTION_INSTRUCTION = [
+  '',
+  'Your previous response did not satisfy the adjudication artifact schema.',
+  'Return exactly one complete fenced adjudication JSON block. Supported',
+  'upholds values are only "pass" and "fail"; fail requires one complete,',
+  'evidence-grounded finding. Do not add prose outside the fence.',
 ].join('\n');
 
 const EVIDENCE_REPROMPT_INSTRUCTION = [
@@ -963,29 +972,54 @@ function parseFlagVerdict(
   };
 }
 
-/** Fail-closed adjudication parser. Anything it cannot read as a complete,
- *  decisive ruling comes back as an upheld FAIL with an empty rationale, which
- *  the workflow rejects as inadmissible and treats as a block — never a pass. */
-function parseAdjudication(text: string): AdjudicationRuling {
-  const parsed = extractFencedJson(text, 'adjudication');
-  if (!parsed || typeof parsed !== 'object') {
-    return { upholds: 'fail', rationale: '' };
+export type AdjudicationParseResult =
+  | { status: 'valid'; ruling: AdjudicationRuling }
+  | { status: 'invalid'; code: AdjudicationAttemptDiagnostic['code'] };
+
+const ADJUDICATION_FENCE =
+  /^\s*```adjudication[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*\s*$/;
+
+/** Strict adjudication artifact parser. Invalid output stays operational data;
+ * it can never be fabricated into a substantive fail ruling. */
+export function parseAdjudication(text: string): AdjudicationParseResult {
+  const fence = ADJUDICATION_FENCE.exec(text);
+  if (fence === null) {
+    return {
+      status: 'invalid',
+      code: text.includes('```adjudication') ? 'invalid-fence' : 'missing-fence',
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fence[1]!);
+  } catch {
+    return { status: 'invalid', code: 'invalid-json' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { status: 'invalid', code: 'invalid-json' };
   }
   const v = parsed as Record<string, unknown>;
   const upholds = v['upholds'];
   if (upholds !== 'pass' && upholds !== 'fail') {
-    // Includes the deliberate "unresolved" escape hatch.
-    return { upholds: 'fail', rationale: '' };
+    return { status: 'invalid', code: 'unsupported-verdict' };
   }
   const rationale = typeof v['rationale'] === 'string'
     ? v['rationale'].slice(0, NOTE_MAX_CHARS)
     : '';
-  const { findings } = parseFindings({ findings: v['finding'] === undefined ? [] : [v['finding']] });
-  return {
-    upholds,
-    rationale,
-    ...(findings[0] !== undefined ? { finding: findings[0] } : {}),
-  };
+  if (rationale.trim() === '') return { status: 'invalid', code: 'blank-rationale' };
+  if (upholds === 'pass') {
+    return { status: 'valid', ruling: { upholds, rationale } };
+  }
+  if (v['finding'] === undefined) return { status: 'invalid', code: 'missing-finding' };
+  const { findings, malformedReason } = parseFindings({ findings: [v['finding']] });
+  const finding = findings[0];
+  if (malformedReason !== undefined || finding === undefined) {
+    return { status: 'invalid', code: 'malformed-finding' };
+  }
+  if (evidenceGapsForFinding(finding).length > 0) {
+    return { status: 'invalid', code: 'incomplete-finding-evidence' };
+  }
+  return { status: 'valid', ruling: { upholds, rationale, finding } };
 }
 
 /** Fail-closed acceptance parser. Anything unreadable is a REFUSAL, so an
@@ -2601,21 +2635,56 @@ export function buildProductionTeamTaskDeps(
               ]
             : []),
         ].join('\n');
-        const ruling = await judge<AdjudicationRuling>(
-          'adjudicator',
-          binding,
-          ADJUDICATOR_INSTRUCTION,
-          body,
-          task.id,
-          'adjudicator-split',
-          undefined,
-          parseAdjudication,
-        );
+        const attempts: AdjudicationAttemptDiagnostic[] = [];
+        for (const attempt of [1, 2] as const) {
+          let reply: string;
+          try {
+            reply = await judge(
+              'adjudicator',
+              binding,
+              attempt === 1
+                ? ADJUDICATOR_INSTRUCTION
+                : ADJUDICATOR_INSTRUCTION + ADJUDICATOR_CORRECTION_INSTRUCTION,
+              body,
+              task.id,
+              'adjudicator-split',
+            );
+          } catch (err) {
+            if (err instanceof RoleCancellationError) throw err;
+            attempts.push({ attempt, code: 'provider-failure' });
+            emitAdjudicationAttempt(args.emit, binding, attempt, 'provider-failure');
+            const failure: AdjudicationFailure = {
+              code: 'adjudication-output-invalid',
+              cause: 'provider-failure',
+              attempts,
+              executedModelAlias: binding.alias,
+              executedProvider: binding.provider,
+            };
+            return { status: 'operational-failure', failure };
+          }
+          const parsed = parseAdjudication(reply);
+          if (parsed.status === 'valid') {
+            const ruling: AdjudicationResult = {
+              status: 'ruling',
+              ...parsed.ruling,
+              execution: {
+                modelAlias: binding.alias,
+                provider: binding.provider,
+              },
+            };
+            return ruling;
+          }
+          attempts.push({ attempt, code: parsed.code });
+          emitAdjudicationAttempt(args.emit, binding, attempt, parsed.code);
+        }
         return {
-          ...ruling,
-          execution: {
-            modelAlias: binding.alias,
-            provider: binding.provider,
+          status: 'operational-failure',
+          failure: {
+            code: 'adjudication-output-invalid',
+            cause: 'invalid-artifact',
+            attempts,
+            executedModelAlias: binding.alias,
+            executedProvider: binding.provider,
           },
         };
       },
@@ -2707,6 +2776,30 @@ export function buildProductionTeamTaskDeps(
   };
 }
 
+function emitAdjudicationAttempt(
+  emit: BuildTeamTaskDepsArgs['emit'],
+  binding: RoleModelBinding,
+  attempt: 1 | 2,
+  diagnostic: AdjudicationAttemptDiagnostic['code'],
+): void {
+  try {
+    emit?.({
+      kind: 'activity',
+      data: {
+        event: 'adjudication-attempt-invalid',
+        role: 'adjudicator',
+        provider: binding.provider,
+        model: binding.alias,
+        attempt,
+        diagnostic,
+        line: `adjudicator attempt ${attempt} invalid: ${diagnostic}`,
+      },
+    });
+  } catch {
+    /* observability-only; an activity sink cannot change the ruling path */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // OrchestrationDeps.runTaskWorkflow production binding
 // ---------------------------------------------------------------------------
@@ -2764,6 +2857,25 @@ function blockedEvidence(
     blockedReason: reason,
     ...(executionPreflight !== undefined ? { executionPreflight } : {}),
     ...(taskValidationFailure !== undefined ? { taskValidationFailure } : {}),
+    findingsLedger: [],
+    loopExitReason: 'operational',
+  };
+}
+
+function unavailableAdjudicatorEvidence(task: SelectedTask): TaskEvidence {
+  const adjudicationFailure: AdjudicationFailure = {
+    code: 'adjudication-output-invalid',
+    cause: 'unavailable',
+    attempts: [],
+  };
+  return {
+    taskId: task.id,
+    outcome: 'failed',
+    rolesInvoked: [],
+    objectionOpen: false,
+    handoffNotes: [],
+    failureReason: adjudicationOperationalReason(adjudicationFailure),
+    adjudicationFailure,
     findingsLedger: [],
     loopExitReason: 'operational',
   };
@@ -3000,10 +3112,7 @@ export function createProductionTaskWorkflowRunner(
       return blockedEvidence(task, `role model resolution failed: ${(err as Error).message}`);
     }
     if (models.adjudicator === null) {
-      return blockedEvidence(
-        task,
-        'role model resolution failed: required adjudicator binding is unavailable',
-      );
+      return unavailableAdjudicatorEvidence(task);
     }
     // The ESCALATION binding is deliberately not required here. It is spent only
     // on a repeat split — an objection that already survived a coder retry — so
