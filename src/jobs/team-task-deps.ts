@@ -307,6 +307,9 @@ export interface JudgmentModelCall {
     message: string;
     sessionId?: string;
     judgmentBatchId?: string;
+    /** Attribution only — carried into the `role-call` timing record. */
+    taskId?: string;
+    workflowStage?: string;
   }): Promise<string>;
 }
 
@@ -333,8 +336,13 @@ export interface TeamTaskSeams {
 
 /** Production judgment call: SOUL on the system channel, one throwaway
  *  session per invocation (fresh context, no cross-role bleed), cleaned up
- *  immediately. */
-const defaultJudgmentCall: JudgmentModelCall = async ({
+ *  immediately.
+ *
+ *  Wrapped by `defaultJudgmentCall`, which stamps a `role-call` timing record
+ *  on every terminal path. Role calls are the dominant term in per-task wall
+ *  clock and were previously unmeasured — the run record carries verdicts and
+ *  counts but no durations, so a slow stage could not be attributed. */
+const runJudgmentCall: JudgmentModelCall = async ({
   role,
   model,
   format = 'claude',
@@ -386,6 +394,33 @@ const defaultJudgmentCall: JudgmentModelCall = async ({
     if (ownsSession) {
       cleanupSession(sessionId);
     }
+  }
+};
+
+/** Timing wrapper around every team-role model call. Emits exactly one
+ *  `role-call` record per invocation on success, failure, and cancellation.
+ *  The record carries structured attribution only — never the prompt, the
+ *  reply, or any repository content. */
+export const defaultJudgmentCall: JudgmentModelCall = async (input) => {
+  const startedAt = Date.now();
+  const record = (outcome: 'ok' | 'error' | 'cancelled'): void => {
+    log.info('role-call', {
+      role: input.role,
+      model: input.model,
+      format: input.format ?? 'claude',
+      outcome,
+      durationMs: Date.now() - startedAt,
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.workflowStage !== undefined ? { workflowStage: input.workflowStage } : {}),
+    });
+  };
+  try {
+    const reply = await runJudgmentCall(input);
+    record('ok');
+    return reply;
+  } catch (err) {
+    record(err instanceof RoleCancellationError ? 'cancelled' : 'error');
+    throw err;
   }
 };
 
@@ -1284,6 +1319,8 @@ function makeJudge(
           provider: binding.provider,
           format: binding.format,
           product,
+          taskId,
+          workflowStage,
           systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
           message,
           ...(judgmentBatchId !== undefined ? { judgmentBatchId } : {}),
