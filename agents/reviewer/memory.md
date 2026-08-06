@@ -23,3 +23,7 @@ rules; the SOUL charter governs on any conflict.
 
 - [2026-07-16 · source: execution-profiles-planning-review] Review a plan's dispatchability as well as its prose: every named role, review flag, dependency, manual gate, and acceptance artifact must be represented in the structured task model and reach the runtime workflow. A marker in `tasks.md` is not evidence that the orchestrator can enforce it.
 - [2026-07-16 · source: execution-profiles-planning-review] For security-sensitive plans, verify that an existing security policy is reconciled rather than duplicated, that the named security reviewer actually exists and blocks on findings, and that platform-enforcement claims have a fail-closed capability test.
+
+## Carried follow-ups vs new defects
+
+- [2026-08-05 · source: 24-execution-profiles-carried-followups] Separate a new defect in this diff from a carried follow-up already accepted in a prior ledger. File carried items once against the task that will receive them and do not re-raise them each round: re-recording a known deferral consumes a finding slot, keeps the verdict at pass-with-warnings, and extends the round loop without changing what ships.

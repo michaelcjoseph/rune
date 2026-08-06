@@ -29,3 +29,7 @@ rules; the SOUL charter governs on any conflict.
 
 - [2026-07-16 · source: execution-profiles-planning-review] Before introducing a policy, config field, or enforcement layer, inventory the existing mechanism and its deferrals, then name every producer, consumer, runner path, persistence boundary, and operator surface it must reconcile with. A plan that adds a parallel allowlist, scope control, or lifecycle path without that map is incomplete.
 - [2026-07-16 · source: execution-profiles-planning-review] Task prose is not a runtime contract. For every planned role, dependency, manual gate, selector input, or review flag, prove the metadata survives planner output, artifact serialization, task selection, and workflow dispatch. If a manual step is needed, size an automatable runbook task before the manual-live gate and encode their dependency rather than relying on task order alone.
+
+## Making pinned decisions durable
+
+- [2026-08-05 · source: 24-execution-profiles-contract-durability] When you pin a contract to resolve a QA block, write the decisions into the durable task or spec artifact, not only the round handoff. Handoff state is per-run: if the run parks or fails before closeout, the pinned contract is lost and the next run re-blocks on the identical ambiguity.

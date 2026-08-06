@@ -19,3 +19,7 @@ rules; the SOUL charter governs on any conflict.
 
 - [2026-07-16 · source: execution-profiles-planning-review] Treat selection, environment capability, and evidence lifecycle as test-plan surfaces in their own right: test selector inputs and persisted facts, busy-versus-blocked classification, unavailable host prerequisites, required-versus-manual-only contradictions, evidence retention/GC, and the real runner path that dispatches the work.
 - [2026-07-16 · source: execution-profiles-planning-review] For a manual-live gate, QA must verify the runbook dependency and required retained evidence, while refusing to treat a fixture, configured profile, skipped native test, or written procedure as acceptance evidence.
+
+## When the contract is under-specified
+
+- [2026-08-05 · source: 24-execution-profiles-zero-test-block] When the task under-specifies the contract you must test against, do not hand back zero tests. Write the suite against the most-constrained reading the spec permits and list every assumption you made as an explicit question. A zero-test deliverable forecloses the tech lead's bounded test-repair path, which requires written tests, and forces a complete re-author cycle instead of a patch.
