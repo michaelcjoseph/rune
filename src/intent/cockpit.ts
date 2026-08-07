@@ -99,6 +99,7 @@ export interface WorkRunProjection {
   disposition?: import('./execution-failure.js').ExecutionTerminalDisposition;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   gateValidationReceipt?: import('./full-suite-attestation.js').GateValidationReceipt;
+  preCloseoutValidation?: import('./pre-closeout-validation.js').PreCloseoutValidationEvidence;
 }
 
 /** One project as the cockpit presents it — lifecycle status and run-status side by side. */

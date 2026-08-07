@@ -37,6 +37,10 @@ import {
   type FullSuiteAttestation,
 } from './full-suite-attestation.js';
 import {
+  parsePreCloseoutValidationEvidence,
+  type PreCloseoutValidationEvidence,
+} from './pre-closeout-validation.js';
+import {
   scrubAbsolutePaths,
   scrubGenericAbsolutePaths,
 } from '../utils/sanitize-paths.js';
@@ -89,6 +93,8 @@ export interface TaskRunRecord {
   fullSuiteAttestation?: FullSuiteAttestation;
   /** Bounded validation provenance projected to operator surfaces. */
   validationReceipt?: DurableValidationReceipt;
+  /** Rune-owned post-review validation timing and closeout reuse decision. */
+  preCloseoutValidation?: PreCloseoutValidationEvidence;
   /** Stable, bounded post-coder fan-in outcomes. Optional for historical JSONL. */
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
   /** Stable pre-mutation task tree. Optional for historical JSONL. */
@@ -113,6 +119,9 @@ export interface TaskRunRecord {
 export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
   const fullSuiteAttestation = parseFullSuiteAttestation(input.fullSuiteAttestation);
   const validationReceipt = parseDurableValidationReceipt(input.validationReceipt);
+  const preCloseoutValidation = parsePreCloseoutValidationEvidence(
+    input.preCloseoutValidation,
+  );
   return {
     taskId: input.taskId,
     taskText: input.taskText,
@@ -179,6 +188,9 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
       : {}),
     ...(validationReceipt !== undefined
       ? { validationReceipt }
+      : {}),
+    ...(preCloseoutValidation !== undefined
+      ? { preCloseoutValidation }
       : {}),
     ...(input.judgmentOutcomes !== undefined
       ? {

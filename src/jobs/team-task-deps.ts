@@ -617,12 +617,12 @@ const CODER_EXEC_INSTRUCTION = [
   'QA\'s tests already pin the contract; make them pass. Follow the conventions',
   'in the repo\'s CLAUDE.md. Do not commit; leave your changes in the worktree.',
   '',
-  'Before you finish: run EVERY command in the `## Validation commands` section',
-  'below from the worktree root and iterate (fix → re-run) until ALL exit 0.',
-  'Full-suite green is your definition of done — a diff that breaks a sibling',
-  'test is not done even when the QA tests pass; closeout re-runs the same',
-  'commands and hard-blocks on red. If no validation commands are listed, skip',
-  'this step.',
+  'Before you finish, run focused checks for the selected task and the files you',
+  'changed. Do NOT rerun the complete configured validation suite on every coder',
+  'round. Rune owns one full profiled validation execution after the final',
+  'canonical tree clears all role gates, and only Rune can create reusable',
+  'closeout evidence. The configured commands below are context for choosing',
+  'focused checks, not an instruction to execute the complete list.',
   'Last resort: a test that CANNOT pass in this sandbox (external/live',
   'dependency) or is demonstrably flaky may be removed — prefer converting it',
   'to the manual-live-gate strategy over deleting it. Record every removal as',
@@ -634,8 +634,9 @@ const CODER_EXEC_INSTRUCTION = [
 const CODER_SELF_REVIEW_EXEC_INSTRUCTION = [
   'You are the coder performing one fresh-context self-review of the implementation',
   'currently checked out in this worktree. Inspect the actual files and staged Git',
-  'state. Fix any issue you find directly in the worktree, run the listed validation',
-  'commands, and do not commit.',
+  'state. Fix any issue you find directly in the worktree, run focused checks for',
+  'the touched behavior, and do not commit. Rune runs the complete configured',
+  'validation suite once after all role gates approve this canonical tree.',
   '',
   'Last resort: a test that CANNOT pass in this sandbox (external/live dependency)',
   'or is demonstrably flaky may be removed — prefer converting it to the',
@@ -1988,7 +1989,7 @@ export function buildProductionTeamTaskDeps(
         ...(validationCommands.length > 0
           ? [
               '',
-              `## Validation commands (run all from \`${validationCwdLabel}\` relative to the worktree; drive green before handback)\n\n` +
+              `## Configured validation commands (Rune-owned full stage; use only focused forms as needed from \`${validationCwdLabel}\`)\n\n` +
                 validationCommands.join('\n'),
             ]
           : []),
@@ -2041,7 +2042,7 @@ export function buildProductionTeamTaskDeps(
           ...(validationCommands.length > 0
             ? [
                 '',
-                `## Validation commands (run all from \`${validationCwdLabel}\` relative to the worktree)\n\n` +
+                `## Configured validation commands (Rune-owned full stage; use only focused forms as needed from \`${validationCwdLabel}\`)\n\n` +
                   validationCommands.join('\n'),
               ]
             : []),

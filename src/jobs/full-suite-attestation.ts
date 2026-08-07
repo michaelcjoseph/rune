@@ -20,10 +20,11 @@ import {
   realpathSync,
   statSync,
 } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROJECT_ROOT } from '../config.js';
 import {
+  canonicalGateValidationReceiptId,
   parseGateValidationReceipt,
   parseVitestManifest,
   type CompactValidationReceipt,
@@ -37,6 +38,7 @@ import type { ValidationProfilePlan } from '../intent/validation-profiles.js';
 import { readBoundedRegularFileNoFollow } from '../utils/bounded-file.js';
 import { parseValidationCommand } from './task-validation.js';
 import type { ValidationCommandResult } from './work-run-gate-runtime.js';
+import { DEFAULT_BASE_ENV_KEYS, getBaseEnv } from './credential-injector.js';
 
 export * from '../intent/full-suite-attestation.js';
 
@@ -68,6 +70,8 @@ export interface ValidationFingerprints {
   commandFingerprint: string;
   configurationFingerprint: string;
   dependencyFingerprint: string;
+  environmentFingerprint: string;
+  toolchainFingerprint: string;
 }
 
 export interface TrustedVitestImplementation {
@@ -217,6 +221,77 @@ function fingerprintTrustedAdapter(
   return hash.digest('hex');
 }
 
+export function fingerprintValidationEnvironment(
+  env: Readonly<Record<string, string | undefined>> = getBaseEnv(DEFAULT_BASE_ENV_KEYS),
+): string {
+  const entries = Object.entries(env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return sha256(JSON.stringify({ version: 1, entries }));
+}
+
+function resolveTool(pathEnv: string, command: string): string | undefined {
+  const candidates = isAbsolute(command) || command.includes('/')
+    ? [command]
+    : pathEnv.split(delimiter).filter(Boolean).map((dir) => join(dir, command));
+  return candidates.find((candidate) => {
+    try {
+      return statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function fingerprintValidationToolchain(
+  commands: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = getBaseEnv(DEFAULT_BASE_ENV_KEYS),
+): string {
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify({
+    version: 1,
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+  }));
+  // Configured commands overwhelmingly share one executable (`npm run build` + `npm run
+  // test`, four `uv` commands), and the PATH walk plus bounded binary read is the dominant
+  // synchronous cost of a capture. Resolve each distinct tool once per call so the hash
+  // input is unchanged while the fs work scales with distinct tools, not command count.
+  // The cache is per-call only, so drift between two captures stays fully visible.
+  const resolved = new Map<string, { size: number; mtimeMs: number; bytes?: Buffer }>();
+  const missing = new Set<string>();
+  for (const command of commands) {
+    const parsed = parseValidationCommand(command);
+    if (!parsed.ok) throw new Error(`malformed validation command: ${command}`);
+    const tool = parsed.argv[0]!;
+    if (!resolved.has(tool) && !missing.has(tool)) {
+      const executable = resolveTool(env.PATH ?? '', tool);
+      if (executable === undefined) {
+        missing.add(tool);
+      } else {
+        const real = realpathSync(executable);
+        const stats = statSync(real);
+        resolved.set(tool, {
+          size: stats.size,
+          mtimeMs: stats.mtimeMs,
+          ...(stats.size <= VALIDATION_FINGERPRINT_FILE_MAX_BYTES
+            ? { bytes: readFileSync(real) }
+            : {}),
+        });
+      }
+    }
+    const entry = resolved.get(tool);
+    if (entry === undefined) {
+      hash.update(`\0${tool}\0missing`);
+      continue;
+    }
+    hash.update(`\0${tool}\0${entry.size}\0${entry.mtimeMs}`);
+    if (entry.bytes !== undefined) hash.update(entry.bytes);
+  }
+  return hash.digest('hex');
+}
+
 export function captureValidationFingerprints(
   cwd: string,
   commands: readonly string[],
@@ -224,6 +299,7 @@ export function captureValidationFingerprints(
   trustedVitestImplementation: TrustedVitestImplementation,
   profilePlan?: ValidationProfilePlan,
 ): ValidationFingerprints {
+  const validationEnv = getBaseEnv(DEFAULT_BASE_ENV_KEYS);
   const configuredArgv = commands.map((command) => {
     const parsed = parseValidationCommand(command);
     if (!parsed.ok) throw new Error(`malformed validation command: ${command}`);
@@ -249,6 +325,8 @@ export function captureValidationFingerprints(
     })),
     configurationFingerprint: fingerprintFiles(cwd, CONFIG_FINGERPRINT_FILES),
     dependencyFingerprint: fingerprintFiles(cwd, DEPENDENCY_FINGERPRINT_FILES),
+    environmentFingerprint: fingerprintValidationEnvironment(validationEnv),
+    toolchainFingerprint: fingerprintValidationToolchain(commands, validationEnv),
   };
 }
 
@@ -306,12 +384,32 @@ export function buildGateValidationReceipt(input: {
   fingerprints: ValidationFingerprints;
   batch: ValidationBatchReceipt;
 }): GateValidationReceipt | undefined {
-  return parseGateValidationReceipt({
-    version: input.batch.profilePlan === undefined ? 1 : 2,
+  const {
+    environmentFingerprint,
+    toolchainFingerprint,
+    ...legacyFingerprints
+  } = input.fingerprints;
+  const base = {
     treeOid: input.treeOid,
     fullTaskReviewHash: input.fullTaskReviewHash,
     completedAt: input.completedAt,
-    ...input.fingerprints,
+    ...legacyFingerprints,
     ...input.batch,
+  };
+  // A batch with no profile plan predates profiled validation and must round-trip as a
+  // version-1 receipt. The strict parser fail-closes on any non-V3 receipt carrying a
+  // V3-only field, so the environment/toolchain fingerprints belong to the V3 branch only.
+  if (input.batch.profilePlan === undefined) {
+    return parseGateValidationReceipt({ version: 1 as const, ...base });
+  }
+  const candidate = {
+    version: 3 as const,
+    ...base,
+    environmentFingerprint,
+    toolchainFingerprint,
+  };
+  return parseGateValidationReceipt({
+    ...candidate,
+    receiptId: canonicalGateValidationReceiptId(candidate),
   });
 }

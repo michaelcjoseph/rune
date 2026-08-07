@@ -86,6 +86,7 @@ import type {
   DurableValidationReceipt,
   FullSuiteAttestation,
 } from './full-suite-attestation.js';
+import type { PreCloseoutValidationEvidence } from './pre-closeout-validation.js';
 import {
   collectRelatedTestTaskDiagnostics,
   type RelatedTestDiagnostic,
@@ -126,8 +127,26 @@ export type CloseoutCheckResult =
       relatedTestDiagnostic?: RelatedTestDiagnostic;
       fullSuiteAttestation?: FullSuiteAttestation;
       validationReceipt?: DurableValidationReceipt;
+      preCloseoutValidation?: PreCloseoutValidationEvidence;
     }
-  | { ok: false; failure: CloseoutCheckFailure };
+  | {
+      ok: false;
+      failure: CloseoutCheckFailure;
+      preCloseoutValidation?: PreCloseoutValidationEvidence;
+    };
+
+export interface PreCloseoutValidationCandidate {
+  attestation?: FullSuiteAttestation;
+  evidence: PreCloseoutValidationEvidence;
+}
+
+export type PreCloseoutValidationResult =
+  | { ok: true; candidate: PreCloseoutValidationCandidate }
+  | {
+      ok: false;
+      failure: CloseoutCheckFailure;
+      evidence: PreCloseoutValidationEvidence;
+    };
 
 export interface TaskBaseRecord {
   taskId: string;
@@ -221,9 +240,14 @@ export interface OrchestrationDeps {
   curateContext: (current: string, evidence: TaskEvidence) => ContextUpdate;
   writeContextMd: (content: string) => Promise<void>;
   writeTasksMd: (content: string) => Promise<void>;
+  runPreCloseoutValidation: (
+    task: SelectedTask,
+    evidence: TaskEvidence,
+  ) => Promise<PreCloseoutValidationResult>;
   runCloseoutChecks: (
     task: SelectedTask,
     evidence: TaskEvidence,
+    candidate: PreCloseoutValidationCandidate,
   ) => Promise<CloseoutCheckResult>;
   commitCloseout: (task: SelectedTask) => Promise<CloseoutCommit>;
   /** WIP preservation checkpoint used before a closeout terminal. */
@@ -422,9 +446,29 @@ async function runProjectOrchestrationImpl(
       // fails its closeout checks.
       emitPmAcceptance(deps, task, evidence);
 
-      // Mechanical validation is a separate gate. Closeout itself is not
-      // entered until validation and post-validation review-surface checks pass.
-      const checks = await deps.runCloseoutChecks(task, evidence);
+      // Rune executes the complete configured suite exactly once only after the
+      // final role-approved tree exists. Closeout receives that candidate
+      // explicitly and may reuse it only after a fresh exact-identity capture.
+      const preCloseout = await deps.runPreCloseoutValidation(task, evidence);
+      if (preCloseout.ok) {
+        evidence = {
+          ...evidence,
+          preCloseoutValidation: preCloseout.candidate.evidence,
+        };
+      } else {
+        evidence = { ...evidence, preCloseoutValidation: preCloseout.evidence };
+      }
+      const cancelledAfterPreCloseout = cancellationResult(deps, task);
+      if (cancelledAfterPreCloseout) return cancelledAfterPreCloseout;
+      // Closeout itself is not entered until validation and post-validation
+      // review-surface checks pass.
+      const checks: CloseoutCheckResult = preCloseout.ok
+        ? await deps.runCloseoutChecks(task, evidence, preCloseout.candidate)
+        : {
+            ok: false,
+            failure: preCloseout.failure,
+            preCloseoutValidation: preCloseout.evidence,
+          };
       // Validation can settle at the same moment a cancellation arrives. Keep
       // the final boundary immediately before any context/task write or
       // closeout commit, mirroring the merge finalizer's pre-merge check.
@@ -435,6 +479,12 @@ async function runProjectOrchestrationImpl(
         : checks.failure.relatedTestDiagnostic;
       if (relatedTestDiagnostic !== undefined) {
         evidence = { ...evidence, relatedTestDiagnostic };
+      }
+      if (checks.preCloseoutValidation !== undefined) {
+        evidence = {
+          ...evidence,
+          preCloseoutValidation: checks.preCloseoutValidation,
+        };
       }
       if (
         checks.ok &&
@@ -1179,6 +1229,9 @@ function taskRecordFromEvidence(
       : {}),
     ...(evidence.validationReceipt !== undefined
       ? { validationReceipt: evidence.validationReceipt }
+      : {}),
+    ...(evidence.preCloseoutValidation !== undefined
+      ? { preCloseoutValidation: evidence.preCloseoutValidation }
       : {}),
     ...(evidence.judgmentOutcomes !== undefined
       ? { judgmentOutcomes: evidence.judgmentOutcomes }

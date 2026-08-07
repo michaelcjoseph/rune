@@ -1836,6 +1836,89 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toContain('Merge validation passed · 2 commands');
   });
 
+  it('renders bounded pre-closeout duration, receipt identity, and reuse decision', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const receiptId = 'a'.repeat(64);
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-pre-closeout-reused',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'completed',
+        endedAt: '2026-08-06T12:00:00.000Z',
+        preCloseoutValidation: {
+          version: 1,
+          receiptId,
+          durationMs: 5_250,
+          outcome: 'passed',
+          reuseDecision: 'reused',
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('Pre-closeout validation reused · 5.3s');
+    expect(html).toContain(`receipt ${receiptId.slice(0, 12)}`);
+    expect(html).not.toContain(receiptId);
+  });
+
+  it('renders a fallback pre-closeout status with its invalidation reason and sub-second ms duration', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-pre-closeout-fallback',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'completed',
+        endedAt: '2026-08-06T12:00:00.000Z',
+        preCloseoutValidation: {
+          version: 1,
+          durationMs: 420,
+          outcome: 'failed',
+          reuseDecision: 'fallback',
+          invalidationReason: 'tree-drift',
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('Pre-closeout validation fallback · 420ms · tree-drift');
+    expect(html).not.toContain('receipt ');
+  });
+
+  it('renders a pending/skipped pre-closeout status by its bare outcome, with no reuse-specific wording', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-pre-closeout-skipped',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'completed',
+        endedAt: '2026-08-06T12:00:00.000Z',
+        preCloseoutValidation: {
+          version: 1,
+          durationMs: 0,
+          outcome: 'skipped',
+          reuseDecision: 'pending',
+        },
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).toContain('Pre-closeout validation skipped · 0ms');
+    expect(html).not.toContain('reused');
+    expect(html).not.toContain('fallback');
+  });
+
+  it('omits the pre-closeout status block entirely when no evidence is present on the run', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+    const html = renderProductDeepView(productView({
+      runs: [{
+        runId: 'run-no-pre-closeout',
+        target: { kind: 'project', slug: '17-cockpit-redesign' },
+        outcome: 'completed',
+        endedAt: '2026-08-06T12:00:00.000Z',
+      }],
+    }), { activeSidePanel: 'runs' });
+
+    expect(html).not.toContain('Pre-closeout validation');
+    expect(html).not.toContain('deep-run-validation');
+  });
+
   it('renders a profile-unavailable merge-gate receipt as an operational hold, not a red suite', async () => {
     // The operator has to be able to tell a host-capability hold apart from a
     // real product regression at a glance — misreading one as the other is what

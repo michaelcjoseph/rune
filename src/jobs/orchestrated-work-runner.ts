@@ -167,6 +167,7 @@ import {
   collectTaskChangedPaths,
   taskChangesRequireFullValidation,
   runGate as defaultRunGate,
+  captureFullSuiteValidationIdentity,
   runFullSuiteValidation as defaultRunFullSuiteValidation,
   productionFullSuiteProfileIO,
   runProfiledVitestSelection,
@@ -177,12 +178,19 @@ import {
   type ValidationCommandListResult,
 } from './work-run-gate-runtime.js';
 import {
+  compactValidationReceipt,
   durableValidationReceipt,
+  validatePreCloseoutAttestation,
   type CompactValidationReceipt,
   type DurableValidationReceipt,
   type FullSuiteAttestation,
   type ValidationAdapter,
 } from '../intent/full-suite-attestation.js';
+import {
+  parsePreCloseoutValidationEvidence,
+  type PreCloseoutValidationEvidence,
+  type PreCloseoutValidationInvalidationReason,
+} from '../intent/pre-closeout-validation.js';
 import type { ValidationCommandProfile } from '../intent/validation-profiles.js';
 import {
   diagnoseRelatedTestFallback,
@@ -236,22 +244,6 @@ import {
   type ExecutionTerminalTrigger,
   sanitizeExecutionDiagnostic,
 } from '../intent/execution-failure.js';
-
-export function selectReusableFullSuiteEvidence(
-  result: FullSuiteValidationResult,
-): {
-  attestation: FullSuiteAttestation;
-  receipt: CompactValidationReceipt;
-} | undefined {
-  if (!result.ok || result.coverageComplete !== true) return undefined;
-  const attestation = result.attestations
-    .find((entry) => entry.coverage.status === 'complete');
-  const receipt = result.receipts
-    .find((entry) => entry.coverage === 'complete');
-  return attestation !== undefined && receipt !== undefined
-    ? { attestation, receipt }
-    : undefined;
-}
 
 export function fullSuiteFailureAllowsCloseoutFallback(
   result: FullSuiteValidationResult,
@@ -1272,6 +1264,46 @@ function buildOrchestrationDeps(args: {
     } : {}),
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
   });
+  const runDir = join(args.workRunsDir, descriptor.id);
+  const diagnosticDir = join(runDir, 'validation-diagnostics');
+  const scrub = (text: string): string =>
+    redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
+  const validationCwdLabel = scrub(args.validationCwd?.trim() || '.');
+
+  const stageDuration = (result: FullSuiteValidationResult): number => {
+    const attestation = result.attestations?.[0];
+    if (attestation !== undefined) return attestation.durationMs;
+    const outcomes = result.validationReceipt?.profileOutcomes ?? [];
+    const started = outcomes.map((entry) => Date.parse(entry.probe.startedAt)).filter(Number.isFinite);
+    const completed = outcomes.map((entry) => Date.parse(entry.probe.completedAt)).filter(Number.isFinite);
+    return started.length > 0 && completed.length > 0
+      ? Math.max(0, Math.max(...completed) - Math.min(...started))
+      : 0;
+  };
+
+  const stageEvidence = (
+    result: FullSuiteValidationResult,
+    reuseDecision: PreCloseoutValidationEvidence['reuseDecision'] = 'pending',
+    invalidationReason?: PreCloseoutValidationInvalidationReason,
+  ): PreCloseoutValidationEvidence => {
+    const attestation = result.attestations?.[0];
+    const failedResult = result.ok ? undefined : result.result;
+    const outcome: PreCloseoutValidationEvidence['outcome'] = failedResult?.cancelled
+      ? 'cancelled'
+      : failedResult?.timedOut
+        ? 'timed-out'
+        : result.ok || fullSuiteFailureAllowsCloseoutFallback(result)
+          ? 'passed'
+          : 'failed';
+    return {
+      version: 1,
+      ...(attestation?.receiptId !== undefined ? { receiptId: attestation.receiptId } : {}),
+      durationMs: stageDuration(result),
+      outcome,
+      reuseDecision,
+      ...(invalidationReason !== undefined ? { invalidationReason } : {}),
+    };
+  };
 
   return {
     runId: descriptor.id,
@@ -1372,15 +1404,8 @@ function buildOrchestrationDeps(args: {
       pendingCloseoutTasks = content;
     },
 
-    // Task-scoped closeout checks use the product policy's short-budget
-    // strategy. The project-level finalizer independently owns the full gate.
-    runCloseoutChecks: async (task, evidence) => {
+    runPreCloseoutValidation: async (task, evidence) => {
       pendingReviewedTreeOid = evidence.currentReviewTree;
-      const runDir = join(args.workRunsDir, descriptor.id);
-      const diagnosticDir = join(runDir, 'validation-diagnostics');
-      const scrub = (text: string): string =>
-        redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
-      const validationCwdLabel = scrub(args.validationCwd?.trim() || '.');
       const admission = validateTaskValidationAdmission({
         policy: task.validationPolicy ?? 'required',
         commands: args.validationCommands,
@@ -1396,6 +1421,187 @@ function buildOrchestrationDeps(args: {
         );
         return {
           ok: false,
+          evidence: {
+            version: 1,
+            durationMs: 0,
+            outcome: 'failed',
+            reuseDecision: 'fallback',
+            invalidationReason: 'missing-evidence',
+          },
+          failure: {
+            command: admission.failure.command,
+            exitCode: null,
+            timedOut: false,
+            outputTail: admission.failure.diagnostics,
+            validationCwd: validationCwdLabel,
+            validationFailure: admission.failure,
+          },
+        };
+      }
+      // Both skips leave closeout to run its own strategy: the stage never executed, so it
+      // has nothing to offer for reuse. They stay separate branches because their reasons
+      // are distinct and may later carry different evidence.
+      const skippedEvidence: PreCloseoutValidationEvidence = {
+        version: 1,
+        durationMs: 0,
+        outcome: 'skipped',
+        reuseDecision: 'pending',
+      };
+      if (task.validationPolicy === 'reviewed-no-validation') {
+        return { ok: true, candidate: { evidence: skippedEvidence } };
+      }
+      if (evidence.currentReviewTree === undefined || evidence.fullTaskReviewHash === undefined) {
+        return { ok: true, candidate: { evidence: skippedEvidence } };
+      }
+      const result = await args.runFullSuiteValidation({
+        commands: args.validationCommands,
+        commandProfiles: args.validationCommandProfiles,
+        adapters: args.validationAdapters,
+        worktree: sandbox.worktree,
+        cwd: admission.cwd,
+        validationCwd: args.validationCwd?.trim() || '.',
+        expectedTreeOid: evidence.currentReviewTree,
+        fullTaskReviewHash: evidence.fullTaskReviewHash,
+        timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
+        diagnosticDir,
+        ...(args.cancel !== undefined ? { cancelled: args.cancel } : {}),
+      }, {
+        runGit: canonicalGit,
+        runCommand: (_command, argv, commandCwd, timeoutMs, commandDiagnosticDir, options) =>
+          args.runValidationCommandArgv(
+            argv,
+            commandCwd,
+            timeoutMs,
+            commandDiagnosticDir,
+            options,
+          ),
+        ...(args.runValidationCommandArgv === defaultRunValidationCommandArgv
+          ? { runTrustedVitestObserver, ...productionFullSuiteProfileIO() }
+          : {}),
+      });
+      const evidenceRecord = stageEvidence(result);
+      args.emit?.({
+        kind: 'activity',
+        data: {
+          event: 'pre-closeout-validation',
+          taskId: task.id,
+          durationMs: evidenceRecord.durationMs,
+          outcome: evidenceRecord.outcome,
+          ...(evidenceRecord.receiptId !== undefined
+            ? { receiptId: evidenceRecord.receiptId }
+            : {}),
+          line: `pre-closeout validation ${evidenceRecord.outcome} for ${task.id} (${evidenceRecord.durationMs}ms)`,
+        },
+      });
+      if (!result.ok && !fullSuiteFailureAllowsCloseoutFallback(result)) {
+        const command = scrub(result.command);
+        const outputHead = scrub(result.result.outputHead ?? '');
+        const structuredDetails = formatRelatedTestStructuredErrors(result.result);
+        const outputTail = scrub(
+          [result.result.outputTail, structuredDetails].filter(Boolean).join('\n'),
+        ).slice(-8_000);
+        const validationFailure = taskValidationCommandFailure(
+          command,
+          result.result,
+          [outputHead, outputTail].filter(Boolean).join('\n').slice(-8_000),
+          result.argv,
+        );
+        appendDurableValidationFailure(
+          args.workRunsDir,
+          descriptor.id,
+          'task-validation-failures.jsonl',
+          validationFailure,
+        );
+        const diagnosticArtifacts = result.result.diagnosticArtifacts ?? [];
+        try {
+          mkdirSync(runDir, { recursive: true });
+          appendFileSync(
+            join(runDir, CLOSEOUT_VALIDATION_FAILURE_FILE),
+            `=== pre-closeout validation failure @ ${new Date().toISOString()} ===\n` +
+              `task: ${task.id} — ${task.text}\n` +
+              `command: ${command}\n` +
+              `outcome: ${result.result.timedOut ? 'timed out' : `exit ${result.result.exitCode}`}\n\n` +
+              `diagnostics: ${diagnosticArtifacts.length > 0
+                ? diagnosticArtifacts.map((name) => `validation-diagnostics/${name}`).join(', ')
+                : '(none)'}\n\n` +
+              `=== output head ===\n${outputHead || '(no output captured)'}\n\n` +
+              `=== output tail ===\n${outputTail || '(no output captured)'}\n\n`,
+            'utf8',
+          );
+        } catch (err) {
+          log.error('orchestrated-work-runner: pre-closeout validation artifact write failed', {
+            id: descriptor.id,
+            error: (err as Error).message,
+          });
+        }
+        args.emit?.({
+          kind: 'activity',
+          data: {
+            event: 'pre-closeout-validation-failed',
+            taskId: task.id,
+            command,
+            exitCode: result.result.exitCode,
+            timedOut: result.result.timedOut,
+            durationMs: evidenceRecord.durationMs,
+            line: `pre-closeout validation failed: ${command}`,
+          },
+        });
+        const failedEvidence: PreCloseoutValidationEvidence = {
+          ...evidenceRecord,
+          reuseDecision: 'fallback',
+          invalidationReason: result.result.cancelled
+            ? 'cancelled'
+            : 'incomplete-execution',
+        };
+        return {
+          ok: false,
+          evidence: failedEvidence,
+          failure: {
+            command,
+            exitCode: result.result.exitCode,
+            timedOut: result.result.timedOut,
+            outputTail,
+            validationCwd: validationCwdLabel,
+            validationFailure,
+          },
+        };
+      }
+      return {
+        ok: true,
+        candidate: {
+          ...(result.attestations?.[0] !== undefined
+            ? { attestation: result.attestations[0] }
+            : {}),
+          evidence: evidenceRecord,
+        },
+      };
+    },
+
+    // Task-scoped closeout checks use the product policy's short-budget
+    // strategy. The project-level finalizer independently owns the full gate.
+    runCloseoutChecks: async (task, evidence, candidate) => {
+      pendingReviewedTreeOid = evidence.currentReviewTree;
+      let preCloseoutValidation = candidate.evidence;
+      const admission = validateTaskValidationAdmission({
+        policy: task.validationPolicy ?? 'required',
+        commands: args.validationCommands,
+        worktree: sandbox.worktree,
+        ...(args.validationCwd !== undefined ? { validationCwd: args.validationCwd } : {}),
+      });
+      if (!admission.ok) {
+        appendDurableValidationFailure(
+          args.workRunsDir,
+          descriptor.id,
+          'task-validation-failures.jsonl',
+          admission.failure,
+        );
+        return {
+          ok: false,
+          preCloseoutValidation: {
+            ...candidate.evidence,
+            reuseDecision: 'fallback',
+            invalidationReason: 'canonical-recapture-failed',
+          },
           failure: {
             command: admission.failure.command,
             exitCode: null,
@@ -1415,62 +1621,76 @@ function buildOrchestrationDeps(args: {
         validation = { ok: true };
       } else {
         let ownedValidationHandled = false;
-        if (
-          evidence.currentReviewTree !== undefined &&
-          evidence.fullTaskReviewHash !== undefined
+        let invalidationReason: PreCloseoutValidationInvalidationReason | undefined;
+        if (candidate.attestation === undefined) {
+          invalidationReason = candidate.evidence.outcome === 'cancelled'
+            ? 'cancelled'
+            : candidate.evidence.outcome === 'passed'
+              ? 'incomplete-execution'
+              : 'missing-evidence';
+        } else if (
+          evidence.taskBaseTree === undefined ||
+          evidence.currentReviewTree === undefined ||
+          evidence.fullTaskReviewHash === undefined
         ) {
-          const fullResult = await args.runFullSuiteValidation({
-            commands: args.validationCommands,
-            commandProfiles: args.validationCommandProfiles,
-            adapters: args.validationAdapters,
-            worktree: sandbox.worktree,
-            cwd: admission.cwd,
-            validationCwd: args.validationCwd?.trim() || '.',
-            expectedTreeOid: evidence.currentReviewTree,
-            fullTaskReviewHash: evidence.fullTaskReviewHash,
-            timeoutMs: config.WORK_RUN_CLOSEOUT_COMMAND_TIMEOUT_MS,
-            diagnosticDir,
-            ...(args.cancel !== undefined ? { cancelled: args.cancel } : {}),
-          }, {
-            runGit: canonicalGit,
-            runCommand: (_command, argv, commandCwd, timeoutMs, commandDiagnosticDir, options) =>
-              args.runValidationCommandArgv(
-                argv,
-                commandCwd,
-                timeoutMs,
-                commandDiagnosticDir,
-                options,
-              ),
-            ...(args.runValidationCommandArgv === defaultRunValidationCommandArgv
-              ? {
-                  runTrustedVitestObserver,
-                  ...productionFullSuiteProfileIO(),
+          invalidationReason = 'canonical-recapture-failed';
+        } else {
+          try {
+            const canonical = await captureCanonicalReviewState(
+              canonicalGit,
+              sandbox.worktree,
+              evidence.taskBaseTree,
+            );
+            if (canonical.currentTree !== evidence.currentReviewTree) {
+              invalidationReason = 'tree-drift';
+            } else if (canonical.hash !== evidence.fullTaskReviewHash) {
+              invalidationReason = 'review-hash-drift';
+            } else {
+              const recaptured = await captureFullSuiteValidationIdentity({
+                commands: args.validationCommands,
+                commandProfiles: args.validationCommandProfiles,
+                adapters: args.validationAdapters,
+                worktree: sandbox.worktree,
+                cwd: admission.cwd,
+                validationCwd: args.validationCwd?.trim() || '.',
+                fullTaskReviewHash: canonical.hash,
+              }, { runGit: canonicalGit });
+              if (!recaptured.ok) {
+                invalidationReason = recaptured.reason;
+              } else {
+                const admitted = validatePreCloseoutAttestation(
+                  candidate.attestation,
+                  recaptured.identity,
+                  args.closeoutValidationStrategy,
+                );
+                if (admitted.ok) {
+                  fullSuiteAttestation = admitted.attestation;
+                  validationReceipt = durableValidationReceipt(
+                    compactValidationReceipt(admitted.attestation),
+                    'full-suite-reused',
+                  );
+                  validation = { ok: true };
+                  ownedValidationHandled = true;
+                  preCloseoutValidation = {
+                    ...candidate.evidence,
+                    receiptId: admitted.receiptId,
+                    reuseDecision: 'reused',
+                  };
+                } else {
+                  invalidationReason = admitted.reason;
                 }
-              : {}),
-          });
-          if (!fullResult.ok && !fullSuiteFailureAllowsCloseoutFallback(fullResult)) {
-            validation = fullResult;
-            ownedValidationHandled = true;
-          } else if (fullResult.ok) {
-            const reusableEvidence = selectReusableFullSuiteEvidence(fullResult);
-            fullSuiteAttestation = reusableEvidence?.attestation;
-            if (reusableEvidence !== undefined) {
-              validationReceipt =
-                durableValidationReceipt(reusableEvidence.receipt, 'full-suite-reused');
-              validation = { ok: true };
-              ownedValidationHandled = true;
-            } else if (
-              args.closeoutValidationStrategy === 'product-commands' &&
-              fullResult.validationReceipt.outcome === 'passed'
-            ) {
-              const compactAny = fullResult.receipts[0];
-              validationReceipt = compactAny !== undefined
-                ? durableValidationReceipt(compactAny, 'full-suite-ran')
-                : undefined;
-              validation = { ok: true };
-              ownedValidationHandled = true;
+              }
             }
+          } catch {
+            invalidationReason = 'canonical-recapture-failed';
           }
+        }
+        if (!ownedValidationHandled) {
+          preCloseoutValidation = {
+            ...candidate.evidence,
+            reuseDecision: 'fallback',
+            invalidationReason: invalidationReason ?? 'missing-evidence',
+          };
         }
         if (!ownedValidationHandled) {
           if (args.closeoutValidationStrategy === 'vitest-related') {
@@ -1553,6 +1773,19 @@ function buildOrchestrationDeps(args: {
       if (validation === undefined) {
         throw new Error('closeout validation did not produce a result');
       }
+      args.emit?.({
+        kind: 'activity',
+        data: {
+          event: 'pre-closeout-validation-decision',
+          taskId: task.id,
+          ...preCloseoutValidation,
+          line: preCloseoutValidation.reuseDecision === 'reused'
+            ? `closeout reused pre-closeout validation ${preCloseoutValidation.receiptId}`
+            : preCloseoutValidation.reuseDecision === 'fallback'
+              ? `closeout invalidated pre-closeout validation: ${preCloseoutValidation.invalidationReason}`
+              : `pre-closeout validation was ${preCloseoutValidation.outcome}`,
+        },
+      });
       if (validation.ok) {
         if (
           validationReceipt === undefined &&
@@ -1586,6 +1819,7 @@ function buildOrchestrationDeps(args: {
         if (approvedHash === undefined) {
           return {
             ok: true,
+            preCloseoutValidation,
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
             ...(fullSuiteAttestation !== undefined ? { fullSuiteAttestation } : {}),
             ...(validationReceipt !== undefined ? { validationReceipt } : {}),
@@ -1604,6 +1838,7 @@ function buildOrchestrationDeps(args: {
           };
           return {
             ok: false,
+            preCloseoutValidation,
             failure: {
               command: 'full-task review-surface verification',
               exitCode: null,
@@ -1627,6 +1862,7 @@ function buildOrchestrationDeps(args: {
         ) {
           return {
             ok: true,
+            preCloseoutValidation,
             ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
             ...(fullSuiteAttestation !== undefined ? { fullSuiteAttestation } : {}),
             ...(validationReceipt !== undefined ? { validationReceipt } : {}),
@@ -1649,6 +1885,7 @@ function buildOrchestrationDeps(args: {
         );
         return {
           ok: false,
+          preCloseoutValidation,
           failure: {
             command: 'full-task review-surface verification',
             exitCode: null,
@@ -1728,6 +1965,7 @@ function buildOrchestrationDeps(args: {
       // repair prompt (cross-provider) and the exhaustion hold reason.
       return {
         ok: false,
+        preCloseoutValidation,
         failure: {
           command,
           exitCode: validation.result.exitCode,
@@ -2692,6 +2930,10 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             collectRelatedTestTaskDiagnostics(handoff.taskRecords);
           const relatedTestDiagnostic =
             relatedTestDiagnostics.at(-1)?.diagnostic;
+          const preCloseoutValidation = handoff.taskRecords
+            .map((record) => parsePreCloseoutValidationEvidence(record.preCloseoutValidation))
+            .filter((entry): entry is PreCloseoutValidationEvidence => entry !== undefined)
+            .at(-1);
           let gateTasksRemaining = 0;
           let endedAt = '';
           const integrationWorktree = deps.integrationWorktree(product, descriptor.id);
@@ -2742,6 +2984,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
               if (relatedTestDiagnostics.length > 0) {
                 data['relatedTestDiagnostics'] = relatedTestDiagnostics;
                 data['relatedTestDiagnostic'] = relatedTestDiagnostic;
+              }
+              if (preCloseoutValidation !== undefined) {
+                data['preCloseoutValidation'] = preCloseoutValidation;
               }
               terminalEvent.data = data;
               const workProduct = data['workProduct'] as WorkProductFacts | undefined;
@@ -3474,6 +3719,9 @@ function buildOrchestratedSummary(args: {
   const gateValidationReceipt = isGateValidationReceipt(data['gateValidationReceipt'])
     ? data['gateValidationReceipt']
     : undefined;
+  const preCloseoutValidation = parsePreCloseoutValidationEvidence(
+    data['preCloseoutValidation'],
+  );
   const adjudicationFailure = data['adjudicationFailure'] &&
       typeof data['adjudicationFailure'] === 'object' &&
       (data['adjudicationFailure'] as Record<string, unknown>)['code'] ===
@@ -3532,6 +3780,7 @@ function buildOrchestratedSummary(args: {
     ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
     ...(adjudicationUpheldFail !== undefined ? { adjudicationUpheldFail } : {}),
     ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
+    ...(preCloseoutValidation !== undefined ? { preCloseoutValidation } : {}),
   };
 }
 

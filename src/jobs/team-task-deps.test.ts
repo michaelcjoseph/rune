@@ -1262,7 +1262,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       }, makeSeams({
         runCanonicalGit: defaultRunGit,
         runExecution: async (opts) => {
-          expect(opts.prompt).toContain('## Validation commands');
+          expect(opts.prompt).toContain('## Configured validation commands');
           expect(opts.prompt).toContain('npm test');
           await writeFile(join(worktree, 'src.ts'), 'export const ready = true;\n');
           return {
@@ -2101,7 +2101,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(techLeadMessage).toContain('already exists in src/transport/notification-bus.ts');
   });
 
-  it('renders the product validation commands in the coder prompt with the drive-green directive', async () => {
+  it('renders configured validation commands as focused-check context owned by Rune', async () => {
     const captured: Array<{ systemPrompt: string; prompt: string }> = [];
     const deps = buildProductionTeamTaskDeps(
       {
@@ -2124,17 +2124,18 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
 
     expect(captured).toHaveLength(1);
     const { systemPrompt, prompt } = captured[0]!;
-    expect(prompt).toContain('## Validation commands');
-    expect(prompt).toContain('run all from `harness/` relative to the worktree');
+    expect(prompt).toContain('## Configured validation commands');
+    expect(prompt).toContain('Rune-owned full stage');
+    expect(prompt).toContain('`harness/`');
     expect(prompt).toContain('npm run build');
     expect(prompt).toContain('npm test');
     const lower = systemPrompt.toLowerCase();
-    expect(lower).toContain('exit 0');
-    expect(lower).toContain('fix → re-run');
-    expect(lower).toContain('definition of done');
+    expect(lower).toContain('focused checks');
+    expect(lower).toContain('one full profiled validation execution');
+    expect(lower).toContain('only rune can create reusable');
   });
 
-  it('omits the validation-commands section when the product has none, keeping the skip clause', async () => {
+  it('omits the configured-validation context section when the product has none', async () => {
     const captured: Array<{ systemPrompt: string; prompt: string }> = [];
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       runExecution: async (opts) => {
@@ -2146,8 +2147,8 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     await deps.coder({ task: sizedTask, spec: 'spec', context: 'ctx', tests: ['src/x.test.ts'] });
 
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.prompt).not.toContain('## Validation commands');
-    expect(captured[0]!.systemPrompt.toLowerCase()).toContain('if no validation commands are listed');
+    expect(captured[0]!.prompt).not.toContain('## Configured validation commands');
+    expect(captured[0]!.systemPrompt.toLowerCase()).toContain('run focused checks');
   });
 
   it('forbids the coder from removing a test its implementation fails and requires TEST-REMOVED records', async () => {

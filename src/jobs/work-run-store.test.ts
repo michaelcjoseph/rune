@@ -350,6 +350,42 @@ describe('writeSummary', () => {
     expect(JSON.stringify(restored)).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 
+  it('round-trips bounded pre-closeout validation evidence and fails the whole summary closed when malformed', () => {
+    const preCloseoutValidation = {
+      version: 1 as const,
+      receiptId: 'f'.repeat(64),
+      durationMs: 4_200,
+      outcome: 'passed' as const,
+      reuseDecision: 'reused' as const,
+    };
+    const summary = makeSummary({
+      id: 'pre-closeout-attested',
+      preCloseoutValidation,
+    });
+    writeSummary(join(tmpDir, summary.id), summary);
+    expect(readWorkRunSummary(tmpDir, summary.id)).toMatchObject({ preCloseoutValidation });
+
+    // Unlike `gateValidationReceipt` (dropped silently and the rest of the
+    // summary still returned), `preCloseoutValidation` is wired into the same
+    // validity gate as trigger/disposition/contextFailure: a malformed value
+    // fails the WHOLE summary closed rather than riding through with just
+    // that field dropped.
+    const malformed = makeSummary({ id: 'pre-closeout-malformed' }) as unknown as Record<string, unknown>;
+    malformed['preCloseoutValidation'] = {
+      version: 1,
+      durationMs: 10,
+      outcome: 'passed',
+      // 'fallback' requires a typed invalidationReason — omitted here.
+      reuseDecision: 'fallback',
+    };
+    mkdirSync(join(tmpDir, 'pre-closeout-malformed'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'pre-closeout-malformed', 'summary.json'),
+      JSON.stringify(malformed),
+    );
+    expect(readWorkRunSummary(tmpDir, 'pre-closeout-malformed')).toBeNull();
+  });
+
   it('round-trips typed adjudication failure evidence and rejects malformed variants', () => {
     const adjudicationFailure = {
       code: 'adjudication-output-invalid' as const,

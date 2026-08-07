@@ -6,9 +6,12 @@ import { join } from 'node:path';
 import * as attestationModule from './full-suite-attestation.js';
 
 const testedExports = {
+  buildGateValidationReceipt: attestationModule.buildGateValidationReceipt,
   captureTrustedVitestImplementation: attestationModule.captureTrustedVitestImplementation,
   captureValidationFingerprints: attestationModule.captureValidationFingerprints,
   compactValidationReceipt: attestationModule.compactValidationReceipt,
+  fingerprintValidationEnvironment: attestationModule.fingerprintValidationEnvironment,
+  fingerprintValidationToolchain: attestationModule.fingerprintValidationToolchain,
   parseDurableValidationReceipt: attestationModule.parseDurableValidationReceipt,
   parseGateValidationReceipt: attestationModule.parseGateValidationReceipt,
   parseValidationBatchReceipt: attestationModule.parseValidationBatchReceipt,
@@ -498,5 +501,137 @@ describe('compact validation receipt', () => {
       outcome: 'drifted',
       commands: [],
     });
+  });
+});
+
+describe('validation environment and toolchain fingerprints (V3 identity)', () => {
+  it('fingerprints only sorted env entries, ignoring key order and dropping undefined values', () => {
+    const fingerprint = exported('fingerprintValidationEnvironment');
+    const withUndefinedExtra = fingerprint({
+      PATH: '/usr/bin',
+      LANG: 'en_US.UTF-8',
+      MISSING: undefined,
+    });
+    const reorderedNoExtra = fingerprint({ LANG: 'en_US.UTF-8', PATH: '/usr/bin' });
+    expect(withUndefinedExtra).toBe(reorderedNoExtra);
+    expect(withUndefinedExtra).toMatch(/^[0-9a-f]{64}$/);
+
+    const changedValue = fingerprint({ LANG: 'en_US.UTF-8', PATH: '/usr/local/bin' });
+    expect(changedValue).not.toBe(withUndefinedExtra);
+  });
+
+  it('fingerprints the resolved executable\'s bytes and mtime, not just its name', () => {
+    const fingerprintToolchain = exported('fingerprintValidationToolchain');
+    const dir = mkdtempSync(join(tmpdir(), 'rune-toolchain-fingerprint-'));
+    try {
+      const tool = join(dir, 'faketool');
+      writeFileSync(tool, '#!/bin/sh\necho one\n');
+      const env = { PATH: dir };
+
+      const first = fingerprintToolchain(['faketool --flag'], env);
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      // Deterministic for identical, unchanged input.
+      expect(fingerprintToolchain(['faketool --flag'], env)).toBe(first);
+
+      writeFileSync(tool, '#!/bin/sh\necho two\n');
+      const second = fingerprintToolchain(['faketool --flag'], env);
+      expect(second).not.toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fingerprints a tool missing from PATH deterministically, as distinct evidence from a resolved one', () => {
+    const fingerprintToolchain = exported('fingerprintValidationToolchain');
+    const dir = mkdtempSync(join(tmpdir(), 'rune-toolchain-missing-'));
+    try {
+      const missing = fingerprintToolchain(['nonexistent-tool --flag'], { PATH: dir });
+      const missingAgain = fingerprintToolchain(['nonexistent-tool --flag'], { PATH: dir });
+      expect(missing).toBe(missingAgain);
+      expect(missing).toMatch(/^[0-9a-f]{64}$/);
+
+      writeFileSync(join(dir, 'nonexistent-tool'), '#!/bin/sh\necho present\n');
+      const nowPresent = fingerprintToolchain(['nonexistent-tool --flag'], { PATH: dir });
+      expect(nowPresent).not.toBe(missing);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed configured validation command rather than silently skipping it', () => {
+    const fingerprintToolchain = exported('fingerprintValidationToolchain');
+    expect(() => fingerprintToolchain(['; rm -rf /'], { PATH: '/usr/bin' })).toThrow(
+      /malformed validation command/,
+    );
+  });
+});
+
+describe('buildGateValidationReceipt — V3 canonical receipt identity', () => {
+  const fingerprints = {
+    commandFingerprint: COMMAND_FINGERPRINT,
+    configurationFingerprint: CONFIGURATION_FINGERPRINT,
+    dependencyFingerprint: DEPENDENCY_FINGERPRINT,
+    environmentFingerprint: '8'.repeat(64),
+    toolchainFingerprint: '9'.repeat(64),
+  };
+  const profilePlan = {
+    version: 1 as const,
+    shards: [{ command: 'npm test', argv: ['npm', 'test'], profile: 'isolated' as const }],
+    definitionFingerprint: '2'.repeat(64),
+  };
+  const profileOutcomes = [{
+    profile: 'isolated' as const,
+    outcome: 'passed' as const,
+    probe: {
+      profile: 'isolated' as const,
+      definitionFingerprint: '2'.repeat(64),
+      confinementOwner: 'validation-launcher' as const,
+      outcome: 'passed' as const,
+      startedAt: '2026-07-30T12:00:00.000Z',
+      completedAt: '2026-07-30T12:00:01.000Z',
+    },
+  }];
+
+  it('stamps a canonical receiptId on a profiled receipt that round-trips through the strict parser', () => {
+    const build = exported('buildGateValidationReceipt');
+    const parse = exported('parseGateValidationReceipt');
+    const receipt = build({
+      treeOid: TREE,
+      fullTaskReviewHash: REVIEW_HASH,
+      completedAt: '2026-07-30T12:00:05.000Z',
+      fingerprints,
+      batch: {
+        outcome: 'passed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'unsupported' }],
+        profilePlan,
+        profileOutcomes,
+      },
+    });
+    expect(receipt).toMatchObject({ version: 3, receiptId: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(parse(receipt)).toEqual(receipt);
+  });
+
+  // Documents the currently intended V1 fallback contract: a batch with no
+  // profile plan (`profilePlan === undefined`) should still stamp a valid
+  // version-1 receipt. `captureValidationFingerprints` now unconditionally
+  // returns `environmentFingerprint`/`toolchainFingerprint`, and the V1/V2
+  // branch of `parseGateValidationReceipt` fail-closed rejects a receipt
+  // carrying those fields — so this candidate is built with a version the
+  // parser can never admit, and `buildGateValidationReceipt` silently returns
+  // `undefined` instead of a valid legacy receipt.
+  it('still stamps a valid legacy receipt for a batch with no profile plan', () => {
+    const build = exported('buildGateValidationReceipt');
+    const receipt = build({
+      treeOid: TREE,
+      fullTaskReviewHash: REVIEW_HASH,
+      completedAt: '2026-07-30T12:00:05.000Z',
+      fingerprints,
+      batch: {
+        outcome: 'passed',
+        commands: [{ command: 'npm test', outcome: 'passed', coverage: 'unsupported' }],
+      },
+    });
+    expect(receipt).toMatchObject({ version: 1 });
+    expect(receipt).not.toHaveProperty('receiptId');
   });
 });

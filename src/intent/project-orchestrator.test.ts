@@ -138,6 +138,17 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     writeTasksMd: async (content) => {
       state.tasksMd = content;
     },
+    runPreCloseoutValidation: async () => ({
+      ok: true,
+      candidate: {
+        evidence: {
+          version: 1,
+          durationMs: 0,
+          outcome: 'skipped',
+          reuseDecision: 'pending',
+        },
+      },
+    }),
     runCloseoutChecks: async () => ({ ok: true } as const),
     commitCloseout: async (task) => {
       const sha = `sha-${task.id}`;
@@ -2660,8 +2671,22 @@ describe('project-orchestrator — closeout repair loop', () => {
         operations.push('context:transform');
         return { kind: 'neutral', sections: { 'Current State': 'task complete' } };
       },
+      runPreCloseoutValidation: async () => {
+        operations.push('pre-closeout-validation');
+        return {
+          ok: true,
+          candidate: {
+            evidence: {
+              version: 1,
+              durationMs: 12,
+              outcome: 'passed',
+              reuseDecision: 'pending',
+            },
+          },
+        } as const;
+      },
       runCloseoutChecks: async () => {
-        operations.push('validation');
+        operations.push('reuse-check');
         return { ok: true } as const;
       },
       writeContextMd: async (content) => {
@@ -2682,7 +2707,8 @@ describe('project-orchestrator — closeout repair loop', () => {
 
     expect(result.kind).toBe('finalized');
     expect(operations).toEqual([
-      'validation',
+      'pre-closeout-validation',
+      'reuse-check',
       'context:transform',
       'context:write',
       'tasks:write',
@@ -2717,6 +2743,54 @@ describe('project-orchestrator — closeout repair loop', () => {
       reason: 'user',
       task: { text: 'Validate without crossing cancellation' },
     });
+    expect(writeContextMd).not.toHaveBeenCalled();
+    expect(writeTasksMd).not.toHaveBeenCalled();
+    expect(commitCloseout).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after pre-closeout validation settles and before closeout checks even start', async () => {
+    let cancelled = false;
+    const runCloseoutChecks = vi.fn(async () => ({ ok: true }) as const);
+    const writeContextMd = vi.fn(async () => undefined);
+    const writeTasksMd = vi.fn(async () => undefined);
+    const commitCloseout = vi.fn(async (): Promise<CloseoutCommit> => ({
+      sha: 'must-not-commit',
+      subject: 'must not commit',
+    }));
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => 'user',
+      runPreCloseoutValidation: async () => {
+        cancelled = true;
+        return {
+          ok: true,
+          candidate: {
+            evidence: {
+              version: 1,
+              durationMs: 5,
+              outcome: 'passed',
+              reuseDecision: 'pending',
+            },
+          },
+        } as const;
+      },
+      runCloseoutChecks,
+      writeContextMd,
+      writeTasksMd,
+      commitCloseout,
+    }, '# Tasks\n- [ ] Validate without entering closeout checks\n');
+
+    const result = await runProjectOrchestration(h.deps);
+
+    expect(result).toMatchObject({
+      kind: 'cancelled',
+      reason: 'user',
+      task: { text: 'Validate without entering closeout checks' },
+    });
+    // The new pre-closeout stage must not race past a cancellation that
+    // arrives while it runs — closeout checks are Rune-owned identity
+    // recapture work that should never start once the run is cancelled.
+    expect(runCloseoutChecks).not.toHaveBeenCalled();
     expect(writeContextMd).not.toHaveBeenCalled();
     expect(writeTasksMd).not.toHaveBeenCalled();
     expect(commitCloseout).not.toHaveBeenCalled();
@@ -2960,6 +3034,17 @@ describe('project-orchestrator — closeout repair loop', () => {
     }> = [];
     const captureTaskBase = vi.fn(async (task: SelectedTask) => fixtureTaskBase(task));
     let closeoutCalls = 0;
+    const runPreCloseoutValidation = vi.fn(async () => ({
+      ok: true as const,
+      candidate: {
+        evidence: {
+          version: 1 as const,
+          durationMs: 10,
+          outcome: 'passed' as const,
+          reuseDecision: 'pending' as const,
+        },
+      },
+    }));
     const h = makeHarness({
       runTaskWorkflow: async (task, ctx) => {
         workflowCtxs.push({
@@ -2971,6 +3056,7 @@ describe('project-orchestrator — closeout repair loop', () => {
         return readyEvidence(task);
       },
       captureTaskBase,
+      runPreCloseoutValidation,
       runCloseoutChecks: async () => {
         closeoutCalls++;
         return closeoutCalls === 1
@@ -2996,6 +3082,9 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(workflowCtxs.map((c) => c.workflowAttempt)).toEqual([1, 2, 1]);
     expect(workflowCtxs[0]?.taskBaseTree).toBe(workflowCtxs[1]?.taskBaseTree);
     expect(captureTaskBase).toHaveBeenCalledTimes(2);
+    // Every closeout-repair workflow obtains fresh Rune-owned evidence; no
+    // candidate survives from the failed attempt.
+    expect(runPreCloseoutValidation).toHaveBeenCalledTimes(3);
     expect(workflowCtxs[0]?.feedback).toBeUndefined();
     const feedback = workflowCtxs[1]?.feedback;
     expect(feedback).toMatchObject({

@@ -75,6 +75,7 @@ import {
 import { parseVitestRelatedReport } from './vitest-related-report.js';
 import {
   buildGateValidationReceipt,
+  canonicalValidationReceiptId,
   captureTrustedVitestImplementation,
   captureValidationFingerprints,
   compactValidationReceipt,
@@ -88,6 +89,7 @@ import {
   vitestLifecycleReconciles,
   type CompactValidationReceipt,
   type FullSuiteAttestation,
+  type FullSuiteAttestationIdentity,
   type FullSuiteValidationResult,
   type GateValidationReceipt,
   type ValidationFingerprints,
@@ -994,6 +996,10 @@ export interface FullSuiteValidationIO extends FullSuiteValidationIOBase {
   trustedProfileAdmission?: true;
 }
 
+export type FullSuiteIdentityCaptureResult =
+  | { ok: true; identity: FullSuiteAttestationIdentity }
+  | { ok: false; reason: 'canonical-recapture-failed' };
+
 const RUNE_CODE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const VITEST_REPORTER_PATH = join(RUNE_CODE_ROOT, 'scripts', 'vitest-attestation-reporter.mjs');
 const TRUSTED_VITEST_OBSERVER_PATH = join(
@@ -1068,6 +1074,61 @@ export function runTrustedVitestObserver(
       },
     },
   );
+}
+
+/** Recapture the complete V3 identity without launching product code. */
+export async function captureFullSuiteValidationIdentity(
+  opts: Pick<FullSuiteValidationOpts,
+    'commands' | 'adapters' | 'commandProfiles' | 'worktree' | 'cwd' |
+    'validationCwd' | 'fullTaskReviewHash'>,
+  io: Pick<FullSuiteValidationIO, 'runGit' | 'trustedVitestReporterPath'> = {
+    runGit: defaultRunGit,
+  },
+): Promise<FullSuiteIdentityCaptureResult> {
+  try {
+    const profilePlan = planValidationProfiles({
+      commands: opts.commands,
+      commandProfiles: (opts.commandProfiles?.length ?? 0) > 0
+        ? opts.commandProfiles!
+        : opts.commands.map((command) => ({ command, profile: 'isolated' as const })),
+      adapters: opts.adapters,
+      parseCommand: parseValidationCommand,
+    });
+    const resolvedValidationCwd = resolveValidationCwd(opts.worktree, opts.validationCwd);
+    if (!resolvedValidationCwd.ok ||
+      realpathSync(resolvedValidationCwd.cwd) !== realpathSync(opts.cwd)) {
+      return { ok: false, reason: 'canonical-recapture-failed' };
+    }
+    const reporterPath = io.trustedVitestReporterPath ?? VITEST_REPORTER_PATH;
+    const trustedImplementation = reporterPath === VITEST_REPORTER_PATH
+      ? BOOT_TRUSTED_VITEST_IMPLEMENTATION
+      : captureTrustedVitestImplementation({
+          reporterPath,
+          observerPath: TRUSTED_VITEST_OBSERVER_PATH,
+          extractorPath: TRUSTED_VITEST_CONFIG_EXTRACTOR_PATH,
+        });
+    const treeOid = await captureValidationTree(io.runGit, opts.worktree);
+    const fingerprints = captureValidationFingerprints(
+      opts.cwd,
+      opts.commands,
+      opts.adapters,
+      trustedImplementation,
+      profilePlan,
+    );
+    return {
+      ok: true,
+      identity: {
+        treeOid,
+        fullTaskReviewHash: opts.fullTaskReviewHash,
+        validationCwd: opts.validationCwd,
+        configuredArgv: profilePlan.shards.map((shard) => [...shard.argv]),
+        ...fingerprints,
+        profilePlan,
+      },
+    };
+  } catch {
+    return { ok: false, reason: 'canonical-recapture-failed' };
+  }
 }
 const VALIDATION_CONFIG_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -1970,14 +2031,19 @@ export async function runFullSuiteValidation(
     const configuredArgv = prelim.map((item) => item.argv);
     const first = prelim[0]!;
     const last = prelim.at(-1)!;
-    const candidate: FullSuiteAttestation = {
-      version: 2,
+    const identity = {
       treeOid: beforeTree,
       fullTaskReviewHash: opts.fullTaskReviewHash,
       validationCwd: opts.validationCwd,
       configuredArgv,
-      adapter: { runner: 'vitest', version: 1 },
       ...beforeFingerprints,
+      profilePlan,
+    };
+    const candidate: FullSuiteAttestation = {
+      version: 3,
+      receiptId: canonicalValidationReceiptId(identity),
+      ...identity,
+      adapter: { runner: 'vitest', version: 1 },
       startedAt: first.startedAt,
       completedAt: last.completedAt,
       durationMs: Math.max(
@@ -1991,17 +2057,9 @@ export async function runFullSuiteValidation(
         cancelled: false,
       },
       coverage: { status: 'complete', manifest: aggregateManifest },
-      profilePlan,
       profileOutcomes: validationReceipt.profileOutcomes ?? [],
     };
-    const validated = validateFullSuiteAttestation(candidate, {
-      treeOid: beforeTree,
-      fullTaskReviewHash: opts.fullTaskReviewHash,
-      validationCwd: opts.validationCwd,
-      configuredArgv,
-      ...beforeFingerprints,
-      profilePlan,
-    });
+    const validated = validateFullSuiteAttestation(candidate, identity);
     if (validated.ok) {
       attestations.push(validated.attestation);
       receipts.push(compactValidationReceipt(validated.attestation));
@@ -2013,20 +2071,39 @@ export async function runFullSuiteValidation(
     mappedCommands.length === 0 &&
     prelim.length === profilePlan.shards.length
   ) {
-    receipts.push({
-      version: 2,
-      command: prelim
-        .map((item) => sanitizeValidationCommandIdentifier(item.argv))
-        .join(' + ')
-        .slice(0, 1_000),
+    const configuredArgv = prelim.map((item) => item.argv);
+    const first = prelim[0]!;
+    const last = prelim.at(-1)!;
+    const identity = {
       treeOid: beforeTree,
       fullTaskReviewHash: opts.fullTaskReviewHash,
-      outcome: 'passed',
-      coverage: 'unsupported',
-      completedAt: prelim.at(-1)?.completedAt ?? new Date().toISOString(),
+      validationCwd: opts.validationCwd,
+      configuredArgv,
+      ...beforeFingerprints,
       profilePlan,
-      profileOutcomes: validationReceipt.profileOutcomes,
-    });
+    };
+    const candidate: FullSuiteAttestation = {
+      version: 3,
+      receiptId: canonicalValidationReceiptId(identity),
+      ...identity,
+      adapter: { runner: 'unsupported', version: 1 },
+      startedAt: first.startedAt,
+      completedAt: last.completedAt,
+      durationMs: Math.max(0, Date.parse(last.completedAt) - Date.parse(first.startedAt)),
+      execution: {
+        outcome: 'passed',
+        exitCode: 0,
+        timedOut: false,
+        cancelled: false,
+      },
+      coverage: { status: 'unsupported' },
+      profileOutcomes: validationReceipt.profileOutcomes ?? [],
+    };
+    const validated = validateFullSuiteAttestation(candidate, identity);
+    if (validated.ok) {
+      attestations.push(validated.attestation);
+      receipts.push(compactValidationReceipt(validated.attestation));
+    }
   }
   const completedAt = prelim.at(-1)?.completedAt ?? new Date().toISOString();
   const gateValidationReceipt = drifted

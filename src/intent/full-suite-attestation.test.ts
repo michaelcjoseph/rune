@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FULL_SUITE_ATTESTATION_VERSION,
+  canonicalGateValidationReceiptId,
+  canonicalValidationReceiptId,
   compactValidationReceipt,
   durableValidationReceipt,
   parseDurableValidationReceipt,
@@ -17,6 +19,7 @@ import {
   parseGateValidationReceipt,
   parseValidationBatchReceipt,
   validateFullSuiteAttestation,
+  validatePreCloseoutAttestation,
   type FullSuiteAttestation,
   type ValidationProfileOutcome,
 } from './full-suite-attestation.js';
@@ -27,6 +30,8 @@ const REVIEW_HASH = 'b'.repeat(64);
 const COMMAND_FP = 'c'.repeat(64);
 const CONFIGURATION_FP = 'd'.repeat(64);
 const DEPENDENCY_FP = 'e'.repeat(64);
+const ENVIRONMENT_FP = '8'.repeat(64);
+const TOOLCHAIN_FP = '9'.repeat(64);
 const PLAN_FP = '1'.repeat(64);
 const PROBE_FP = 'f'.repeat(64);
 
@@ -172,8 +177,53 @@ describe('parseGateValidationReceipt — version 2', () => {
   });
 });
 
+describe('parseGateValidationReceipt — version 3 canonical receipt identity', () => {
+  const v3Fields = {
+    version: 3 as const,
+    treeOid: TREE,
+    fullTaskReviewHash: REVIEW_HASH,
+    completedAt: '2026-07-30T12:00:05.000Z',
+    commandFingerprint: COMMAND_FP,
+    configurationFingerprint: CONFIGURATION_FP,
+    dependencyFingerprint: DEPENDENCY_FP,
+    environmentFingerprint: ENVIRONMENT_FP,
+    toolchainFingerprint: TOOLCHAIN_FP,
+    outcome: 'passed' as const,
+    commands: [{ command: 'npm test', outcome: 'passed' as const, coverage: 'unsupported' as const }],
+    profilePlan: PROFILE_PLAN,
+    profileOutcomes: PROFILE_OUTCOMES,
+  };
+
+  it('admits a version-3 receipt only when the receiptId matches its own canonical identity', () => {
+    const receiptId = canonicalGateValidationReceiptId(v3Fields);
+    const receipt = { ...v3Fields, receiptId };
+    expect(parseGateValidationReceipt(receipt)).toEqual(receipt);
+  });
+
+  it('rejects a version-3 receipt whose receiptId was tampered with', () => {
+    const receipt = { ...v3Fields, receiptId: '1'.repeat(64) };
+    expect(parseGateValidationReceipt(receipt)).toBeUndefined();
+  });
+
+  it('rejects a version-3 receipt missing the environment or toolchain fingerprint', () => {
+    const receiptId = canonicalGateValidationReceiptId(v3Fields);
+    const { environmentFingerprint: _env, ...withoutEnv } = v3Fields;
+    expect(parseGateValidationReceipt({ ...withoutEnv, receiptId })).toBeUndefined();
+    const { toolchainFingerprint: _toolchain, ...withoutToolchain } = v3Fields;
+    expect(parseGateValidationReceipt({ ...withoutToolchain, receiptId })).toBeUndefined();
+  });
+
+  it('rejects a version-1/2 receipt carrying V3-only receiptId or fingerprint fields', () => {
+    const receiptId = canonicalGateValidationReceiptId(v3Fields);
+    expect(parseGateValidationReceipt({ ...v3Fields, version: 1 as const, receiptId }))
+      .toBeUndefined();
+    expect(parseGateValidationReceipt({ ...v3Fields, version: 2 as const, receiptId }))
+      .toBeUndefined();
+  });
+});
+
 function fullAttestation(overrides: Partial<FullSuiteAttestation> = {}): FullSuiteAttestation {
-  return {
+  const base: FullSuiteAttestation = {
     version: FULL_SUITE_ATTESTATION_VERSION,
     treeOid: TREE,
     fullTaskReviewHash: REVIEW_HASH,
@@ -183,6 +233,8 @@ function fullAttestation(overrides: Partial<FullSuiteAttestation> = {}): FullSui
     commandFingerprint: COMMAND_FP,
     configurationFingerprint: CONFIGURATION_FP,
     dependencyFingerprint: DEPENDENCY_FP,
+    environmentFingerprint: ENVIRONMENT_FP,
+    toolchainFingerprint: TOOLCHAIN_FP,
     startedAt: '2026-07-30T12:00:00.000Z',
     completedAt: '2026-07-30T12:00:01.000Z',
     durationMs: 1_000,
@@ -192,10 +244,13 @@ function fullAttestation(overrides: Partial<FullSuiteAttestation> = {}): FullSui
     profileOutcomes: PROFILE_OUTCOMES,
     ...overrides,
   };
+  return base.version === 3
+    ? { ...base, receiptId: canonicalValidationReceiptId(base) }
+    : base;
 }
 
-describe('full-suite attestation — version 2 profile identity', () => {
-  it('round-trips a self-consistent version-2 attestation', () => {
+describe('full-suite attestation — version 3 profile identity', () => {
+  it('round-trips a self-consistent version-3 attestation', () => {
     const attestation = fullAttestation();
     expect(parseFullSuiteAttestation(attestation)).toEqual(attestation);
   });
@@ -211,6 +266,8 @@ describe('full-suite attestation — version 2 profile identity', () => {
       commandFingerprint: COMMAND_FP,
       configurationFingerprint: CONFIGURATION_FP,
       dependencyFingerprint: DEPENDENCY_FP,
+      environmentFingerprint: ENVIRONMENT_FP,
+      toolchainFingerprint: TOOLCHAIN_FP,
     })).toEqual({ ok: false, reason: 'malformed-attestation' });
   });
 
@@ -233,6 +290,8 @@ describe('full-suite attestation — version 2 profile identity', () => {
       commandFingerprint: attestation.commandFingerprint,
       configurationFingerprint: attestation.configurationFingerprint,
       dependencyFingerprint: attestation.dependencyFingerprint,
+      environmentFingerprint: attestation.environmentFingerprint,
+      toolchainFingerprint: attestation.toolchainFingerprint,
       profilePlan: driftedPlan,
     });
     expect(result).toEqual({ ok: false, reason: 'identity-mismatch' });
@@ -248,6 +307,8 @@ describe('full-suite attestation — version 2 profile identity', () => {
       commandFingerprint: attestation.commandFingerprint,
       configurationFingerprint: attestation.configurationFingerprint,
       dependencyFingerprint: attestation.dependencyFingerprint,
+      environmentFingerprint: attestation.environmentFingerprint,
+      toolchainFingerprint: attestation.toolchainFingerprint,
       profilePlan: PROFILE_PLAN,
     });
     expect(result).toEqual({ ok: true, attestation });
@@ -259,7 +320,8 @@ describe('compact/durable validation receipts project profile evidence through',
     const attestation = fullAttestation();
     const compact = compactValidationReceipt(attestation);
     expect(compact).toMatchObject({
-      version: 2,
+      version: 3,
+      receiptId: attestation.receiptId,
       profilePlan: PROFILE_PLAN,
       profileOutcomes: PROFILE_OUTCOMES,
     });
@@ -274,5 +336,110 @@ describe('compact/durable validation receipts project profile evidence through',
       profileOutcomes: PROFILE_OUTCOMES,
     });
     expect(parseDurableValidationReceipt(durable)).toEqual(durable);
+  });
+});
+
+describe('pre-closeout V3 reuse admission', () => {
+  const identity = () => {
+    const attestation = fullAttestation();
+    return {
+      treeOid: attestation.treeOid,
+      fullTaskReviewHash: attestation.fullTaskReviewHash,
+      validationCwd: attestation.validationCwd,
+      configuredArgv: attestation.configuredArgv,
+      commandFingerprint: attestation.commandFingerprint,
+      configurationFingerprint: attestation.configurationFingerprint,
+      dependencyFingerprint: attestation.dependencyFingerprint,
+      environmentFingerprint: attestation.environmentFingerprint,
+      toolchainFingerprint: attestation.toolchainFingerprint,
+      profilePlan: attestation.profilePlan,
+    };
+  };
+
+  it('reuses an exact green product-command V3 receipt with unsupported lifecycle coverage', () => {
+    expect(validatePreCloseoutAttestation(
+      fullAttestation(),
+      identity(),
+      'product-commands',
+    )).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['tree-drift', { treeOid: '2'.repeat(40) }],
+    ['review-hash-drift', { fullTaskReviewHash: '2'.repeat(64) }],
+    ['cwd-drift', { validationCwd: 'packages/rune' }],
+    ['argv-drift', { configuredArgv: [['npm', 'run', 'build']] as string[][] }],
+    ['profile-drift', { profilePlan: { ...PROFILE_PLAN, definitionFingerprint: '2'.repeat(64) } }],
+    ['configuration-drift', { configurationFingerprint: '2'.repeat(64) }],
+    ['dependency-drift', { dependencyFingerprint: '2'.repeat(64) }],
+    ['environment-drift', { environmentFingerprint: '2'.repeat(64) }],
+    ['toolchain-drift', { toolchainFingerprint: '2'.repeat(64) }],
+  ] as const)('reports %s precisely', (reason, override) => {
+    expect(validatePreCloseoutAttestation(
+      fullAttestation(),
+      { ...identity(), ...override },
+      'product-commands',
+    )).toEqual({ ok: false, reason });
+  });
+
+  it('keeps V2 evidence readable for history but ineligible for stage reuse', () => {
+    const current = fullAttestation();
+    const {
+      receiptId: _receiptId,
+      environmentFingerprint: _environmentFingerprint,
+      toolchainFingerprint: _toolchainFingerprint,
+      ...historical
+    } = current;
+    const v2 = { ...historical, version: 2 as const };
+    expect(parseFullSuiteAttestation(v2)).toEqual(v2);
+    expect(validatePreCloseoutAttestation(v2, identity(), 'product-commands'))
+      .toEqual({ ok: false, reason: 'incomplete-execution' });
+  });
+
+  it.each([
+    ['failed execution', {
+      execution: { outcome: 'failed' as const, exitCode: 1, timedOut: false, cancelled: false },
+    }, 'incomplete-execution'],
+    ['timed-out execution', {
+      execution: { outcome: 'failed' as const, exitCode: null, timedOut: true, cancelled: false },
+    }, 'incomplete-execution'],
+    ['cancelled execution', {
+      execution: { outcome: 'failed' as const, exitCode: null, timedOut: false, cancelled: true },
+    }, 'cancelled'],
+  ] as const)('rejects %s as non-green stage evidence', (_label, override, reason) => {
+    expect(validatePreCloseoutAttestation(
+      fullAttestation(override),
+      identity(),
+      'product-commands',
+    )).toEqual({ ok: false, reason });
+  });
+
+  it.each([
+    ['partial profile execution', {
+      ...fullAttestation(),
+      profileOutcomes: [],
+    }],
+    ['tampered canonical receipt identity', {
+      ...fullAttestation(),
+      receiptId: '2'.repeat(64),
+    }],
+    ['unbounded extra output', {
+      ...fullAttestation(),
+      rawOutput: 'must never persist',
+    }],
+  ])('rejects %s as corrupt stage evidence', (_label, candidate) => {
+    expect(validatePreCloseoutAttestation(
+      candidate,
+      identity(),
+      'product-commands',
+    )).toEqual({ ok: false, reason: 'corrupt-evidence' });
+  });
+
+  it('requires complete trusted Vitest lifecycle coverage for vitest-related reuse', () => {
+    expect(validatePreCloseoutAttestation(
+      fullAttestation(),
+      identity(),
+      'vitest-related',
+    )).toEqual({ ok: false, reason: 'incomplete-execution' });
   });
 });

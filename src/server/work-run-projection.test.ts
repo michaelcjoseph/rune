@@ -141,6 +141,13 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
         },
       ],
     };
+    const preCloseoutValidation = {
+      version: 1,
+      receiptId: 'f'.repeat(64),
+      durationMs: 2_500,
+      outcome: 'passed',
+      reuseDecision: 'reused',
+    };
     mkdirSync(join(dir, id), { recursive: true });
     writeFileSync(join(dir, id, 'summary.json'), JSON.stringify({
       id, project: '02-growth', product: 'aura', outcome: 'branch-complete',
@@ -152,6 +159,7 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
       baseSha: 'base', branch: 'rune-work/demo', startedAt: '2026-07-30T00:00:00.000Z',
       endedAt: '2026-07-30T00:00:01.000Z', transcriptPath: '', forensicsPath: '',
       gateValidationReceipt,
+      preCloseoutValidation,
     }));
     writeFileSync(indexFile, `${JSON.stringify({
       id, project: '02-growth', outcome: 'branch-complete', durationMs: 10,
@@ -160,6 +168,7 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
 
     expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
       gateValidationReceipt,
+      preCloseoutValidation,
     });
   });
 

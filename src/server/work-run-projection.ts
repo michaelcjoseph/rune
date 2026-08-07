@@ -118,7 +118,8 @@ function buildProjection(
   startedAt: string,
   terminal?: Pick<
     NonNullable<ReturnType<typeof readWorkRunSummary>>,
-    'trigger' | 'disposition' | 'contextFailure' | 'gateValidationReceipt'
+    'trigger' | 'disposition' | 'contextFailure' | 'gateValidationReceipt' |
+    'preCloseoutValidation'
   >,
   waitingOn?: string,
 ): WorkRunProjection {
@@ -139,6 +140,9 @@ function buildProjection(
       : {}),
     ...(terminal?.gateValidationReceipt !== undefined
       ? { gateValidationReceipt: terminal.gateValidationReceipt }
+      : {}),
+    ...(terminal?.preCloseoutValidation !== undefined
+      ? { preCloseoutValidation: terminal.preCloseoutValidation }
       : {}),
   };
 }

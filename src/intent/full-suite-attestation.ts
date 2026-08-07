@@ -6,6 +6,7 @@
  * user surfaces admit only values that pass these guards.
  */
 
+import { createHash } from 'node:crypto';
 import { isAbsolute, normalize } from 'node:path';
 import { isGitObjectId } from './git-object-id.js';
 import type {
@@ -16,8 +17,9 @@ import type {
 import {
   isValidationProfile,
 } from './validation-profiles.js';
+import type { PreCloseoutValidationInvalidationReason } from './pre-closeout-validation.js';
 
-export const FULL_SUITE_ATTESTATION_VERSION = 2;
+export const FULL_SUITE_ATTESTATION_VERSION = 3;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_COMMANDS = 32;
 const MAX_ARGV = 64;
@@ -70,7 +72,9 @@ export interface VitestLifecycleManifest {
 }
 
 export interface FullSuiteAttestation {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
+  /** Canonical identity of every V3 identity field. Historical V1/V2 records omit it. */
+  receiptId?: string;
   treeOid: string;
   fullTaskReviewHash: string;
   /** Worktree-relative label only; never an absolute host path. */
@@ -83,6 +87,10 @@ export interface FullSuiteAttestation {
   commandFingerprint: string;
   configurationFingerprint: string;
   dependencyFingerprint: string;
+  /** Hash only; environment names and values never enter durable evidence. */
+  environmentFingerprint?: string;
+  /** Hash only; resolved executable paths and metadata never enter durable evidence. */
+  toolchainFingerprint?: string;
   startedAt: string;
   completedAt: string;
   durationMs: number;
@@ -107,6 +115,8 @@ export interface FullSuiteAttestationIdentity {
   commandFingerprint: string;
   configurationFingerprint: string;
   dependencyFingerprint: string;
+  environmentFingerprint?: string;
+  toolchainFingerprint?: string;
   profilePlan?: ValidationProfilePlan;
 }
 
@@ -114,8 +124,20 @@ export type FullSuiteAttestationValidation =
   | { ok: true; attestation: FullSuiteAttestation }
   | { ok: false; reason: string };
 
+export type PreCloseoutAttestationValidation =
+  /**
+   * Admission proves the attestation is V3 and that its `receiptId` equals the canonical
+   * identity of the recaptured expectation, so `receiptId` is surfaced as a non-optional
+   * field here rather than left for callers to assert off the optional attestation field.
+   */
+  | { ok: true; attestation: FullSuiteAttestation; receiptId: string }
+  | { ok: false; reason: PreCloseoutValidationInvalidationReason };
+
 export interface CompactValidationReceipt {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
+  receiptId?: string;
+  environmentFingerprint?: string;
+  toolchainFingerprint?: string;
   command: string;
   treeOid: string;
   fullTaskReviewHash: string;
@@ -151,13 +173,55 @@ export interface ValidationBatchReceipt {
 
 /** Compact, restart-safe merge-gate proof bound to one integration tree. */
 export interface GateValidationReceipt extends ValidationBatchReceipt {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
+  receiptId?: string;
   treeOid: string;
   fullTaskReviewHash: string;
   completedAt: string;
   commandFingerprint: string;
   configurationFingerprint: string;
   dependencyFingerprint: string;
+  environmentFingerprint?: string;
+  toolchainFingerprint?: string;
+}
+
+/** Stable JSON-free ordering for the V3 receipt identity. */
+export function canonicalValidationReceiptId(
+  identity: FullSuiteAttestationIdentity,
+): string {
+  return createHash('sha256').update(JSON.stringify({
+    version: FULL_SUITE_ATTESTATION_VERSION,
+    treeOid: identity.treeOid,
+    fullTaskReviewHash: identity.fullTaskReviewHash,
+    validationCwd: identity.validationCwd,
+    configuredArgv: identity.configuredArgv,
+    commandFingerprint: identity.commandFingerprint,
+    configurationFingerprint: identity.configurationFingerprint,
+    dependencyFingerprint: identity.dependencyFingerprint,
+    environmentFingerprint: identity.environmentFingerprint,
+    toolchainFingerprint: identity.toolchainFingerprint,
+    profilePlan: identity.profilePlan,
+  })).digest('hex');
+}
+
+export function canonicalGateValidationReceiptId(
+  receipt: Omit<GateValidationReceipt, 'receiptId'>,
+): string {
+  return createHash('sha256').update(JSON.stringify({
+    version: receipt.version,
+    treeOid: receipt.treeOid,
+    fullTaskReviewHash: receipt.fullTaskReviewHash,
+    completedAt: receipt.completedAt,
+    commandFingerprint: receipt.commandFingerprint,
+    configurationFingerprint: receipt.configurationFingerprint,
+    dependencyFingerprint: receipt.dependencyFingerprint,
+    environmentFingerprint: receipt.environmentFingerprint,
+    toolchainFingerprint: receipt.toolchainFingerprint,
+    outcome: receipt.outcome,
+    commands: receipt.commands,
+    profilePlan: receipt.profilePlan,
+    profileOutcomes: receipt.profileOutcomes,
+  })).digest('hex');
 }
 
 export interface DurableValidationReceipt {
@@ -463,19 +527,22 @@ export function parseGateValidationReceipt(
 ): GateValidationReceipt | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, [
     'version',
+    'receiptId',
     'treeOid',
     'fullTaskReviewHash',
     'completedAt',
     'commandFingerprint',
     'configurationFingerprint',
     'dependencyFingerprint',
+    'environmentFingerprint',
+    'toolchainFingerprint',
     'outcome',
     'commands',
     'profilePlan',
     'profileOutcomes',
   ])) return undefined;
   if (
-    (value['version'] !== 1 && value['version'] !== 2) ||
+    (value['version'] !== 1 && value['version'] !== 2 && value['version'] !== 3) ||
     typeof value['treeOid'] !== 'string' ||
     !isGitObjectId(value['treeOid']) ||
     typeof value['fullTaskReviewHash'] !== 'string' ||
@@ -485,6 +552,17 @@ export function parseGateValidationReceipt(
     !SHA256.test(String(value['commandFingerprint'])) ||
     !SHA256.test(String(value['configurationFingerprint'])) ||
     !SHA256.test(String(value['dependencyFingerprint']))
+  ) return undefined;
+  if (
+    value['version'] === 3 &&
+    (!SHA256.test(String(value['receiptId'])) ||
+      !SHA256.test(String(value['environmentFingerprint'])) ||
+      !SHA256.test(String(value['toolchainFingerprint'])))
+  ) return undefined;
+  if (
+    value['version'] !== 3 &&
+    (value['receiptId'] !== undefined || value['environmentFingerprint'] !== undefined ||
+      value['toolchainFingerprint'] !== undefined)
   ) return undefined;
   const batch = parseValidationBatchReceipt({
     outcome: value['outcome'],
@@ -497,8 +575,13 @@ export function parseGateValidationReceipt(
       : {}),
   });
   if (batch === undefined) return undefined;
-  return {
+  const parsed: GateValidationReceipt = {
     version: value['version'],
+    ...(value['version'] === 3 ? {
+      receiptId: value['receiptId'] as string,
+      environmentFingerprint: value['environmentFingerprint'] as string,
+      toolchainFingerprint: value['toolchainFingerprint'] as string,
+    } : {}),
     treeOid: value['treeOid'],
     fullTaskReviewHash: value['fullTaskReviewHash'],
     completedAt: value['completedAt'],
@@ -507,6 +590,11 @@ export function parseGateValidationReceipt(
     dependencyFingerprint: value['dependencyFingerprint'] as string,
     ...batch,
   };
+  if (parsed.version === 3) {
+    const { receiptId, ...identity } = parsed;
+    if (receiptId !== canonicalGateValidationReceiptId(identity)) return undefined;
+  }
+  return parsed;
 }
 
 export function isGateValidationReceipt(
@@ -628,6 +716,7 @@ export function parseVitestManifest(value: unknown): VitestLifecycleManifest | u
 function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, [
     'version',
+    'receiptId',
     'treeOid',
     'fullTaskReviewHash',
     'validationCwd',
@@ -636,6 +725,8 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
     'commandFingerprint',
     'configurationFingerprint',
     'dependencyFingerprint',
+    'environmentFingerprint',
+    'toolchainFingerprint',
     'startedAt',
     'completedAt',
     'durationMs',
@@ -649,7 +740,8 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
   const execution = value['execution'];
   const coverage = value['coverage'];
   if (
-    (value['version'] !== 1 && value['version'] !== FULL_SUITE_ATTESTATION_VERSION) ||
+    (value['version'] !== 1 && value['version'] !== 2 &&
+      value['version'] !== FULL_SUITE_ATTESTATION_VERSION) ||
     typeof value['treeOid'] !== 'string' ||
     !isGitObjectId(value['treeOid']) ||
     typeof value['fullTaskReviewHash'] !== 'string' ||
@@ -709,6 +801,18 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
     value['version'] === 2 &&
     (profilePlan === undefined || profileOutcomes === undefined)
   ) return undefined;
+  if (
+    value['version'] === 3 &&
+    (profilePlan === undefined || profileOutcomes === undefined ||
+      !SHA256.test(String(value['receiptId'])) ||
+      !SHA256.test(String(value['environmentFingerprint'])) ||
+      !SHA256.test(String(value['toolchainFingerprint'])))
+  ) return undefined;
+  if (
+    value['version'] !== 3 &&
+    (value['receiptId'] !== undefined || value['environmentFingerprint'] !== undefined ||
+      value['toolchainFingerprint'] !== undefined)
+  ) return undefined;
   // Same producer alignment as the batch receipt: `configuredArgv` and
   // `profileOutcomes` are both one entry per executed shard, and the launcher
   // only builds a passed attestation once every shard came back passed.
@@ -718,8 +822,13 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
       (execution['outcome'] === 'passed' &&
         profileOutcomes.some((entry) => entry.outcome !== 'passed')))
   ) return undefined;
-  return {
+  const parsed: FullSuiteAttestation = {
     version: value['version'],
+    ...(value['version'] === 3 ? {
+      receiptId: value['receiptId'] as string,
+      environmentFingerprint: value['environmentFingerprint'] as string,
+      toolchainFingerprint: value['toolchainFingerprint'] as string,
+    } : {}),
     treeOid: value['treeOid'],
     fullTaskReviewHash: value['fullTaskReviewHash'],
     validationCwd: value['validationCwd'],
@@ -742,6 +851,11 @@ function parseAttestation(value: unknown): FullSuiteAttestation | undefined {
     coverage: parsedCoverage,
     ...(profilePlan !== undefined ? { profilePlan, profileOutcomes } : {}),
   };
+  if (
+    parsed.version === 3 &&
+    parsed.receiptId !== canonicalValidationReceiptId(parsed)
+  ) return undefined;
+  return parsed;
 }
 
 function exactJson(left: unknown, right: unknown): boolean {
@@ -762,6 +876,12 @@ export function parseFullSuiteAttestation(value: unknown): FullSuiteAttestation 
     commandFingerprint: parsed.commandFingerprint,
     configurationFingerprint: parsed.configurationFingerprint,
     dependencyFingerprint: parsed.dependencyFingerprint,
+    ...(parsed.environmentFingerprint !== undefined
+      ? { environmentFingerprint: parsed.environmentFingerprint }
+      : {}),
+    ...(parsed.toolchainFingerprint !== undefined
+      ? { toolchainFingerprint: parsed.toolchainFingerprint }
+      : {}),
     ...(parsed.profilePlan !== undefined ? { profilePlan: parsed.profilePlan } : {}),
   });
   return validated.ok ? validated.attestation : undefined;
@@ -865,6 +985,8 @@ export function validateFullSuiteAttestation(
     attestation.commandFingerprint !== expected.commandFingerprint ||
     attestation.configurationFingerprint !== expected.configurationFingerprint ||
     attestation.dependencyFingerprint !== expected.dependencyFingerprint
+    || attestation.environmentFingerprint !== expected.environmentFingerprint
+    || attestation.toolchainFingerprint !== expected.toolchainFingerprint
     || !exactJson(attestation.profilePlan, expected.profilePlan)
   ) {
     return { ok: false, reason: 'identity-mismatch' };
@@ -886,6 +1008,60 @@ export function validateFullSuiteAttestation(
   return { ok: true, attestation };
 }
 
+/** Exact V3 admission used only by the post-review → closeout handoff. */
+export function validatePreCloseoutAttestation(
+  value: unknown,
+  expected: FullSuiteAttestationIdentity,
+  strategy: 'product-commands' | 'vitest-related',
+): PreCloseoutAttestationValidation {
+  const attestation = parseAttestation(value);
+  if (attestation === undefined) return { ok: false, reason: 'corrupt-evidence' };
+  if (attestation.version !== 3) return { ok: false, reason: 'incomplete-execution' };
+  if (attestation.treeOid !== expected.treeOid) return { ok: false, reason: 'tree-drift' };
+  if (attestation.fullTaskReviewHash !== expected.fullTaskReviewHash) {
+    return { ok: false, reason: 'review-hash-drift' };
+  }
+  if (attestation.validationCwd !== expected.validationCwd) {
+    return { ok: false, reason: 'cwd-drift' };
+  }
+  if (!exactJson(attestation.configuredArgv, expected.configuredArgv) ||
+    attestation.commandFingerprint !== expected.commandFingerprint) {
+    return { ok: false, reason: 'argv-drift' };
+  }
+  if (!exactJson(attestation.profilePlan, expected.profilePlan)) {
+    return { ok: false, reason: 'profile-drift' };
+  }
+  if (attestation.configurationFingerprint !== expected.configurationFingerprint) {
+    return { ok: false, reason: 'configuration-drift' };
+  }
+  if (attestation.dependencyFingerprint !== expected.dependencyFingerprint) {
+    return { ok: false, reason: 'dependency-drift' };
+  }
+  if (attestation.environmentFingerprint !== expected.environmentFingerprint) {
+    return { ok: false, reason: 'environment-drift' };
+  }
+  if (attestation.toolchainFingerprint !== expected.toolchainFingerprint) {
+    return { ok: false, reason: 'toolchain-drift' };
+  }
+  const receiptId = canonicalValidationReceiptId(expected);
+  if (attestation.receiptId !== receiptId) {
+    return { ok: false, reason: 'corrupt-evidence' };
+  }
+  if (attestation.execution.cancelled) return { ok: false, reason: 'cancelled' };
+  if (
+    attestation.execution.outcome !== 'passed' ||
+    attestation.execution.exitCode !== 0 ||
+    attestation.execution.timedOut ||
+    attestation.profileOutcomes?.some((entry) => entry.outcome !== 'passed')
+  ) return { ok: false, reason: 'incomplete-execution' };
+  if (
+    strategy === 'vitest-related' &&
+    (attestation.coverage.status !== 'complete' ||
+      !vitestLifecycleIsGreen(attestation.coverage.manifest))
+  ) return { ok: false, reason: 'incomplete-execution' };
+  return { ok: true, attestation, receiptId };
+}
+
 export function compactValidationReceipt(
   attestation: FullSuiteAttestation,
 ): CompactValidationReceipt {
@@ -894,6 +1070,13 @@ export function compactValidationReceipt(
     : undefined;
   return {
     version: attestation.version,
+    ...(attestation.receiptId !== undefined ? { receiptId: attestation.receiptId } : {}),
+    ...(attestation.environmentFingerprint !== undefined
+      ? { environmentFingerprint: attestation.environmentFingerprint }
+      : {}),
+    ...(attestation.toolchainFingerprint !== undefined
+      ? { toolchainFingerprint: attestation.toolchainFingerprint }
+      : {}),
     command: attestation.configuredArgv
       .map((argv) => sanitizeValidationCommandIdentifier(argv))
       .join(' + ')

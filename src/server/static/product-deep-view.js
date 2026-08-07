@@ -485,6 +485,24 @@ function gateValidationStatus(run) {
     (profiles ? ` · ${profiles}` : '');
 }
 
+function preCloseoutValidationStatus(run) {
+  const evidence = run.preCloseoutValidation;
+  if (!evidence || typeof evidence.durationMs !== 'number') return '';
+  const duration = evidence.durationMs >= 1000
+    ? `${(evidence.durationMs / 1000).toFixed(1)}s`
+    : `${evidence.durationMs}ms`;
+  const receipt = typeof evidence.receiptId === 'string'
+    ? ` · receipt ${evidence.receiptId.slice(0, 12)}`
+    : '';
+  if (evidence.reuseDecision === 'reused') {
+    return `Pre-closeout validation reused · ${duration}${receipt}`;
+  }
+  if (evidence.reuseDecision === 'fallback') {
+    return `Pre-closeout validation fallback · ${duration} · ${evidence.invalidationReason || 'invalid evidence'}${receipt}`;
+  }
+  return `Pre-closeout validation ${evidence.outcome || 'recorded'} · ${duration}${receipt}`;
+}
+
 function adjudicationStatus(run) {
   if (run.adjudicationFailure?.code === 'adjudication-output-invalid') {
     return 'Adjudication operational hold · adjudication-output-invalid';
@@ -503,6 +521,7 @@ function renderRuns(view, liveRuns = {}) {
   const history = list(view.runs).map((run) => {
     const relatedStatus = relatedTestStatus(run);
     const gateStatus = gateValidationStatus(run);
+    const preCloseoutStatus = preCloseoutValidationStatus(run);
     const adjudication = adjudicationStatus(run);
     return `<article class="deep-run-row" data-run-id="${attr(run.runId)}">` +
       `<div class="deep-row-head">` +
@@ -543,6 +562,11 @@ function renderRuns(view, liveRuns = {}) {
       (gateStatus
         ? `<div class="deep-run-meta deep-run-validation">` +
             `<span>${escHtml(gateStatus)}</span>` +
+          `</div>`
+        : '') +
+      (preCloseoutStatus
+        ? `<div class="deep-run-meta deep-run-validation">` +
+            `<span>${escHtml(preCloseoutStatus)}</span>` +
           `</div>`
         : '') +
       (adjudication

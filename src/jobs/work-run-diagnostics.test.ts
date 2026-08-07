@@ -311,6 +311,13 @@ describe('product-scoped work-run diagnostics', () => {
             suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
           },
         },
+        preCloseoutValidation: {
+          version: 1,
+          receiptId: 'b'.repeat(64),
+          durationMs: 5_000,
+          outcome: 'passed',
+          reuseDecision: 'reused',
+        },
       } as unknown as Partial<TaskRunRecord>),
     ]);
 
@@ -330,6 +337,13 @@ describe('product-scoped work-run diagnostics', () => {
         completed: {
           suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
         },
+      },
+      preCloseoutValidation: {
+        version: 1,
+        receiptId: 'b'.repeat(64),
+        durationMs: 5_000,
+        outcome: 'passed',
+        reuseDecision: 'reused',
       },
     });
     expect(serialized).not.toContain('fullSuiteAttestation');

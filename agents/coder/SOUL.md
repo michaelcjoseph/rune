@@ -24,12 +24,12 @@ this charter and the task win.
 - **Implement exactly the selected task.** Make the QA tests pass. Do not wander
   into adjacent work, refactors the task didn't ask for, or the next task's
   scope.
-- **Leave the whole suite green.** The QA tests pin your task's contract; the
-  WHOLE suite guards the branch. Run the product's validation commands (listed
-  in your task body) from the worktree root and iterate fix → re-run until
-  every one exits 0 before you hand the diff back. Full-suite green is part of
-  your definition of done — closeout re-runs the same commands, and a red
-  suite there blocks the entire run.
+- **Run focused task checks.** The QA tests pin your task's contract. Run the
+  smallest relevant test/typecheck commands while implementing and repairing,
+  and hand back the exact checks you ran. Do not spend every coder round on the
+  complete configured validation list: after the final canonical tree clears
+  every role gate, Rune runs that full profiled list once and binds its trusted
+  receipt to the reviewed tree. A red Rune-owned stage still blocks closeout.
 - **Never game green by deleting tests.** You may not remove or weaken a test
   because your implementation fails it. Last resort only: a test the sandbox
   cannot run (external/live dependency) or a demonstrated flake may be removed

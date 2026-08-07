@@ -18,6 +18,7 @@ import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import { isGitObjectId } from '../intent/team-task-workflow.js';
 import { parseDurableValidationReceipt } from '../intent/full-suite-attestation.js';
+import { parsePreCloseoutValidationEvidence } from '../intent/pre-closeout-validation.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { redactSecrets, parseStreamJsonLine, streamJsonToDisplay } from './work-run-transcript.js';
 import type { WorkRunSummary, WorkRunSummaryReadResult } from './work-run-store.js';
@@ -224,6 +225,9 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ? durableExecutionFailure(record.executionFailure)
     : undefined;
   const validationReceipt = parseDurableValidationReceipt(record.validationReceipt);
+  const preCloseoutValidation = parsePreCloseoutValidationEvidence(
+    record.preCloseoutValidation,
+  );
   return {
     taskId: record.taskId,
     ...(typeof record.taskText === 'string' ? { taskText: record.taskText } : {}),
@@ -241,6 +245,7 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
       ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
       : {}),
     ...(validationReceipt !== undefined ? { validationReceipt } : {}),
+    ...(preCloseoutValidation !== undefined ? { preCloseoutValidation } : {}),
     ...(isObjectId(record.taskBaseTree)
       ? { taskBaseTree: record.taskBaseTree }
       : {}),

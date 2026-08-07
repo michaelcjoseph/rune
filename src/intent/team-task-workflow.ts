@@ -39,6 +39,7 @@ import type {
   DurableValidationReceipt,
   FullSuiteAttestation,
 } from './full-suite-attestation.js';
+import type { PreCloseoutValidationEvidence } from './pre-closeout-validation.js';
 import { isGitObjectId } from './git-object-id.js';
 import {
   describeEvidenceGaps,
@@ -685,6 +686,8 @@ export interface TaskEvidence {
   fullSuiteAttestation?: FullSuiteAttestation;
   /** Compact closeout provenance safe for transcripts and Cockpit. */
   validationReceipt?: DurableValidationReceipt;
+  /** Rune-owned post-review validation timing and reuse decision. */
+  preCloseoutValidation?: PreCloseoutValidationEvidence;
   /** Fail-closed review-surface mismatch; never carries raw diff content. */
   reviewSurfaceFailure?: ReviewSurfaceFailure;
   /** Scrubbed canonical review-surface hash approved by downstream roles.

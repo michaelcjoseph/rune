@@ -32,6 +32,7 @@ import {
 } from './sandbox-runtime.js';
 import {
   runGate,
+  captureFullSuiteValidationIdentity,
   collectTaskChangedPaths,
   taskChangesRequireFullValidation,
   runValidationCommandArgv,
@@ -629,13 +630,16 @@ describe('runGate — test before mutating main (P1.5)', () => {
       'npm test',
     ]);
     expect(projected.validationReceipt).toMatchObject({
-      version: 2,
+      version: 3,
+      receiptId: expect.stringMatching(/^[0-9a-f]{64}$/),
       treeOid: expect.stringMatching(/^[0-9a-f]{40}$/),
       fullTaskReviewHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       completedAt: expect.any(String),
       commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
       configurationFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
       dependencyFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      environmentFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      toolchainFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
       outcome: 'failed',
       commands: [
         { command: 'npm run build', outcome: 'failed', coverage: 'unsupported' },
@@ -2946,5 +2950,102 @@ describe('runFullSuiteValidation — canonical attestation launcher', () => {
       result: { outputTail: expect.stringContaining('profile admission wiring') },
     });
     expect(io.runCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe('captureFullSuiteValidationIdentity — recapture without executing product code', () => {
+  it('captures a complete V3 identity from real git + fingerprint capture, with no command execution', async () => {
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({
+      name: 'identity-recapture-fixture',
+      scripts: { test: 'vitest run' },
+    }));
+    git(repoPath, 'add', '-A');
+    git(repoPath, 'commit', '-q', '-m', 'identity fixture');
+
+    const result = await captureFullSuiteValidationIdentity({
+      commands: ['npm test'],
+      adapters: [{ command: 'npm test', runner: 'vitest' }],
+      commandProfiles: [],
+      worktree: repoPath,
+      cwd: repoPath,
+      validationCwd: '.',
+      fullTaskReviewHash: 'a'.repeat(64),
+    }, { runGit: defaultRunGit });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.identity).toMatchObject({
+      fullTaskReviewHash: 'a'.repeat(64),
+      validationCwd: '.',
+      configuredArgv: [['npm', 'test']],
+    });
+    expect(result.identity.treeOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(result.identity.commandFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.identity.configurationFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.identity.dependencyFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.identity.environmentFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.identity.toolchainFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.identity.profilePlan).toMatchObject({
+      shards: [{ command: 'npm test', argv: ['npm', 'test'], profile: 'isolated' }],
+    });
+  });
+
+  it('reflects an uncommitted worktree change in a fresh treeOid, without staging drift into the repo', async () => {
+    writeFileSync(join(repoPath, 'package.json'), JSON.stringify({ name: 'x' }));
+    git(repoPath, 'add', '-A');
+    git(repoPath, 'commit', '-q', '-m', 'base');
+
+    const before = await captureFullSuiteValidationIdentity({
+      commands: ['npm test'],
+      adapters: [],
+      commandProfiles: [],
+      worktree: repoPath,
+      cwd: repoPath,
+      validationCwd: '.',
+      fullTaskReviewHash: 'a'.repeat(64),
+    }, { runGit: defaultRunGit });
+
+    writeFileSync(join(repoPath, TRACKED_FILE), 'base-line\nrecapture drift\n');
+    const after = await captureFullSuiteValidationIdentity({
+      commands: ['npm test'],
+      adapters: [],
+      commandProfiles: [],
+      worktree: repoPath,
+      cwd: repoPath,
+      validationCwd: '.',
+      fullTaskReviewHash: 'a'.repeat(64),
+    }, { runGit: defaultRunGit });
+
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(after.identity.treeOid).not.toBe(before.identity.treeOid);
+  });
+
+  it('fails closed as canonical-recapture-failed when the declared cwd does not resolve to the given cwd', async () => {
+    const result = await captureFullSuiteValidationIdentity({
+      commands: ['npm test'],
+      adapters: [],
+      commandProfiles: [],
+      worktree: repoPath,
+      cwd: join(repoPath, 'does-not-exist'),
+      validationCwd: '.',
+      fullTaskReviewHash: 'a'.repeat(64),
+    }, { runGit: defaultRunGit });
+
+    expect(result).toEqual({ ok: false, reason: 'canonical-recapture-failed' });
+  });
+
+  it('fails closed as canonical-recapture-failed on a malformed configured validation command', async () => {
+    const result = await captureFullSuiteValidationIdentity({
+      commands: ['; rm -rf /'],
+      adapters: [],
+      commandProfiles: [],
+      worktree: repoPath,
+      cwd: repoPath,
+      validationCwd: '.',
+      fullTaskReviewHash: 'a'.repeat(64),
+    }, { runGit: defaultRunGit });
+
+    expect(result).toEqual({ ok: false, reason: 'canonical-recapture-failed' });
   });
 });

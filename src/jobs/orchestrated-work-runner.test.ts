@@ -92,6 +92,12 @@ const mockRunFullSuiteValidation = vi.hoisted(() =>
     _io?: unknown,
   ): Promise<Record<string, unknown>> => ({ ok: true })),
 );
+const mockCaptureFullSuiteValidationIdentity = vi.hoisted(() =>
+  vi.fn(async (): Promise<Record<string, unknown>> => ({
+    ok: false,
+    reason: 'canonical-recapture-failed',
+  })),
+);
 const mockCollectTaskChangedPaths = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const mockTaskChangesRequireFullValidation = vi.hoisted(() => vi.fn(async () => false));
 const mockRunValidationCommandArgv = vi.hoisted(() =>
@@ -170,6 +176,7 @@ vi.mock('./work-run-gate-runtime.js', () => ({
   }),
   runValidationCommands: mockRunValidationCommands,
   runFullSuiteValidation: mockRunFullSuiteValidation,
+  captureFullSuiteValidationIdentity: mockCaptureFullSuiteValidationIdentity,
 }));
 
 import {
@@ -181,11 +188,11 @@ import {
   fileTerminalBugsToBacklog,
   parkInFlightOrchestratedRuns,
   defaultShutdownParkDeps,
-  selectReusableFullSuiteEvidence,
   fullSuiteFailureAllowsCloseoutFallback,
   commitReviewedCloseoutTree,
 } from './orchestrated-work-runner.js';
 import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
+import { canonicalValidationReceiptId } from '../intent/full-suite-attestation.js';
 import {
   activeRuns,
   cancelMutation,
@@ -511,37 +518,7 @@ describe('commitReviewedCloseoutTree — real Git isolation', () => {
   });
 });
 
-describe('selectReusableFullSuiteEvidence', () => {
-  const attestation = { coverage: { status: 'complete' } };
-  const receipt = { coverage: 'complete' };
-
-  it('requires the launcher aggregate verdict even when one adapter produced evidence', () => {
-    expect(selectReusableFullSuiteEvidence({
-      ok: true,
-      attestations: [attestation],
-      receipts: [receipt],
-      coverageComplete: false,
-      validationReceipt: { outcome: 'passed', commands: [] },
-    } as never)).toBeUndefined();
-  });
-
-  it('requires both a complete attestation and compact receipt', () => {
-    expect(selectReusableFullSuiteEvidence({
-      ok: true,
-      attestations: [attestation],
-      receipts: [receipt],
-      coverageComplete: true,
-      validationReceipt: { outcome: 'passed', commands: [] },
-    } as never)).toEqual({ attestation, receipt });
-    expect(selectReusableFullSuiteEvidence({
-      ok: true,
-      attestations: [attestation],
-      receipts: [],
-      coverageComplete: true,
-      validationReceipt: { outcome: 'passed', commands: [] },
-    } as never)).toBeUndefined();
-  });
-
+describe('fullSuiteFailureAllowsCloseoutFallback', () => {
   it('allows closeout fallback only for green execution with invalid structured coverage', () => {
     const coverageOnlyFailure = {
       ok: false,
@@ -679,6 +656,11 @@ describe('orchestratedWorkApplier', () => {
       mockRunValidationCommands.mockResolvedValue({ ok: true });
       mockRunFullSuiteValidation.mockReset();
       mockRunFullSuiteValidation.mockResolvedValue({ ok: true });
+      mockCaptureFullSuiteValidationIdentity.mockReset();
+      mockCaptureFullSuiteValidationIdentity.mockResolvedValue({
+        ok: false,
+        reason: 'canonical-recapture-failed',
+      });
       mockCollectTaskChangedPaths.mockReset();
       mockCollectTaskChangedPaths.mockResolvedValue([]);
       mockRunValidationCommandArgv.mockReset();
@@ -2201,6 +2183,7 @@ describe('orchestratedWorkApplier', () => {
         'task-selected',
         'task-base-captured',
         'attempt-start',
+        'pre-closeout-validation-decision',
         'closeout-start',
         'closeout-complete',
       ]);
@@ -2547,16 +2530,43 @@ describe('orchestratedWorkApplier', () => {
       const canonicalDiff = 'diff --git a/src/feature.ts b/src/feature.ts\n+attested\n';
       const reviewHash = canonicalReviewDiffHash(canonicalDiff);
       const reviewTree = '2'.repeat(40);
-      const attestation = {
-        version: 1,
+      const profilePlan = {
+        version: 1 as const,
+        shards: [
+          { command: 'npm run build', argv: ['npm', 'run', 'build'], profile: 'isolated' as const },
+          { command: 'npm test', argv: ['npm', 'test'], profile: 'isolated' as const },
+        ],
+        definitionFingerprint: 'f'.repeat(64),
+      };
+      const probe = {
+        profile: 'isolated' as const,
+        definitionFingerprint: profilePlan.definitionFingerprint,
+        confinementOwner: 'validation-launcher' as const,
+        outcome: 'passed' as const,
+        startedAt: '2026-07-30T12:00:00.000Z',
+        completedAt: '2026-07-30T12:00:05.000Z',
+      };
+      const profileOutcomes = [
+        { profile: 'isolated' as const, outcome: 'passed' as const, probe },
+        { profile: 'isolated' as const, outcome: 'passed' as const, probe },
+      ];
+      const identity = {
         treeOid: reviewTree,
         fullTaskReviewHash: reviewHash,
         validationCwd: '.',
         configuredArgv: [['npm', 'run', 'build'], ['npm', 'test']],
-        adapter: { runner: 'vitest', version: 1 },
         commandFingerprint: 'c'.repeat(64),
         configurationFingerprint: 'd'.repeat(64),
         dependencyFingerprint: 'e'.repeat(64),
+        environmentFingerprint: '8'.repeat(64),
+        toolchainFingerprint: '9'.repeat(64),
+        profilePlan,
+      };
+      const attestation = {
+        version: 3 as const,
+        receiptId: canonicalValidationReceiptId(identity),
+        ...identity,
+        adapter: { runner: 'vitest' as const, version: 1 as const },
         startedAt: '2026-07-30T12:00:00.000Z',
         completedAt: '2026-07-30T12:00:05.000Z',
         durationMs: 5_000,
@@ -2574,6 +2584,7 @@ describe('orchestratedWorkApplier', () => {
             },
           },
         },
+        profileOutcomes,
       };
 
       mkdirSync(repoPath, { recursive: true });
@@ -2597,7 +2608,8 @@ describe('orchestratedWorkApplier', () => {
         ok: true,
         attestations: [attestation],
         receipts: [{
-          version: 1,
+          version: 3,
+          receiptId: attestation.receiptId,
           command: 'npm test',
           treeOid: reviewTree,
           fullTaskReviewHash: reviewHash,
@@ -2621,7 +2633,13 @@ describe('orchestratedWorkApplier', () => {
               suites: 3, tests: 7, passed: 4, failed: 0, skipped: 1, todo: 2, cancelled: 0,
             },
           }],
+          profilePlan,
+          profileOutcomes,
         },
+      });
+      mockCaptureFullSuiteValidationIdentity.mockResolvedValueOnce({
+        ok: true,
+        identity,
       });
       const runGit = vi.fn(async (gitArgs: string[]) => {
         if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
@@ -2695,7 +2713,7 @@ describe('orchestratedWorkApplier', () => {
               treeOid: reviewTree,
               validationReceipt: expect.objectContaining({
                 provenance: 'full-suite-reused',
-                command: 'npm test',
+                command: 'npm run build + npm test',
                 coverage: 'complete',
               }),
             }),
@@ -5592,6 +5610,14 @@ describe('buildOrchestrationDeps — production closures', () => {
   describe('runCloseoutChecks — full-task review-surface verification', () => {
     const canonicalDiff = 'diff --git a/src/feature.ts b/src/feature.ts\n+shipped\n';
     const currentTree = '2222222222222222222222222222222222222222';
+    const emptyCandidate = {
+      evidence: {
+        version: 1 as const,
+        durationMs: 0,
+        outcome: 'skipped' as const,
+        reuseDecision: 'pending' as const,
+      },
+    };
 
     function canonicalGitStub(): GitRunner {
       return vi.fn(async (gitArgs: string[]) => {
@@ -5631,6 +5657,7 @@ describe('buildOrchestrationDeps — production closures', () => {
             // An approval hash with no trees: unverifiable, so closeout must
             // refuse rather than fall through to the ok-path above it.
             evidence({ reviewSurfaceHash: canonicalReviewDiffHash(canonicalDiff) }),
+            emptyCandidate,
           );
         },
       });
@@ -5667,6 +5694,7 @@ describe('buildOrchestrationDeps — production closures', () => {
               // thing that catches this.
               currentReviewTree: '5555555555555555555555555555555555555555',
             }),
+            emptyCandidate,
           );
         },
       });
@@ -5711,11 +5739,12 @@ describe('buildOrchestrationDeps — production closures', () => {
               taskBaseTree: '1111111111111111111111111111111111111111',
               currentReviewTree: currentTree,
             }),
+            emptyCandidate,
           );
         },
       });
 
-      expect(checks).toEqual({ ok: true });
+      expect(checks).toMatchObject({ ok: true });
     });
 
     it('falls back to related validation when execution is green but canonical coverage evidence is missing', async () => {
@@ -5755,6 +5784,17 @@ describe('buildOrchestrationDeps — production closures', () => {
         resumed: false,
         runCanonicalGit: canonicalGitStub(),
         probe: async (deps) => {
+          const preCloseout = await deps.runPreCloseoutValidation(
+            requiredTask,
+            evidence({
+              reviewSurfaceHash: approvedHash,
+              fullTaskReviewHash: approvedHash,
+              taskBaseTree: '1111111111111111111111111111111111111111',
+              currentReviewTree: currentTree,
+            }),
+          );
+          expect(preCloseout.ok).toBe(true);
+          if (!preCloseout.ok) return;
           checks = await deps.runCloseoutChecks(
             requiredTask,
             evidence({
@@ -5763,6 +5803,7 @@ describe('buildOrchestrationDeps — production closures', () => {
               taskBaseTree: '1111111111111111111111111111111111111111',
               currentReviewTree: currentTree,
             }),
+            preCloseout.candidate,
           );
         },
       });

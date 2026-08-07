@@ -74,6 +74,10 @@ import {
   isGateValidationReceipt,
   type GateValidationReceipt,
 } from '../intent/full-suite-attestation.js';
+import {
+  parsePreCloseoutValidationEvidence,
+  type PreCloseoutValidationEvidence,
+} from '../intent/pre-closeout-validation.js';
 
 const log = createLogger('work-run-store');
 
@@ -186,6 +190,8 @@ export interface WorkRunSummary {
   adjudicationUpheldFail?: true;
   /** Bounded per-task related-test evidence for successful multi-task runs. */
   relatedTestDiagnostics?: RelatedTestTaskDiagnostic[];
+  /** Last task's bounded post-review validation result for Cockpit history. */
+  preCloseoutValidation?: PreCloseoutValidationEvidence;
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */
@@ -291,6 +297,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     (parsed as Record<string, unknown>)['adjudicationFailure'];
   const rawAdjudicationUpheldFail =
     (parsed as Record<string, unknown>)['adjudicationUpheldFail'];
+  const rawPreCloseoutValidation =
+    (parsed as Record<string, unknown>)['preCloseoutValidation'];
   const cancellation = rawCancellation === undefined
     ? undefined
     : parseWorkRunCancellation(rawCancellation);
@@ -341,6 +349,11 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const adjudicationUpheldFailValid =
     rawAdjudicationUpheldFail === undefined || rawAdjudicationUpheldFail === true;
   const adjudicationUpheldFail = rawAdjudicationUpheldFail === true ? true as const : undefined;
+  const preCloseoutValidation = parsePreCloseoutValidationEvidence(
+    rawPreCloseoutValidation,
+  );
+  const preCloseoutValidationValid =
+    rawPreCloseoutValidation === undefined || preCloseoutValidation !== undefined;
   // A run cannot be BOTH an operational adjudication hold and an adjudicated
   // upheld fail — they are the two mutually exclusive terminal adjudication
   // states, so a summary claiming both is corrupt.
@@ -356,7 +369,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     triggerValid && dispositionValid && contextFailureValid &&
     relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
     relatedTestProjectionConsistent && adjudicationFailureValid &&
-    adjudicationUpheldFailValid && adjudicationStateConsistent
+    adjudicationUpheldFailValid && adjudicationStateConsistent &&
+    preCloseoutValidationValid
   ) {
     const {
       gateValidationReceipt: _untrustedGateValidationReceipt,
@@ -372,6 +386,7 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
       ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
       ...(adjudicationUpheldFail !== undefined ? { adjudicationUpheldFail } : {}),
       ...(gateValidationReceipt !== undefined ? { gateValidationReceipt } : {}),
+      ...(preCloseoutValidation !== undefined ? { preCloseoutValidation } : {}),
     } as WorkRunSummary;
     if (
       contextFailure !== undefined &&

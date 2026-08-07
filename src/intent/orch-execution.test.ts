@@ -78,6 +78,13 @@ describe('orch-run-record — required fields', () => {
       modelChoices: { coder: 'claude', reviewer: 'codex' },
       commitSha: 'def5678',
       verdicts: { reviewer: 'pass', techLead: 'pass' },
+      preCloseoutValidation: {
+        version: 1,
+        receiptId: 'a'.repeat(64),
+        durationMs: 1_250,
+        outcome: 'passed',
+        reuseDecision: 'reused',
+      },
       contextOutcome: 'updated',
       gates: { objectionOpen: false },
       outcome: 'ready-for-closeout',
@@ -90,6 +97,13 @@ describe('orch-run-record — required fields', () => {
     expect(rec.modelChoices.reviewer).toBe('codex');
     expect(rec.commitSha).toBe('def5678');
     expect(rec.verdicts.reviewer).toBe('pass');
+    expect(rec.preCloseoutValidation).toEqual({
+      version: 1,
+      receiptId: 'a'.repeat(64),
+      durationMs: 1_250,
+      outcome: 'passed',
+      reuseDecision: 'reused',
+    });
     expect(rec.contextOutcome).toBe('updated');
     expect(rec.gates.objectionOpen).toBe(false);
     expect(rec.outcome).toBe('ready-for-closeout');
