@@ -16,6 +16,10 @@ import {
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
+import {
+  durableInvariantChecklistEvidence,
+  durableInvariantReviewFailure,
+} from '../intent/invariant-review.js';
 import { isGitObjectId } from '../intent/team-task-workflow.js';
 import { parseDurableValidationReceipt } from '../intent/full-suite-attestation.js';
 import { parsePreCloseoutValidationEvidence } from '../intent/pre-closeout-validation.js';
@@ -228,6 +232,8 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
   const preCloseoutValidation = parsePreCloseoutValidationEvidence(
     record.preCloseoutValidation,
   );
+  const invariantChecklist = durableInvariantChecklistEvidence(record.invariantChecklist);
+  const invariantReviewFailure = durableInvariantReviewFailure(record.invariantReviewFailure);
   return {
     taskId: record.taskId,
     ...(typeof record.taskText === 'string' ? { taskText: record.taskText } : {}),
@@ -241,6 +247,8 @@ function projectTaskRecord(record: TaskRunRecord): SafeRecord {
     ...(warnings ? { warnings } : {}),
     ...(coderSelfReviews ? { coderSelfReviews } : {}),
     ...(executionFailure !== undefined ? { executionFailure } : {}),
+    ...(invariantChecklist !== undefined ? { invariantChecklist } : {}),
+    ...(invariantReviewFailure !== undefined ? { invariantReviewFailure } : {}),
     ...(record.relatedTestDiagnostic
       ? { relatedTestDiagnostic: record.relatedTestDiagnostic }
       : {}),

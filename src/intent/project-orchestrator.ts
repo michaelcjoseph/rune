@@ -1221,6 +1221,12 @@ function taskRecordFromEvidence(
     ...(evidence.executionFailure !== undefined
       ? { executionFailure: evidence.executionFailure }
       : {}),
+    ...(evidence.invariantChecklist !== undefined
+      ? { invariantChecklist: evidence.invariantChecklist }
+      : {}),
+    ...(evidence.invariantReviewFailure !== undefined
+      ? { invariantReviewFailure: evidence.invariantReviewFailure }
+      : {}),
     ...(evidence.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: evidence.relatedTestDiagnostic }
       : {}),
@@ -1252,7 +1258,9 @@ function taskRecordFromEvidence(
 }
 
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
-  return evidence.executionFailure !== undefined || evidence.adjudicationFailure !== undefined;
+  return evidence.executionFailure !== undefined ||
+    evidence.adjudicationFailure !== undefined ||
+    evidence.invariantReviewFailure !== undefined;
 }
 
 /** Terminal routing for task evidence that did not reach ready-for-closeout:

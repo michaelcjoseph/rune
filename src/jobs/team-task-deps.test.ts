@@ -249,6 +249,23 @@ function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeam
       artifactFormats: [],
     }),
     judgmentCall: greenJudgment,
+    invariantReviewCall: async ({ repositoryRoot, workflowStage }) => {
+      await writeFile(
+        join(repositoryRoot, 'rune-invariant-test-evidence.txt'),
+        'assertContained\n',
+      );
+      return workflowStage === 'invariant-review-draft'
+        ? [
+            '```invariant-review-draft',
+            '{"items":[{"id":"D1","category":"ownership-and-containment","invariant":"Keep writes contained.","evidence":[{"path":"rune-invariant-test-evidence.txt","anchor":"assertContained"}]}]}',
+            '```',
+          ].join('\n')
+        : [
+            '```invariant-review',
+            '{"items":[{"id":"I1","category":"ownership-and-containment","invariant":"Keep writes contained.","evidence":[{"path":"rune-invariant-test-evidence.txt","anchor":"assertContained"}],"draftIds":["D1"]}],"contradictions":[]}',
+            '```',
+          ].join('\n');
+    },
     ...overrides,
     runExecution: async (opts) => {
       const result = await runExecution(opts);
@@ -401,6 +418,8 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()));
 
     const seamNames: Array<keyof TeamTaskDeps> = [
+      'techLeadDraftInvariants',
+      'securityRatifyInvariants',
       'qaWriteTests',
       'techLeadReviewTests',
       'techLeadRepairTests',
@@ -408,12 +427,129 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       'reviewer',
       'techLeadReviewDiff',
       'designer',
+      'security',
       'acceptWithRationale',
       'resolveReviewerProvider',
     ];
     for (const name of seamNames) {
       expect(typeof deps[name], `seam ${String(name)}`).toBe('function');
     }
+  });
+
+  it('checkpoints and runs the two repository-backed invariant inspections sequentially', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'rune-invariant-production-'));
+    try {
+      await writeFile(join(worktree, 'guard.ts'), 'export const assertContained = true;\n');
+      const calls: Array<{
+        role: string;
+        workflowStage: string;
+        repositoryRoot: string;
+        systemPrompt: string;
+        message: string;
+      }> = [];
+      const checkpoints: ExecutionCheckpoint[] = [];
+      const deps = buildProductionTeamTaskDeps({
+        sandbox: { ...makeSandbox(), worktree },
+        productsConfigPath: '/nonexistent/products.json',
+        models: resolveTeamRoleModels(loadRealPolicy()),
+        persistExecutionCheckpoint: async (checkpoint) => { checkpoints.push(checkpoint); },
+      }, makeSeams({
+        invariantReviewCall: async (input) => {
+          calls.push(input);
+          return input.workflowStage === 'invariant-review-draft'
+            ? [
+                '```invariant-review-draft',
+                '{"items":[{"id":"D1","category":"ownership-and-containment","invariant":"Keep writes contained.","evidence":[{"path":"guard.ts","anchor":"assertContained"}]}]}',
+                '```',
+              ].join('\n')
+            : [
+                '```invariant-review',
+                '{"items":[{"id":"I1","category":"ownership-and-containment","invariant":"Keep writes contained.","evidence":[{"path":"guard.ts","anchor":"assertContained"}],"draftIds":["D1"]}],"contradictions":[]}',
+                '```',
+              ].join('\n');
+        },
+      }));
+
+      const draft = await deps.techLeadDraftInvariants!({
+        task: sizedTask, spec: 'spec', context: 'context',
+      });
+      const checklist = await deps.securityRatifyInvariants!({
+        task: sizedTask, spec: 'spec', context: 'context', draft,
+      });
+
+      expect(calls.map(({ role, workflowStage }) => ({ role, workflowStage }))).toEqual([
+        { role: 'tech-lead', workflowStage: 'invariant-review-draft' },
+        { role: 'security', workflowStage: 'invariant-review-ratification' },
+      ]);
+      expect(calls.every((call) => call.repositoryRoot === worktree)).toBe(true);
+      expect(calls[0]?.systemPrompt).toMatch(/Read, Glob, and Grep only|bounded, read-only/i);
+      expect(calls[1]?.message).toContain('"id":"D1"');
+      expect(checkpoints.map((checkpoint) => checkpoint.workflowStage)).toEqual([
+        'invariant-review-draft',
+        'invariant-review-ratification',
+      ]);
+      expect(checklist.canonicalBlock).toContain(checklist.contentHash);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies invariant checkpoint failure without invoking the provider', async () => {
+    const provider = vi.fn();
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      invariantReviewCall: provider,
+    }));
+    const failing = buildProductionTeamTaskDeps({
+      sandbox: makeSandbox(),
+      productsConfigPath: '/nonexistent/products.json',
+      models: resolveTeamRoleModels(loadRealPolicy()),
+      persistExecutionCheckpoint: async () => { throw new Error('disk unavailable'); },
+    }, makeSeams({ invariantReviewCall: provider }));
+
+    await expect(failing.techLeadDraftInvariants!({
+      task: sizedTask, spec: 'spec', context: 'context',
+    })).rejects.toMatchObject({
+      failure: { stage: 'tech-lead-draft', cause: 'checkpoint' },
+    });
+    expect(provider).not.toHaveBeenCalled();
+    expect(deps.techLeadDraftInvariants).toBeTypeOf('function');
+  });
+
+  it('wraps an unexpected invariant-review provider error as a typed operational hold', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      invariantReviewCall: async () => { throw new Error('socket hang up'); },
+    }));
+
+    await expect(deps.techLeadDraftInvariants!({
+      task: sizedTask, spec: 'spec', context: 'context',
+    })).rejects.toMatchObject({
+      failure: {
+        stage: 'tech-lead-draft',
+        cause: 'provider',
+        diagnostic: expect.stringContaining('socket hang up'),
+      },
+    });
+  });
+
+  it('passes an invariant-review role cancellation through unwrapped instead of a provider hold', async () => {
+    const cancellation = {
+      operationId: '12345678-1234-1234-1234-123456789abc',
+      source: 'cockpit' as const,
+      requestedAt: '2026-07-13T12:34:56.000Z',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      invariantReviewCall: async () => {
+        throw new RoleCancellationError('tech-lead', cancellation);
+      },
+    }));
+
+    const rejection = deps.techLeadDraftInvariants!({
+      task: sizedTask, spec: 'spec', context: 'context',
+    });
+    await expect(rejection).rejects.toBeInstanceOf(RoleCancellationError);
+    await expect(rejection).rejects.toMatchObject({
+      cancellation: { role: 'tech-lead', ...cancellation },
+    });
   });
 
   // A repeat and a round-cap adjudication share ONE model. `escalate` no longer

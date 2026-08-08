@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
+import { buildInvariantChecklistEvidence } from '../intent/invariant-review.js';
 
 type AttestedTaskRunRecord = Omit<TaskRunRecord, 'fullSuiteAttestation' | 'validationReceipt'> & {
   fullSuiteAttestation?: Record<string, unknown>;
@@ -327,6 +328,32 @@ describe('orchestrated run store', () => {
     await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-orch-legacy', legacy);
 
     await expect(readRecords(tmpDir, 'mut-orch-legacy')).resolves.toEqual([legacy]);
+  });
+
+  it('round-trips invariant checklist evidence and typed failure metadata while legacy records stay readable', async () => {
+    const invariantChecklist = buildInvariantChecklistEvidence([{
+      id: 'I1',
+      category: 'ownership-and-containment',
+      invariant: 'Keep writes inside the validated repository root.',
+      evidence: [{ path: 'src/guard.ts', anchor: 'assertContained' }],
+      draftIds: ['D1'],
+    }]);
+    const record = readyRecord({
+      invariantChecklist,
+      invariantReviewFailure: {
+        stage: 'security-ratification',
+        cause: 'contradiction',
+        diagnostic: 'conflicting ownership rules',
+        conflictingDraftIds: ['D1', 'D2'],
+      },
+    });
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-invariants', record);
+    await expect(readRecords(tmpDir, 'mut-invariants')).resolves.toEqual([record]);
+
+    const legacy = readyRecord();
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-invariant-legacy', legacy);
+    await expect(readRecords(tmpDir, 'mut-invariant-legacy')).resolves.toEqual([legacy]);
   });
 
   it('round-trips a bounded full-suite attestation and compact receipt across restart', async () => {

@@ -138,6 +138,12 @@ import {
   validateTaskValidationAdmission,
 } from './task-validation.js';
 import type { TaskValidationFailure } from '../intent/task-validation.js';
+import {
+  InvariantReviewFailureError,
+  parseInvariantReview,
+  parseInvariantReviewDraft,
+  type InvariantReviewDraft,
+} from '../intent/invariant-review.js';
 
 export type {
   ExecutionPreflightFailure,
@@ -318,11 +324,25 @@ export interface JudgmentModelCall {
   }): Promise<string>;
 }
 
+export interface InvariantReviewModelCall {
+  (input: {
+    role: 'tech-lead' | 'security';
+    model: RoleModelBinding;
+    product: string;
+    repositoryRoot: string;
+    systemPrompt: string;
+    message: string;
+    taskId: string;
+    workflowStage: 'invariant-review-draft' | 'invariant-review-ratification';
+  }): Promise<string>;
+}
+
 export interface TeamTaskSeams {
   /** Run-scoped prerequisite gate, invoked after policy resolution and before
    * dependency construction or any role workflow call. */
   preflightExecution: (args: PreflightExecutionArgs) => Promise<ExecutionPreflightResult>;
   judgmentCall: JudgmentModelCall;
+  invariantReviewCall: InvariantReviewModelCall;
   runExecution: (
     opts: ExecutionAgentOpts,
     io?: Partial<ExecutionAgentIO>,
@@ -429,9 +449,62 @@ export const defaultJudgmentCall: JudgmentModelCall = async (input) => {
   }
 };
 
+const EMPTY_CLAUDE_MCP_ARGS = [
+  '--strict-mcp-config',
+  '--mcp-config',
+  JSON.stringify({ mcpServers: {} }),
+];
+
+/** Repository-backed invariant inspection is intentionally narrower than an
+ * ordinary judgment call: current role bindings must use Claude's discrete
+ * Read/Glob/Grep tools, with Bash, writes, network tools, and MCP absent. */
+export const defaultInvariantReviewCall: InvariantReviewModelCall = async (input) => {
+  if (input.model.format !== 'claude') {
+    throw new InvariantReviewFailureError({
+      stage: input.role === 'tech-lead' ? 'tech-lead-draft' : 'security-ratification',
+      cause: 'provider',
+      diagnostic: 'configured invariant-review model lacks a read/search-only executor',
+    });
+  }
+  const sessionId = randomUUID();
+  try {
+    const result = await askClaudeWithContext(
+      input.message,
+      sessionId,
+      input.systemPrompt,
+      {
+        model: input.model.alias,
+        availableTools: ['Read', 'Glob', 'Grep'],
+        opLabel: `team:${input.role}:invariants`,
+        opKind: 'agent',
+        agentName: input.role,
+        product: input.product,
+        cwd: input.repositoryRoot,
+        writableRoots: [input.repositoryRoot],
+        envMode: 'product-chat',
+        mcpArgs: EMPTY_CLAUDE_MCP_ARGS,
+      },
+    );
+    if (result.cancellation !== undefined) {
+      throw new RoleCancellationError(input.role, result.cancellation);
+    }
+    if (result.error) {
+      throw new InvariantReviewFailureError({
+        stage: input.role === 'tech-lead' ? 'tech-lead-draft' : 'security-ratification',
+        cause: 'provider',
+        diagnostic: `invariant-review provider failed: ${result.error}`,
+      });
+    }
+    return result.text ?? '';
+  } finally {
+    cleanupSession(sessionId);
+  }
+};
+
 const defaultSeams: TeamTaskSeams = {
   preflightExecution,
   judgmentCall: defaultJudgmentCall,
+  invariantReviewCall: defaultInvariantReviewCall,
   runExecution: runExecutionAgent,
   runGit: defaultRunGit,
   runCanonicalGit: defaultRunCanonicalGit,
@@ -463,6 +536,39 @@ const OBJECTION_SEVERITY_RANK: Record<ObjectionSeverity, number> = {
   high: 2,
   critical: 3,
 };
+
+const INVARIANT_DRAFT_INSTRUCTION = [
+  'You are the tech lead performing a bounded, read-only pre-coder invariant review.',
+  'Inspect the repository with Read, Glob, and Grep only. Do not use Bash, edit or',
+  'write files, access the network, or call MCP tools.',
+  'Draft repository-backed invariants in these exact categories:',
+  'ownership-and-containment; lifecycle-and-idempotency; identity-cache-and-cleanup;',
+  'required-negative-tests; nearby-reusable-abstractions.',
+  'Return at most 20 items total and 4 per category. Each invariant is at most 400',
+  'characters and has one or two evidence references. A reference is a contained',
+  'repo-relative regular-file path plus an exact text anchor present in that file.',
+  'Use stable unique draft IDs. Do not include secrets or absolute host paths.',
+  'Respond with exactly one fenced ```invariant-review-draft JSON block and nothing after it:',
+  '```invariant-review-draft',
+  '{"items":[{"id":"D1","category":"ownership-and-containment","invariant":"<bounded rule>","evidence":[{"path":"src/file.ts","anchor":"exact symbol or text"}]}]}',
+  '```',
+].join('\n');
+
+const INVARIANT_RATIFICATION_INSTRUCTION = [
+  'You are the security role independently ratifying a tech-lead invariant draft.',
+  'Inspect the same repository with Read, Glob, and Grep only. Do not use Bash, edit',
+  'or write files, access the network, or call MCP tools.',
+  'Account for every draft ID in final item draftIds. You may merge, correct, or',
+  'remove a draft claim only through an evidence-backed final item. If draft claims',
+  'contradict, do not choose silently: return contradictions naming the conflicting',
+  'draft IDs; Rune will stop the task. Apply the same five categories and limits:',
+  '20 total, 4 per category, 400 characters per invariant, 1-2 contained evidence',
+  'references with exact anchors. Do not include secrets or absolute host paths.',
+  'Respond with exactly one fenced ```invariant-review JSON block and nothing after it:',
+  '```invariant-review',
+  '{"items":[{"id":"I1","category":"ownership-and-containment","invariant":"<ratified rule>","evidence":[{"path":"src/file.ts","anchor":"exact symbol or text"}],"draftIds":["D1"]}],"contradictions":[]}',
+  '```',
+].join('\n');
 
 const REVIEWER_INSTRUCTION = [
   'You are the independent code reviewer for one task. Review the diff against the',
@@ -1724,17 +1830,100 @@ export function buildProductionTeamTaskDeps(
     return result;
   };
 
+  const inspectInvariants = async (
+    role: 'tech-lead' | 'security',
+    binding: RoleModelBinding,
+    task: SizedTask,
+    workflowStage: 'invariant-review-draft' | 'invariant-review-ratification',
+    instruction: string,
+    body: string,
+  ): Promise<string> => {
+    const checkpoint = executionCheckpoint(task.id, role, binding, workflowStage);
+    try {
+      await args.persistExecutionCheckpoint?.(checkpoint);
+    } catch (err) {
+      throw new InvariantReviewFailureError({
+        stage: role === 'tech-lead' ? 'tech-lead-draft' : 'security-ratification',
+        cause: 'checkpoint',
+        diagnostic: `invariant-review checkpoint failed: ${(err as Error).message}`,
+      });
+    }
+    const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
+    try {
+      return await seams.invariantReviewCall({
+        role,
+        model: binding,
+        product: sandbox.product,
+        repositoryRoot: sandbox.worktree,
+        systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
+        message: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
+        taskId: task.id,
+        workflowStage,
+      });
+    } catch (err) {
+      if (err instanceof RoleCancellationError || err instanceof InvariantReviewFailureError) {
+        throw err;
+      }
+      throw new InvariantReviewFailureError({
+        stage: role === 'tech-lead' ? 'tech-lead-draft' : 'security-ratification',
+        cause: 'provider',
+        diagnostic: `invariant-review provider failed: ${(err as Error).message}`,
+      });
+    }
+  };
+
   return {
+    techLeadDraftInvariants: async ({ task, spec, context }) => {
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Spec\n\n${spec}`,
+        '',
+        `## Project context\n\n${scrubPathsInText(context)}`,
+      ].join('\n');
+      const reply = await inspectInvariants(
+        'tech-lead',
+        models.techLead,
+        task,
+        'invariant-review-draft',
+        INVARIANT_DRAFT_INSTRUCTION,
+        body,
+      );
+      return parseInvariantReviewDraft(reply, sandbox.worktree);
+    },
+
+    securityRatifyInvariants: async ({ task, spec, context, draft }) => {
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Spec\n\n${spec}`,
+        '',
+        `## Project context\n\n${scrubPathsInText(context)}`,
+        '',
+        `## Tech-lead draft\n\n${JSON.stringify(draft)}`,
+      ].join('\n');
+      const reply = await inspectInvariants(
+        'security',
+        models.security,
+        task,
+        'invariant-review-ratification',
+        INVARIANT_RATIFICATION_INSTRUCTION,
+        body,
+      );
+      return parseInvariantReview(reply, sandbox.worktree, draft);
+    },
+
     // NOTE: artifact seams (qaWriteTests, coder) THROW on executor failure —
     // runTeamTaskWorkflow's outer catch turns the throw into structured
     // `failed` evidence with failureReason. That is the error-flow contract.
-    qaWriteTests: async ({ task, spec, rejectionFeedback }) => {
+    qaWriteTests: async ({ task, spec, rejectionFeedback, invariantChecklistBlock }) => {
       lastRepairRedCheck = undefined;
       const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
       const body = [
         `## Task\n\n${task.text}`,
         '',
         `## Spec\n\n${spec}`,
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
       ].join('\n');
       const result = await execute('qa', models.qa, task.id, 'qa-tests', QA_EXEC_INSTRUCTION, body);
@@ -1751,7 +1940,7 @@ export function buildProductionTeamTaskDeps(
       return { kind: 'tests-written', testIds: filesFromDiff(result.diff) } satisfies QaResult;
     },
 
-    techLeadReviewTests: async ({ task, qa }) => {
+    techLeadReviewTests: async ({ task, qa, invariantChecklistBlock }) => {
       const redCheckSection = lastRepairRedCheck === undefined
         ? undefined
         : lastRepairRedCheck.kind === 'red'
@@ -1767,6 +1956,7 @@ export function buildProductionTeamTaskDeps(
         qa.kind === 'tests-written'
           ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
           : `## QA no-code-test rationale\n\n${qa.rationale}`,
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(redCheckSection !== undefined ? ['', redCheckSection] : []),
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body, task.id, 'tech-lead-test-review');
@@ -1972,7 +2162,7 @@ export function buildProductionTeamTaskDeps(
       }
     },
 
-    coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger }) => {
+    coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger, invariantChecklistBlock }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -1986,6 +2176,7 @@ export function buildProductionTeamTaskDeps(
         `## Project context\n\n${scrubPathsInText(context)}`,
         '',
         `## QA tests\n\n${testsBlock}`,
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(validationCommands.length > 0
           ? [
               '',
@@ -2019,6 +2210,7 @@ export function buildProductionTeamTaskDeps(
       qa,
       rejectionFeedback,
       findingsLedger,
+      invariantChecklistBlock,
     }) => {
       const cwd = sandbox.worktree;
       try {
@@ -2039,6 +2231,7 @@ export function buildProductionTeamTaskDeps(
           `## QA intent\n\n${qaIntent}`,
           '',
           `## QA tests or rationale\n\n${testsBlock}`,
+          ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
           ...(validationCommands.length > 0
             ? [
                 '',
@@ -2357,6 +2550,7 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      invariantChecklistBlock,
     }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2377,6 +2571,7 @@ export function buildProductionTeamTaskDeps(
         `## Tests\n\n${testsBlock}`,
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
@@ -2406,6 +2601,7 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
@@ -2415,6 +2611,7 @@ export function buildProductionTeamTaskDeps(
         formatFullTaskReviewArtifact(diff, reviewState, judgmentContext?.artifactPass),
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
@@ -2445,6 +2642,7 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
@@ -2458,6 +2656,7 @@ export function buildProductionTeamTaskDeps(
         ...(context !== undefined
           ? ['', `## Project context\n\n${scrubPathsInText(context)}`]
           : []),
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
@@ -2488,6 +2687,7 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
@@ -2501,6 +2701,7 @@ export function buildProductionTeamTaskDeps(
         ...(context !== undefined
           ? ['', `## Project context\n\n${scrubPathsInText(context)}`]
           : []),
+        ...(invariantChecklistBlock !== undefined ? ['', invariantChecklistBlock] : []),
         ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');

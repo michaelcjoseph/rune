@@ -44,11 +44,17 @@ import {
   scrubAbsolutePaths,
   scrubGenericAbsolutePaths,
 } from '../utils/sanitize-paths.js';
+import {
+  durableInvariantChecklistEvidence,
+  durableInvariantReviewFailure,
+  type InvariantChecklistEvidence,
+  type InvariantReviewFailure,
+} from './invariant-review.js';
 
 /** One durable outcome per role the post-coder judgment batch can dispatch:
- *  reviewer, tech lead, and designer when the task is sized for it. QA is not a
- *  member — it authors tests and stops when the coder starts. */
-export const JUDGMENT_OUTCOMES_MAX = 3;
+ *  reviewer, tech lead, and conditional designer/security. QA is not a member
+ *  — it authors tests and stops when the coder starts. */
+export const JUDGMENT_OUTCOMES_MAX = 4;
 
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
@@ -87,6 +93,10 @@ export interface TaskRunRecord {
   coderSelfReviews?: CoderSelfReviewRecord[];
   /** Typed executor failure. Optional for successful and historical records. */
   executionFailure?: ExecutionFailure;
+  /** Accepted pre-coder security invariant checklist. */
+  invariantChecklist?: InvariantChecklistEvidence;
+  /** Typed pre-coder operational hold. */
+  invariantReviewFailure?: InvariantReviewFailure;
   /** Related-test fallback evidence. Optional for historical JSONL. */
   relatedTestDiagnostic?: RelatedTestDiagnostic;
   /** Rune-owned canonical suite evidence. Optional for legacy records. */
@@ -122,6 +132,8 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
   const preCloseoutValidation = parsePreCloseoutValidationEvidence(
     input.preCloseoutValidation,
   );
+  const invariantChecklist = durableInvariantChecklistEvidence(input.invariantChecklist);
+  const invariantReviewFailure = durableInvariantReviewFailure(input.invariantReviewFailure);
   return {
     taskId: input.taskId,
     taskText: input.taskText,
@@ -180,6 +192,8 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
     ...(input.executionFailure !== undefined
       ? { executionFailure: durableExecutionFailure(input.executionFailure) }
       : {}),
+    ...(invariantChecklist !== undefined ? { invariantChecklist } : {}),
+    ...(invariantReviewFailure !== undefined ? { invariantReviewFailure } : {}),
     ...(input.relatedTestDiagnostic !== undefined
       ? { relatedTestDiagnostic: structuredClone(input.relatedTestDiagnostic) }
       : {}),

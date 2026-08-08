@@ -288,6 +288,21 @@ describe('ai/claude', () => {
       );
     });
 
+    it('can replace the built-in tool inventory under skip-permissions mode', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaudeWithContext('inspect', 'ctx-tools-sess', 'sys', {
+        availableTools: ['Read', 'Glob', 'Grep'],
+      });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const toolsIdx = args.indexOf('--tools');
+      expect(args[toolsIdx + 1]).toBe('Read,Glob,Grep');
+      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('Bash');
+      expect(args).not.toContain('Edit');
+      expect(args).not.toContain('Write');
+    });
+
     it('does not mark session as created on error', async () => {
       spawnMock.mockReturnValue(createChild({ stderr: 'fail', code: 1 }));
       await askClaude('msg', 'fail-sess');

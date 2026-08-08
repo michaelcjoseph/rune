@@ -40,6 +40,7 @@ import {
   type TechLeadTestRepairResult,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
+import { buildInvariantChecklistEvidence } from './invariant-review.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -77,9 +78,24 @@ const securityTask: SizedTask = {
 };
 
 const cleanVerdict: ReviewerVerdict = { pass: true, objections: [] };
+const invariantDraft = {
+  items: [{
+    id: 'D1' as const,
+    category: 'ownership-and-containment' as const,
+    invariant: 'Keep writes inside the validated root.',
+    evidence: [{ path: 'src/example.ts', anchor: 'assertContained' }],
+  }],
+};
+const invariantChecklist = buildInvariantChecklistEvidence([{
+  ...invariantDraft.items[0]!,
+  id: 'I1',
+  draftIds: ['D1'],
+}]);
 
 function makeDeps(over: Partial<TeamTaskDeps> = {}): TeamTaskDeps {
   return {
+    techLeadDraftInvariants: async () => invariantDraft,
+    securityRatifyInvariants: async () => invariantChecklist,
     qaWriteTests: async () => ({ kind: 'tests-written', testIds: ['t1'] }),
     techLeadReviewTests: async () => ({ approved: true }),
     coder: async () => ({ diff: 'diff --git a/x b/x', handoffNotes: ['wired the core'] }),
@@ -4801,6 +4817,258 @@ describe('team-task-workflow — security routing', () => {
     expect(evidence.loopExitReason).toBe('hard-budget');
     expect(evidence.loopExitReason).not.toBe('stagnation');
     expect(securityCalls).toBe(4);
+  });
+});
+
+describe('team-task-workflow — pre-coder invariant review', () => {
+  it('orders tech-lead draft, security ratification, QA, coder, and independent post-coder security', async () => {
+    const order: string[] = [];
+    const deps = makeDeps({
+      techLeadDraftInvariants: async () => {
+        order.push('tech-lead-draft');
+        return invariantDraft;
+      },
+      securityRatifyInvariants: async () => {
+        order.push('security-ratification');
+        return invariantChecklist;
+      },
+      qaWriteTests: async () => {
+        order.push('qa');
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      coder: async () => {
+        order.push('coder');
+        return { diff: 'diff --git a/x b/x', handoffNotes: [] };
+      },
+      security: async () => {
+        order.push('post-coder-security');
+        return { pass: true };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(order).toEqual([
+      'tech-lead-draft',
+      'security-ratification',
+      'qa',
+      'coder',
+      'post-coder-security',
+    ]);
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(evidence.invariantChecklist).toEqual(invariantChecklist);
+    expect(evidence.gateVerdicts?.security?.outcome).toBe('pass');
+  });
+
+  it('keeps the ordinary-task fast path unchanged', async () => {
+    const calls: string[] = [];
+    const deps = makeDeps({
+      techLeadDraftInvariants: async () => {
+        calls.push('draft');
+        return invariantDraft;
+      },
+      securityRatifyInvariants: async () => {
+        calls.push('ratify');
+        return invariantChecklist;
+      },
+      qaWriteTests: async () => {
+        calls.push('qa');
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      coder: async () => {
+        calls.push('coder');
+        return { diff: 'diff --git a/x b/x', handoffNotes: [] };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+    expect(calls).toEqual(['qa', 'coder']);
+    expect(evidence.invariantChecklist).toBeUndefined();
+  });
+
+  it('passes byte-identical canonical checklist blocks to every downstream role', async () => {
+    const observed: string[] = [];
+    const capture = (value: string | undefined) => {
+      expect(value).toBeDefined();
+      observed.push(value!);
+    };
+    const task = { ...securityTask, designerNeeded: true };
+    const deps = makeDeps({
+      qaWriteTests: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+      techLeadReviewTests: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { approved: true };
+      },
+      coder: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { diff: 'diff --git a/x b/x', handoffNotes: [] };
+      },
+      coderSelfReview: async ({ artifact, invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return {
+          outcome: 'confirmed', notes: 'ok',
+          reviewState: {
+            diff: artifact.diff, hash: 'canonical-hash',
+            baseTree: '1111111111111111111111111111111111111111',
+            currentTree: '2222222222222222222222222222222222222222',
+            changedPaths: ['x'],
+          },
+        };
+      },
+      reviewer: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return cleanVerdict;
+      },
+      techLeadReviewDiff: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { pass: true };
+      },
+      designer: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { pass: true };
+      },
+      security: async ({ invariantChecklistBlock }) => {
+        capture(invariantChecklistBlock);
+        return { pass: true };
+      },
+    });
+
+    await runTeamTaskWorkflow(task, { ...INPUT, cap: 1 }, deps);
+
+    expect(observed).toHaveLength(8);
+    expect(observed.every((block) => block === invariantChecklist.canonicalBlock)).toBe(true);
+  });
+
+  it.each([
+    ['tech-lead-draft', 'provider'],
+    ['security-ratification', 'provider'],
+    ['security-ratification', 'checkpoint'],
+    ['security-ratification', 'missing-artifact'],
+    ['security-ratification', 'malformed-artifact'],
+    ['security-ratification', 'invalid-evidence'],
+    ['security-ratification', 'contradiction'],
+  ] as const)('turns %s/%s contract failures into clean operational holds', async (stage, cause) => {
+    let qaCalled = false;
+    const failure = new teamTaskWorkflow.InvariantReviewFailureError({
+      stage,
+      cause,
+      diagnostic: 'bounded failure metadata',
+      ...(cause === 'contradiction' ? { conflictingDraftIds: ['D1', 'D2'] } : {}),
+    });
+    const deps = makeDeps({
+      techLeadDraftInvariants: async () => {
+        if (stage === 'tech-lead-draft') throw failure;
+        return invariantDraft;
+      },
+      securityRatifyInvariants: async () => {
+        throw failure;
+      },
+      qaWriteTests: async () => {
+        qaCalled = true;
+        return { kind: 'tests-written', testIds: ['t1'] };
+      },
+    });
+
+    const evidence = await runTeamTaskWorkflow(securityTask, INPUT, deps);
+
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'operational',
+      objectionOpen: false,
+      invariantReviewFailure: { stage, cause },
+    });
+    expect(evidence.findingsLedger).toEqual([]);
+    expect(evidence.rejectionFeedback).toBeUndefined();
+    expect(qaCalled).toBe(false);
+  });
+
+  it.each(['tech-lead', 'security'] as const)(
+    'keeps %s pre-coder cancellation on the existing typed cancellation path',
+    async (role) => {
+      const cancel = () => {
+        throw new RoleCancellationError(role, CANCELLATION);
+      };
+      const evidence = await runTeamTaskWorkflow(securityTask, INPUT, makeDeps({
+        ...(role === 'tech-lead' ? { techLeadDraftInvariants: cancel } : {}),
+        ...(role === 'security' ? { securityRatifyInvariants: cancel } : {}),
+      }));
+      expect(evidence).toMatchObject({
+        outcome: 'cancelled',
+        cancellation: { role, ...CANCELLATION },
+      });
+      expect(evidence.invariantReviewFailure).toBeUndefined();
+    },
+  );
+
+  it('allows a fresh task attempt to retry successfully after an operational review hold', async () => {
+    let ratifications = 0;
+    const deps = makeDeps({
+      securityRatifyInvariants: async () => {
+        ratifications += 1;
+        if (ratifications === 1) {
+          throw new teamTaskWorkflow.InvariantReviewFailureError({
+            stage: 'security-ratification',
+            cause: 'provider',
+            diagnostic: 'temporary provider outage',
+          });
+        }
+        return invariantChecklist;
+      },
+      security: async () => ({ pass: true }),
+    });
+
+    const first = await runTeamTaskWorkflow(securityTask, INPUT, deps);
+    const second = await runTeamTaskWorkflow(securityTask, INPUT, deps);
+
+    expect(first).toMatchObject({ outcome: 'blocked', invariantReviewFailure: { cause: 'provider' } });
+    expect(second).toMatchObject({ outcome: 'ready-for-closeout', invariantChecklist });
+  });
+
+  it('emits bounded hash/count activity without checklist or raw model output', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    await runTeamTaskWorkflow(securityTask, {
+      ...INPUT,
+      cap: 1,
+      emit: (event) => events.push(event),
+    }, makeDeps({ security: async () => ({ pass: true }) }));
+    const event = events.find((item) => item.data?.['event'] === 'pre-coder-invariant');
+    expect(event?.data).toMatchObject({
+      stage: 'accepted',
+      contentHash: invariantChecklist.contentHash,
+      itemCount: 1,
+    });
+    expect(JSON.stringify(event)).not.toContain(invariantChecklist.items[0]!.invariant);
+    expect(JSON.stringify(event)).not.toContain('canonicalBlock');
+  });
+
+  it('fails as a provider-cause operational hold when tech-lead invariant-review deps are not wired', async () => {
+    const evidence = await runTeamTaskWorkflow(securityTask, INPUT, makeDeps({
+      techLeadDraftInvariants: undefined,
+      securityRatifyInvariants: undefined,
+    }));
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'operational',
+      invariantReviewFailure: { stage: 'tech-lead-draft', cause: 'provider' },
+    });
+    expect(evidence.rolesInvoked).not.toContain('tech-lead');
+    expect(evidence.rolesInvoked).not.toContain('security');
+  });
+
+  it('fails as a provider-cause operational hold when security-ratification deps are not wired', async () => {
+    const evidence = await runTeamTaskWorkflow(securityTask, INPUT, makeDeps({
+      securityRatifyInvariants: undefined,
+    }));
+    expect(evidence).toMatchObject({
+      outcome: 'blocked',
+      loopExitReason: 'operational',
+      invariantReviewFailure: { stage: 'security-ratification', cause: 'provider' },
+    });
+    expect(evidence.rolesInvoked).toContain('tech-lead');
+    expect(evidence.rolesInvoked).not.toContain('security');
   });
 });
 

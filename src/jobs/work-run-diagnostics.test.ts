@@ -9,6 +9,7 @@ import {
 import type { WorkRunSummary, WorkRunSummaryReadResult } from './work-run-store.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
+import { buildInvariantChecklistEvidence } from '../intent/invariant-review.js';
 
 const assaySummary: WorkRunSummary = {
   id: 'assay-run-1',
@@ -224,6 +225,35 @@ describe('product-scoped work-run diagnostics', () => {
     expect(serialized).not.toContain('transcriptPath');
     expect(serialized).not.toContain('forensicsPath');
     expect(serialized).not.toContain('operatorWorktreePath');
+  });
+
+  it('projects canonical invariant checklist evidence and typed failure metadata', async () => {
+    const deps = makeDeps();
+    const checklist = buildInvariantChecklistEvidence([{
+      id: 'I1', category: 'required-negative-tests',
+      invariant: 'Reject traversal before any mutation.',
+      evidence: [{ path: 'src/guard.ts', anchor: 'assertContained' }],
+      draftIds: ['D1'],
+    }]);
+    deps.readTaskRunRecords.mockReturnValue([taskRecord({
+      invariantChecklist: checklist,
+      invariantReviewFailure: {
+        stage: 'security-ratification',
+        cause: 'invalid-evidence',
+        diagnostic: 'missing anchor',
+      },
+    })]);
+
+    const result = createWorkRunDiagnostics(deps, 'assay').inspectRun({
+      runId: 'assay-run-1',
+    }) as { taskRecords: Array<Record<string, unknown>> };
+
+    expect(result.taskRecords[0]).toMatchObject({
+      invariantChecklist: checklist,
+      invariantReviewFailure: {
+        stage: 'security-ratification', cause: 'invalid-evidence', diagnostic: 'missing anchor',
+      },
+    });
   });
 
   it('projects well-formed full-task base/current-tree/hash evidence and drops malformed values', async () => {

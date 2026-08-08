@@ -23,6 +23,7 @@ import {
 } from './finalizer-handoff.js';
 import { resolveDispatchMode } from './orch-config.js';
 import { seedProjectContext } from './project-context.js';
+import { buildInvariantChecklistEvidence } from './invariant-review.js';
 
 const CONTEXT_MD = seedProjectContext({
   product: 'aura',
@@ -161,13 +162,14 @@ describe('orch-run-record — required fields', () => {
       },
       { role: 'tech-lead' as const, status: 'cancelled' as const },
       { role: 'designer' as const, status: 'reject' as const },
+      { role: 'security' as const, status: 'reject' as const },
       { role: 'reviewer' as const, status: 'reject' as const },
     ];
     const rec = buildTaskRunRecord({
       taskId: 'judgment-evidence',
       taskText: 'Persist judgment evidence',
       attemptId: 'a-judgment',
-      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer'],
+      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer', 'security'],
       transcriptIds: [],
       modelChoices: {},
       commitSha: null,
@@ -178,9 +180,9 @@ describe('orch-run-record — required fields', () => {
       outcome: 'failed',
     });
 
-    // Bounded to one per dispatchable judgment role — reviewer, tech lead, and
-    // designer. The fourth entry is dropped.
-    expect(rec.judgmentOutcomes).toHaveLength(3);
+    // Bounded to one per dispatchable judgment role — reviewer, tech lead,
+    // designer, and security. The fifth entry is dropped.
+    expect(rec.judgmentOutcomes).toHaveLength(4);
     expect(rec.judgmentOutcomes?.[0]?.summary).toHaveLength(500);
     expect(rec.judgmentOutcomes).not.toBe(judgmentOutcomes);
     expect(rec.judgmentOutcomes?.[0]).not.toBe(judgmentOutcomes[0]);
@@ -569,6 +571,78 @@ describe('orch-run-record — required fields', () => {
 
     expect(rec.relatedTestDiagnostic).toBeUndefined();
     expect('relatedTestDiagnostic' in rec).toBe(false);
+  });
+
+  it('persists a well-formed pre-coder invariant checklist and typed review-failure metadata', () => {
+    const invariantChecklist = buildInvariantChecklistEvidence([{
+      id: 'I1',
+      category: 'ownership-and-containment',
+      invariant: 'Keep writes inside the validated repository root.',
+      evidence: [{ path: 'src/guard.ts', anchor: 'assertContained' }],
+      draftIds: ['D1'],
+    }]);
+    const invariantReviewFailure = {
+      stage: 'security-ratification' as const,
+      cause: 'contradiction' as const,
+      diagnostic: 'conflicting ownership rules',
+      conflictingDraftIds: ['D1', 'D2'],
+    };
+
+    const rec = buildTaskRunRecord({
+      taskId: 't9',
+      taskText: 'Persist invariant checklist evidence',
+      attemptId: 'a9',
+      rolesInvoked: ['tech-lead', 'security'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      invariantChecklist,
+      invariantReviewFailure,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'blocked',
+    });
+
+    expect(rec.invariantChecklist).toEqual(invariantChecklist);
+    expect(rec.invariantReviewFailure).toEqual(invariantReviewFailure);
+  });
+
+  it('drops a tampered invariant checklist and a malformed invariant review failure instead of persisting them raw', () => {
+    const invariantChecklist = buildInvariantChecklistEvidence([{
+      id: 'I1',
+      category: 'ownership-and-containment',
+      invariant: 'Keep writes inside the validated repository root.',
+      evidence: [{ path: 'src/guard.ts', anchor: 'assertContained' }],
+      draftIds: ['D1'],
+    }]);
+    const tamperedChecklist = { ...invariantChecklist, contentHash: '0'.repeat(64) };
+
+    const rec = buildTaskRunRecord({
+      taskId: 't10',
+      taskText: 'Drop tampered invariant evidence',
+      attemptId: 'a10',
+      rolesInvoked: ['tech-lead', 'security'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      invariantChecklist: tamperedChecklist,
+      invariantReviewFailure: {
+        stage: 'security-ratification',
+        cause: 'contradiction',
+        diagnostic: 'only one conflicting draft ID named',
+        conflictingDraftIds: ['D1'],
+      } as never,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'blocked',
+    });
+
+    expect(rec.invariantChecklist).toBeUndefined();
+    expect('invariantChecklist' in rec).toBe(false);
+    expect(rec.invariantReviewFailure).toBeUndefined();
+    expect('invariantReviewFailure' in rec).toBe(false);
   });
 });
 

@@ -53,6 +53,17 @@ import {
   scrubGenericAbsolutePaths,
 } from '../utils/sanitize-paths.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
+import {
+  InvariantReviewFailureError,
+  type InvariantChecklistEvidence,
+  type InvariantReviewDraft,
+  type InvariantReviewFailure,
+} from './invariant-review.js';
+export {
+  InvariantReviewFailureError,
+  type InvariantChecklistEvidence,
+  type InvariantReviewFailure,
+} from './invariant-review.js';
 
 export interface RoleCancellation extends OperationCancellation {
   role: RoleName;
@@ -451,6 +462,7 @@ export interface ReviewerInput {
   coderHandoffNotes?: string[];
   judgmentContext?: JudgmentContext;
   judgmentBatchId?: string;
+  invariantChecklistBlock?: string;
 }
 
 /** The roles that judge the coder's diff. QA is deliberately absent: QA authors
@@ -493,14 +505,29 @@ export type WorkflowActivityEvent = {
 /** The injected role seams. Tests pass fixtures; production wraps real role
  *  invocations (charter loader + model-policy dispatch). */
 export interface TeamTaskDeps {
+  /** Read-only repository inspection used only for security-sized tasks. */
+  techLeadDraftInvariants?: (input: {
+    task: SizedTask;
+    spec: string;
+    context: string;
+  }) => Promise<InvariantReviewDraft>;
+  /** Independent read-only ratification into the one authoritative checklist. */
+  securityRatifyInvariants?: (input: {
+    task: SizedTask;
+    spec: string;
+    context: string;
+    draft: InvariantReviewDraft;
+  }) => Promise<InvariantChecklistEvidence>;
   qaWriteTests: (input: {
     task: SizedTask;
     spec: string;
     rejectionFeedback?: GateRejectionFeedback;
+    invariantChecklistBlock?: string;
   }) => Promise<QaResult>;
   techLeadReviewTests: (input: {
     task: SizedTask;
     qa: QaResult;
+    invariantChecklistBlock?: string;
   }) => Promise<{
     approved: boolean;
     notes?: string;
@@ -526,6 +553,7 @@ export interface TeamTaskDeps {
     tests: string[] | string;
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
+    invariantChecklistBlock?: string;
   }) => Promise<CoderResult>;
   coderSelfReview: (input: {
     task: SizedTask;
@@ -536,6 +564,7 @@ export interface TeamTaskDeps {
     qa: QaResult;
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
+    invariantChecklistBlock?: string;
   }) => Promise<CoderSelfReviewResult>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
@@ -550,6 +579,7 @@ export interface TeamTaskDeps {
     reviewState?: Omit<CanonicalReviewState, 'diff'>;
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
+    invariantChecklistBlock?: string;
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
@@ -563,6 +593,7 @@ export interface TeamTaskDeps {
     coderHandoffNotes?: string[];
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
+    invariantChecklistBlock?: string;
   }) => Promise<GateReviewVerdict>;
   security?: (input: {
     task: SizedTask;
@@ -576,6 +607,7 @@ export interface TeamTaskDeps {
     coderHandoffNotes?: string[];
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
+    invariantChecklistBlock?: string;
   }) => Promise<GateReviewVerdict>;
   /** Last-resort wrap-up call at the round cap, per `agents/pm/SOUL.md`. Only a
    *  block that survived every coder round reaches this seam, and only when no
@@ -670,6 +702,10 @@ export interface TaskEvidence {
   loopExitReason: LoopExitReason;
   objectionOpen: boolean;
   handoffNotes: string[];
+  /** Accepted, canonical pre-coder checklist for security-sized tasks. */
+  invariantChecklist?: InvariantChecklistEvidence;
+  /** Typed operational hold metadata; raw role output is never retained. */
+  invariantReviewFailure?: InvariantReviewFailure;
   noCodeTestRationale?: string;
   /** Set on a `blocked` outcome. */
   blockedReason?: string;
@@ -774,6 +810,10 @@ export async function runTeamTaskWorkflow(
   > = {};
   const findingsEvidence: FindingsLedgerEntry[] = [];
   const judgmentOutcomes: JudgmentOutcomeEvidence[] = [];
+  const invariantEvidence: Pick<
+    TaskEvidence,
+    'invariantChecklist' | 'invariantReviewFailure'
+  > = {};
 
   try {
     const evidence = await runGated(
@@ -787,10 +827,12 @@ export async function runTeamTaskWorkflow(
       reviewEvidence,
       findingsEvidence,
       judgmentOutcomes,
+      invariantEvidence,
     );
     return {
       ...evidence,
       ...reviewEvidence,
+      ...invariantEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(judgmentOutcomes.length > 0
         ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -811,6 +853,7 @@ export async function runTeamTaskWorkflow(
         findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
+        ...invariantEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -832,6 +875,7 @@ export async function runTeamTaskWorkflow(
         findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
+        ...invariantEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -839,6 +883,22 @@ export async function runTeamTaskWorkflow(
         ...(repairEvidence.testIntentRepair !== undefined
           ? { testIntentRepair: repairEvidence.testIntentRepair }
           : {}),
+      };
+    }
+    if (err instanceof InvariantReviewFailureError) {
+      invariantEvidence.invariantReviewFailure = err.failure;
+      return {
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: roles.list(),
+        objectionOpen: false,
+        handoffNotes,
+        blockedReason: 'pre-coder invariant review failed; preserving clean worktree for retry',
+        invariantReviewFailure: err.failure,
+        findingsLedger: [...findingsEvidence],
+        loopExitReason: 'operational',
+        ...reviewEvidence,
+        coderSelfReviews: [...coderSelfReviews],
       };
     }
     if (err instanceof ExecutionFailureError) {
@@ -853,6 +913,7 @@ export async function runTeamTaskWorkflow(
         findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
+        ...invariantEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -874,6 +935,7 @@ export async function runTeamTaskWorkflow(
       findingsLedger: [...findingsEvidence],
       loopExitReason: 'operational',
       ...reviewEvidence,
+      ...invariantEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(judgmentOutcomes.length > 0
         ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -899,6 +961,7 @@ async function runGated(
   >,
   findingsLedger: FindingsLedgerEntry[],
   judgmentOutcomes: JudgmentOutcomeEvidence[],
+  invariantEvidence: Pick<TaskEvidence, 'invariantChecklist' | 'invariantReviewFailure'>,
 ): Promise<TaskEvidence> {
   // Gate 0: reviewer independence, resolved up-front and fail-closed — block
   // before any coder work rather than risk a same-provider review later.
@@ -920,11 +983,59 @@ async function runGated(
     });
   }
 
+  let previousRole: RoleName | undefined;
+  let invariantChecklistBlock: string | undefined;
+  if (task.securityNeeded) {
+    if (deps.techLeadDraftInvariants === undefined) {
+      throw new InvariantReviewFailureError({
+        stage: 'tech-lead-draft',
+        cause: 'provider',
+        diagnostic: 'tech-lead invariant-review provider is not configured',
+      });
+    }
+    roles.add('tech-lead');
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
+      'tech-lead',
+      'invariant-review-draft',
+      'pre-coder-invariant-draft',
+    );
+    const draft = await deps.techLeadDraftInvariants({
+      task,
+      spec: input.spec,
+      context: input.contextMd,
+    });
+    if (deps.securityRatifyInvariants === undefined) {
+      throw new InvariantReviewFailureError({
+        stage: 'security-ratification',
+        cause: 'provider',
+        diagnostic: 'security invariant-review provider is not configured',
+      });
+    }
+    roles.add('security');
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
+      'security',
+      'invariant-review',
+      'pre-coder-invariant-ratification',
+    );
+    const checklist = await deps.securityRatifyInvariants({
+      task,
+      spec: input.spec,
+      context: input.contextMd,
+      draft,
+    });
+    invariantEvidence.invariantChecklist = checklist;
+    invariantChecklistBlock = checklist.canonicalBlock;
+    emitInvariantChecklist(input, checklist);
+  }
+
   // Gate 1: QA-first — tests (or a no-code-test rationale) before the coder.
   const carriedFeedback = normalizeFeedback(input.rejectionFeedback);
   let qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
   let coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
-  let previousRole: RoleName | undefined;
   let qa: QaResult | undefined;
   let noCodeTestRationale: string | undefined;
   let tests: string[] | string | undefined;
@@ -936,6 +1047,7 @@ async function runGated(
       task,
       spec: input.spec,
       ...(qaFeedback !== undefined ? { rejectionFeedback: qaFeedback } : {}),
+      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
     });
     noCodeTestRationale =
       qa.kind === 'no-code-test-rationale' ? qa.rationale : undefined;
@@ -950,7 +1062,11 @@ async function runGated(
       'test-review',
       'tech-lead-test-review',
     );
-    let tlTests = await deps.techLeadReviewTests({ task, qa });
+    let tlTests = await deps.techLeadReviewTests({
+      task,
+      qa,
+      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
+    });
     emitRoleVerdict(input, {
       role: 'tech-lead',
       gate: 'test-intent',
@@ -1010,7 +1126,11 @@ async function runGated(
         handoffNotes.push(
           `tech-lead repaired test intent: ${repair.testIds.join(', ')}`,
         );
-        const reReview = await deps.techLeadReviewTests({ task, qa });
+        const reReview = await deps.techLeadReviewTests({
+          task,
+          qa,
+          ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
+        });
         emitRoleVerdict(input, {
           role: 'tech-lead',
           gate: 'test-intent',
@@ -1110,6 +1230,7 @@ async function runGated(
       tests,
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
       ...coderFindingsLedger(findingsLedger),
+      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
     });
     emitRoleStage(input, 'coder', 'self-review');
     const reviewed = await deps.coderSelfReview({
@@ -1121,6 +1242,7 @@ async function runGated(
       qa,
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
       ...coderFindingsLedger(findingsLedger),
+      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
     });
     const selfReviewRecord: CoderSelfReviewRecord = {
       round,
@@ -1292,6 +1414,7 @@ async function runGated(
           reviewState: judgmentContext.reviewState,
           judgmentContext,
           judgmentBatchId,
+          ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
           ...(roundFindingsLedger.length > 0
             ? { findingsLedger: [...judgmentContext.findingsLedger] }
             : {}),
@@ -1310,6 +1433,7 @@ async function runGated(
           reviewState: judgmentContext.reviewState,
           judgmentContext,
           judgmentBatchId,
+          ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
           ...(roundFindingsLedger.length > 0
             ? { findingsLedger: [...judgmentContext.findingsLedger] }
             : {}),
@@ -1332,6 +1456,7 @@ async function runGated(
               coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
               judgmentContext,
               judgmentBatchId,
+              ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
               ...(roundFindingsLedger.length > 0
                 ? { findingsLedger: [...judgmentContext.findingsLedger] }
                 : {}),
@@ -1356,6 +1481,7 @@ async function runGated(
                 coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
                 judgmentContext,
                 judgmentBatchId,
+                ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
                 ...(roundFindingsLedger.length > 0
                   ? { findingsLedger: [...judgmentContext.findingsLedger] }
                   : {}),
@@ -3408,6 +3534,27 @@ function emitRoleStage(
         ...details,
         label,
         line: label,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitInvariantChecklist(
+  input: TeamTaskRunInput,
+  checklist: InvariantChecklistEvidence,
+): void {
+  if (input.emit === undefined) return;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'pre-coder-invariant',
+        stage: 'accepted',
+        contentHash: checklist.contentHash,
+        itemCount: checklist.items.length,
+        line: `pre-coder invariants: accepted ${checklist.items.length} items · ${checklist.contentHash.slice(0, 12)}`,
       },
     });
   } catch {

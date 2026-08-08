@@ -43,6 +43,7 @@ import type { TaskRunRecord } from './orch-run-record.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 import { reconstructRun } from './orch-reconstruct.js';
 import { seedProjectContext } from './project-context.js';
+import { buildInvariantChecklistEvidence } from './invariant-review.js';
 
 // ---------------------------------------------------------------------------
 // In-memory fixture harness
@@ -750,6 +751,88 @@ describe('project-orchestrator — operational terminal', () => {
         }),
       }),
     );
+  });
+
+  it('routes an invariant-review contract failure to an operational hold and persists typed metadata', async () => {
+    const persistedRecords: TaskRunRecord[] = [];
+    let closeoutCalled = false;
+    const invariantReviewFailure = {
+      stage: 'security-ratification' as const,
+      cause: 'invalid-evidence' as const,
+      diagnostic: 'evidence anchor is absent',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['tech-lead', 'security'],
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        objectionOpen: false,
+        handoffNotes: [],
+        blockedReason: 'pre-coder invariant review failed; preserving clean worktree for retry',
+        invariantReviewFailure,
+      }),
+      runCloseoutChecks: async () => {
+        closeoutCalled = true;
+        return { ok: true };
+      },
+    });
+    const result = await runProjectOrchestration({
+      ...h.deps,
+      appendTaskRunRecord: async (record) => { persistedRecords.push(record); },
+    });
+
+    expect(result).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('pre-coder invariant review failed'),
+    });
+    expect(closeoutCalled).toBe(false);
+    expect(persistedRecords[0]).toMatchObject({
+      outcome: 'blocked',
+      commitSha: null,
+      invariantReviewFailure,
+    });
+  });
+
+  it('persists an accepted pre-coder invariant checklist on a successful task record', async () => {
+    const invariantChecklist = buildInvariantChecklistEvidence([{
+      id: 'I1',
+      category: 'ownership-and-containment',
+      invariant: 'Keep writes inside the validated repository root.',
+      evidence: [{ path: 'src/guard.ts', anchor: 'assertContained' }],
+      draftIds: ['D1'],
+    }]);
+    const persistedRecords: TaskRunRecord[] = [];
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        if (workflowCalls === 1) {
+          return { ...readyEvidence(task), invariantChecklist };
+        }
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: 'pause after one persisted task',
+        };
+      },
+    });
+
+    await runProjectOrchestration({
+      ...h.deps,
+      appendTaskRunRecord: async (record) => { persistedRecords.push(record); },
+    });
+
+    expect(persistedRecords[0]).toMatchObject({
+      outcome: 'ready-for-closeout',
+      invariantChecklist,
+    });
   });
 
   it('holds operationally (never proceeds) when the terminal-evidence write fails for a blocked/failed outcome', async () => {

@@ -794,6 +794,9 @@ function askClaudeSession(
     if (opts.allowedTools && opts.allowedTools.length > 0) {
       args.push('--allowedTools', ...opts.allowedTools);
     }
+    if (opts.availableTools !== undefined) {
+      args.push('--tools', opts.availableTools.join(','));
+    }
     // This is the Claude-only primitive. Provider-neutral chat resolves before
     // reaching here, so its fallback must remain a Claude alias even when the
     // application's default chat model is OpenAI-backed.
@@ -840,6 +843,13 @@ export interface AskClaudeWithContextOpts {
   model?: string;
   /** Restrict the CLI tool allowlist. Omit to use Claude's defaults. */
   allowedTools?: string[];
+  /** Replace the built-in tool inventory at availability level. Unlike
+   * `allowedTools`, this is BELIEVED to remain restrictive under
+   * skip-permissions mode — that is CLI behavior we cannot assert in-repo
+   * (tests cover argv construction only). Treat as defense-in-depth, not an
+   * enforced boundary; see the pre-coder invariant-review entry in
+   * CLAUDE.md's Invariants for the accepted posture. */
+  availableTools?: string[];
   /** Friendly label for the in-flight op tracker (TG message, webview pill).
    *  Omit for background/non-interactive callers. */
   opLabel?: string;
