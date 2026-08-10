@@ -6,14 +6,12 @@ below it.
 
 ## User-authored
 
-- Default to an ELI5 / first-principles posture when I talk to Rune
-  - **Premise:** When I talk to Rune it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
-  - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)
-  - **To discuss before editing the prompt:**
-      - How it reconciles with the existing "thinking partner / lean-Socratic" posture and the "be concise on mobile" guidance — first-principles explanation can run long, so the two need reconciling.
-      - Always-on vs default-with-an-escape-hatch — a way to ask for the dense/expert version when wanted, since the user is often an expert who sometimes wants depth, not ELI5.
-      - Whether it applies across all modes (tactical lookups vs strategic/reflective) or only when explaining/reasoning.
-  - **Note:** seed for a working session on the system prompt itself; not a spec.
+- Per-product Telegram chat threads — Wants each product managed by Rune to get its own nested Telegram chat thread instead of one shared stream. (journal 2026-08-07)
+- Better formatted commit and error alerts — Wants Telegram notifications about commits or errors to be more clearly styled so status is easier to parse at a glance. (journal 2026-08-07)
+- Inline adjudication decisions via Telegram — Wants adjudication issues delivered as a Telegram message with a quick option to approve a fix, commit, and move on. (journal 2026-08-07)
+- Telegram as full Rune command panel — Wants slash commands in Telegram to view, add, and manage projects, bugs, and ideas, and to start or continue work directly from the chat. (journal 2026-08-07)
+- Expand MCP to support reviews and family page notes so that it can be used by Claude (journal 2026-08-07)
+- Rune runs should surface blockers proactively — Orchestrated Rune runs should never silently stall when they hit a blocking issue. Instead they should push a message to the web view and Telegram asking for guidance, rather than requiring the user to ask why something failed. (journal 2026-08-08)
 - Autonomous bug-fix lane
   - Classify nightly observation-loop findings as bug vs idea, capture bugs as structured records that preserve bugs.md detail, and have the gen-eval-loop autonomously fix well-scoped bugs to a branch that auto-merges only when validation passes (Option A). No human start-gate for bugs; ideas stay human-planned via /plan. Detailed brief below; feed into /plan.
   - **Why:** the nightly observation loop finds real problems but has no path to fixing them. Three gaps compound.
@@ -61,7 +59,6 @@ below it.
   - One session can also spin up new research tasks that feed into future lesson plans and tasks for research agent
 - Engagement-driven writing lessons (extends project 12)
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just personal feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what was corrected pre-publishing. Closes the loop from "personal taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
-- set up child developmental agent support to help with monitoring progress and planning weekly
 - Expand autonomous bug fix lane to run in parallel for all product repos
 - Multi-repo orchestrated project coordinator
   - **Goal:** support a single product/project plan whose deliverables span multiple product repositories by coordinating a sequence of existing single-repo orchestrated runs, one run per target product/repo, instead of forcing one run to silently operate inside the wrong worktree.
