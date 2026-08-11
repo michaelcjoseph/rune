@@ -18,7 +18,9 @@ const {
   unregisterOp,
   cancelOp,
   cancelCorrelatedOps,
+  cancelCorrelatedAgentOps,
   forceCancelCorrelatedOps,
+  forceCancelCorrelatedAgentOps,
   clearCorrelatedCancellation,
   cancelMostRecentForUser,
   cancelByPrefix,
@@ -44,12 +46,14 @@ function makeOp(overrides: {
   scope?: string;
   batchId?: string;
   processGroup?: boolean;
+  agentName?: string;
 } = {}) {
   return {
     kind: overrides.kind ?? ('agent' as const),
     label: overrides.label ?? 'test-agent',
     userId: overrides.userId ?? 42,
     child: makeChildProcess(),
+    ...(overrides.agentName ? { agentName: overrides.agentName } : {}),
     ...(overrides.scope ? { scope: overrides.scope } : {}),
     ...(overrides.batchId ? { batchId: overrides.batchId } : {}),
     ...(overrides.processGroup ? { processGroup: true } : {}),
@@ -284,6 +288,37 @@ describe('in-flight op registry', () => {
       expect(getCancellation(afterCleanup.opId)).toBeUndefined();
     });
 
+    it('cancels only named correlated agents without tombstoning the whole batch', () => {
+      const reviewer = registerOp(makeOp({
+        batchId: 'partial-batch',
+        agentName: 'reviewer',
+      }));
+      const designer = registerOp(makeOp({
+        batchId: 'partial-batch',
+        agentName: 'designer',
+      }));
+
+      expect(cancelCorrelatedAgentOps(
+        'partial-batch',
+        ['reviewer'],
+        { userId: 42 },
+      )).toBe(1);
+      expect(getCancellation(reviewer.opId)).toMatchObject({ source: 'internal' });
+      expect(getCancellation(designer.opId)).toBeUndefined();
+
+      const lateDesigner = registerOp(makeOp({
+        batchId: 'partial-batch',
+        agentName: 'designer',
+      }));
+      const lateReviewer = registerOp(makeOp({
+        batchId: 'partial-batch',
+        agentName: 'reviewer',
+      }));
+      expect(getCancellation(lateDesigner.opId)).toBeUndefined();
+      expect(getCancellation(lateReviewer.opId)).toMatchObject({ source: 'internal' });
+      expect(lateReviewer.child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
     it('does not correlate identical batch ids across user or product owners', () => {
       const aura = registerOp(makeOp({
         batchId: 'owner-batch',
@@ -324,6 +359,32 @@ describe('in-flight op registry', () => {
         expect(forceCancelCorrelatedOps('force-batch', { userId: 42 })).toBe(2);
         expect(kill).toHaveBeenCalledWith(-first.child.pid!, 'SIGKILL');
         expect(kill).toHaveBeenCalledWith(-second.child.pid!, 'SIGKILL');
+      } finally {
+        kill.mockRestore();
+      }
+    });
+
+    it('force-cancels only named correlated process groups', () => {
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      try {
+        const reviewer = registerOp(makeOp({
+          batchId: 'partial-force-batch',
+          processGroup: true,
+          agentName: 'reviewer',
+        }));
+        const designer = registerOp(makeOp({
+          batchId: 'partial-force-batch',
+          processGroup: true,
+          agentName: 'designer',
+        }));
+
+        expect(forceCancelCorrelatedAgentOps(
+          'partial-force-batch',
+          ['reviewer'],
+          { userId: 42 },
+        )).toBe(1);
+        expect(kill).toHaveBeenCalledWith(-reviewer.child.pid!, 'SIGKILL');
+        expect(kill).not.toHaveBeenCalledWith(-designer.child.pid!, 'SIGKILL');
       } finally {
         kill.mockRestore();
       }

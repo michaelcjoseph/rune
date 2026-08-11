@@ -34,6 +34,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
+import { sanitizeExecutionDiagnostic } from '../intent/execution-failure.js';
 import { createLogger } from '../utils/logger.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
@@ -637,6 +638,10 @@ export interface CodexResult {
   /** Durable process-level outcome for callers that must distinguish a
    * failed spawn, timeout, and ordinary non-zero executor exit. */
   failureKind?: 'spawn' | 'timeout' | 'executor-exit';
+  /** Parsed CLI terminal category when the executor supplied one. */
+  terminalReason?: string;
+  /** Measured wall-clock duration of this invocation. */
+  durationMs?: number;
   /** Structured first-request cancellation captured before the operation is
    * unregistered. */
   cancellation?: OperationCancellation;
@@ -683,6 +688,7 @@ export async function runCodex(
     throw new Error('RunCodexOpts externallySandboxed requires a verified confinement capability');
   }
   const timeout = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
+  const startedAtMs = Date.now();
   const cwd = opts.cwd ?? PROJECT_ROOT;
 
   const args: string[] = ['exec'];
@@ -696,7 +702,9 @@ export async function runCodex(
   if (opts.externallySandboxed) {
     args.push('--dangerously-bypass-approvals-and-sandbox');
   }
-  if (opts.onEvent) args.push('--json');
+  // Always request JSONL so terminal categories remain observable even when a
+  // caller does not subscribe to live events.
+  args.push('--json');
   if (opts.strictConfig) args.push('--strict-config');
   if (opts.ignoreUserConfig) args.push('--ignore-user-config');
   if (opts.ignoreRules) args.push('--ignore-rules');
@@ -747,6 +755,10 @@ export async function runCodex(
     let stdout = '';
     let stderr = '';
     let stdoutLineBuffer = '';
+    let finalAgentText = '';
+    let jsonlEventCount = 0;
+    let terminalReason: string | undefined;
+    let timeoutTimerFired = false;
 
     const emitStdoutChunk = (chunk: string): void => {
       stdout += chunk;
@@ -757,7 +769,6 @@ export async function runCodex(
           log.warn('codex onStdout callback failed', { error: (err as Error).message });
         }
       }
-      if (!opts.onEvent) return;
       stdoutLineBuffer += chunk;
       let newlineIndex = stdoutLineBuffer.indexOf('\n');
       while (newlineIndex !== -1) {
@@ -777,6 +788,7 @@ export async function runCodex(
           throw new Error('stdout JSONL line is not an object');
         }
         event = parsed as Record<string, unknown>;
+        jsonlEventCount += 1;
       } catch {
         event = { type: 'raw', line: scrubPathsInText(line) };
       }
@@ -785,16 +797,48 @@ export async function runCodex(
       } catch (err) {
         log.warn('codex onEvent callback failed', { error: (err as Error).message });
       }
+      if (typeof event['terminal_reason'] === 'string') {
+        terminalReason = sanitizeExecutionDiagnostic(event['terminal_reason']).slice(0, 128);
+      }
+      const item = event['item'];
+      if (event['type'] === 'item.completed' && item && typeof item === 'object' &&
+          !Array.isArray(item) && (item as Record<string, unknown>)['type'] === 'agent_message' &&
+          typeof (item as Record<string, unknown>)['text'] === 'string') {
+        finalAgentText = (item as Record<string, unknown>)['text'] as string;
+      }
     };
 
     const flushStdoutEventRemainder = (): void => {
-      if (!opts.onEvent || stdoutLineBuffer === '') return;
+      if (stdoutLineBuffer === '') return;
       const line = stdoutLineBuffer.replace(/\r$/, '');
       stdoutLineBuffer = '';
       emitStdoutEventLine(line);
     };
 
+    /** Plain agent text for a caller that never subscribed to `onEvent`.
+     *
+     *  `--json` is unconditional, so `stdout` is JSONL on every path — not just
+     *  the ones with a live subscriber. Prefer the final `agent_message` item;
+     *  fall back to raw stdout only when no such item arrived. That fallback is
+     *  a real failure mode (a turn that emits no agent message, or a CLI schema
+     *  change), and a silent one hands JSONL to a downstream verdict parser with
+     *  nothing pointing at the cause — so say it happened. Applied on the
+     *  failure paths too: partial output is still more useful extracted. */
+    const resolveAgentText = (): string => {
+      if (finalAgentText) return finalAgentText.trim();
+      const raw = stdout.trim();
+      if (raw !== '' && jsonlEventCount > 0) {
+        log.warn('codex emitted no agent_message item; falling back to raw JSONL stdout', {
+          ...(opts.agentName ? { agentName: opts.agentName } : {}),
+          jsonlEvents: jsonlEventCount,
+          bytes: raw.length,
+        });
+      }
+      return raw;
+    };
+
     const timer = setTimeout(() => {
+      timeoutTimerFired = true;
       log.warn('codex exec timed out; sending SIGTERM', { timeoutMs: timeout });
       signalActiveProcess(child, 'SIGTERM');
       // The timeout-killed close handler below resolves the promise with a
@@ -825,7 +869,12 @@ export async function runCodex(
       log.error('codex spawn error', { error: err.message });
       finish(cancellation !== undefined
         ? { text: null, error: 'Cancelled by user', cancellation }
-        : { text: null, error: err.message, failureKind: 'spawn' });
+        : {
+            text: null,
+            error: err.message,
+            failureKind: 'spawn',
+            durationMs: Math.max(0, Date.now() - startedAtMs),
+          });
     });
 
     child.on('close', (code, signal) => {
@@ -840,16 +889,17 @@ export async function runCodex(
         return;
       }
 
-      // Treat both signal=SIGTERM and code=143 (POSIX 128+SIGTERM) as the
-      // timeout outcome — mirrors the Claude wrapper's convention so the
-      // two executors report timeouts the same way.
-      const timedOut = signal === 'SIGTERM' || code === 143;
+      const durationMs = Math.max(0, Date.now() - startedAtMs);
+      // Only Rune's own elapsed timer grants timeout authority. The executor
+      // can also exit 143 for an aborted stream or an external SIGTERM.
+      const timedOut = timeoutTimerFired && (signal === 'SIGTERM' || code === 143);
       if (timedOut) {
         if (op) unregisterOp(op.opId, 'error', `codex exec timed out after ${timeout}ms`);
         finish({
-          text: stdout || null,
+          text: resolveAgentText() || null,
           error: `codex exec timed out after ${timeout}ms`,
           failureKind: 'timeout',
+          durationMs,
         });
         return;
       }
@@ -858,19 +908,23 @@ export async function runCodex(
         if (op) unregisterOp(op.opId, 'success');
         // Trim trailing newlines for parity with Claude's wrapper — callers
         // that compare against expected strings won't trip on a stray `\n`.
-        finish({ text: stdout.trim(), error: null, exitCode: 0 });
+        finish({ text: resolveAgentText(), error: null, exitCode: 0 });
         return;
       }
 
       // Non-zero exit: surface stderr verbatim when present, otherwise the
       // canonical "exited with code N" message. Match Claude's pattern.
-      const error = stderr.trim() || `codex exec exited with code ${code}`;
+      const error = terminalReason !== undefined
+        ? `codex executor exited with ${terminalReason} (code ${code ?? 'unknown'})`
+        : stderr.trim() || `codex exec exited with code ${code}`;
       if (op) unregisterOp(op.opId, 'error', error);
       finish({
-        text: stdout || null,
+        text: resolveAgentText() || null,
         error,
         exitCode: code ?? undefined,
         failureKind: 'executor-exit',
+        ...(terminalReason !== undefined ? { terminalReason } : {}),
+        durationMs,
       });
     });
   });

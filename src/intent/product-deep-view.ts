@@ -41,6 +41,8 @@ export interface RunSummaryRow {
   reason?: string;
   adjudicationFailure?: import('./team-task-workflow.js').AdjudicationFailure;
   adjudicationUpheldFail?: true;
+  reviewQuorum?: import('./team-task-workflow.js').ReviewQuorumEvidence;
+  reviewQuorumFailure?: import('./team-task-workflow.js').ReviewQuorumFailure;
   transcriptUrl?: string;
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   relatedTestDiagnostic?: import('./related-test-diagnostic.js').RelatedTestDiagnostic;

@@ -26,6 +26,7 @@ import { appendInteraction } from '../utils/observation-log.js';
 // ai/ → intent/: runAgent resolves its model through the model selection policy.
 // model-policy.ts is a leaf (node:fs + logger only) — no import cycle.
 import { resolveModel, loadModelPolicy } from '../intent/model-policy.js';
+import { sanitizeExecutionDiagnostic } from '../intent/execution-failure.js';
 import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
 import {
   getCancellation,
@@ -406,6 +407,11 @@ export function assertProjectMcpConfig(): void {
 export interface ClaudeResult {
   text: string | null;
   error: string | null;
+  /** Process-level classification for durable orchestration diagnostics. */
+  failureKind?: 'spawn' | 'timeout' | 'executor-exit';
+  exitCode?: number;
+  terminalReason?: string;
+  durationMs?: number;
   /** Structured first-request cancellation captured before the live operation
    * is unregistered. Present only when this spawn was cancelled through Rune. */
   cancellation?: OperationCancellation;
@@ -542,6 +548,7 @@ export function rotateStreamLogIfLarge(): void {
 interface StreamState {
   finalText: string;
   resultText: string | null;
+  terminalReason?: string;
 }
 
 /** Parse one stream-json event from the CLI's stdout. Side-effects:
@@ -585,8 +592,11 @@ function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | un
         }
       }
     }
-  } else if (type === 'result' && typeof e['result'] === 'string') {
-    state.resultText = e['result'] as string;
+  } else if (type === 'result') {
+    if (typeof e['result'] === 'string') state.resultText = e['result'];
+    if (typeof e['terminal_reason'] === 'string') {
+      state.terminalReason = sanitizeExecutionDiagnostic(e['terminal_reason']).slice(0, 128);
+    }
   }
 }
 
@@ -601,6 +611,7 @@ function execClaude(
   mcpArgs?: string[],
 ): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
+  const startedAtMs = Date.now();
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
   // Haiku calls) bypass it because their callers expect a single JSON blob on
   // stdout, and the path is latency-sensitive. `one-shot` IS included — its
@@ -682,7 +693,9 @@ function execClaude(
     let stderr = '';
     let lineBuf = '';
     const streamState: StreamState = { finalText: '', resultText: null };
+    let timeoutTimerFired = false;
     const timer = setTimeout(() => {
+      timeoutTimerFired = true;
       signalActiveProcess(child, 'SIGTERM');
     }, timeout);
 
@@ -718,11 +731,11 @@ function execClaude(
         handleStreamEvent(lineBuf, opId, opMeta, streamState);
         lineBuf = '';
       }
-      // Claude CLI installs a SIGTERM handler that exits cleanly with code 143
-      // (POSIX convention: 128 + SIGTERM=15), so Node reports `{code: 143,
-      // signal: null}` — not `{code: null, signal: 'SIGTERM'}`. Treat both as
-      // timeouts so the TG summary stays readable.
-      const timedOut = signal === 'SIGTERM' || code === 143;
+      // A SIGTERM-shaped exit is a timeout only when Rune's own timer fired.
+      // External process termination and CLI `aborted_streaming` exits can use
+      // the same code/signal and must retain their real terminal category.
+      const timedOut = timeoutTimerFired && (signal === 'SIGTERM' || code === 143);
+      const durationMs = Math.max(0, Date.now() - startedAtMs);
       const successText = streaming
         ? (streamState.resultText ?? streamState.finalText)
         : stdout;
@@ -741,12 +754,22 @@ function execClaude(
         });
         const error = `Claude timed out after ${timeout / 1000}s`;
         if (opId) unregisterOp(opId, 'error', error);
-        finish({ text: null, error });
+        finish({ text: null, error, failureKind: 'timeout', durationMs });
       } else if (code !== 0) {
-        const error = stderr.trim() || `Claude exited with code ${code}`;
+        const terminalReason = streamState.terminalReason;
+        const error = terminalReason !== undefined
+          ? `Claude executor exited with ${terminalReason} (code ${code ?? 'unknown'})`
+          : stderr.trim() || `Claude exited with code ${code}`;
         log.error('Claude CLI failed', { code, error, args: args.slice(0, 3) });
         if (opId) unregisterOp(opId, 'error', error);
-        finish({ text: null, error });
+        finish({
+          text: null,
+          error,
+          ...(code !== null ? { exitCode: code } : {}),
+          failureKind: 'executor-exit',
+          ...(terminalReason !== undefined ? { terminalReason } : {}),
+          durationMs,
+        });
       } else {
         if (opId) unregisterOp(opId, 'success');
         finish({ text: successText.trim(), error: null });
@@ -767,7 +790,12 @@ function execClaude(
       log.error('Claude CLI spawn error', { error: err.message, args: args.slice(0, 3) });
       finish(cancellation !== undefined
         ? { text: null, error: 'Cancelled by user', cancellation }
-        : { text: null, error: err.message });
+        : {
+            text: null,
+            error: err.message,
+            failureKind: 'spawn',
+            durationMs: Math.max(0, Date.now() - startedAtMs),
+          });
     });
   });
 }

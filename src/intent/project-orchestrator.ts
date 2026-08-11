@@ -60,6 +60,8 @@ import {
   type ObjectionFinding,
   type ObjectionSeverity,
   type RoleCancellation,
+  type ReviewQuorumEvidence,
+  type ReviewQuorumFailure,
   type TaskEvidence,
 } from './team-task-workflow.js';
 import {
@@ -82,6 +84,7 @@ import {
 } from './execution-failure.js';
 import type { TaskValidationFailure } from './task-validation.js';
 import type { AdjudicationFailure, ReviewSurfaceFailure } from './team-task-workflow.js';
+import type { ReviewBatchState } from './review-batch-state.js';
 import type {
   DurableValidationReceipt,
   FullSuiteAttestation,
@@ -170,6 +173,9 @@ export interface OrchestrationRunCursor {
    * cursors and absent between tasks. */
   taskBase?: TaskBaseRecord;
   executionCheckpoint?: ExecutionCheckpoint;
+  /** Durable post-coder quorum wave. Absent on legacy cursors and between
+   * tasks; exact tree identity determines whether it can be resumed. */
+  reviewBatch?: ReviewBatchState;
 }
 
 export interface OrchestrationTerminalBugEntry {
@@ -210,6 +216,7 @@ export interface OrchestrationDeps {
   /** Optional durable cursor sink used to resume a still-running mutation. */
   writeRunCursor?: (cursor: OrchestrationRunCursor) => Promise<void>;
   currentExecutionCheckpoint?: () => ExecutionCheckpoint | undefined;
+  currentReviewBatch?: () => ReviewBatchState | undefined;
   /** Optional durable bug sink for unresolved terminal findings. */
   appendTerminalBugEntries?: (entries: OrchestrationTerminalBugEntry[]) => Promise<void>;
 
@@ -263,6 +270,8 @@ export type OrchestrationResult =
       kind: 'finalized';
       outcome: string;
       relatedTestDiagnostics?: RelatedTestTaskDiagnostic[];
+      /** Quorum evidence for the final completed task, retained at terminal projection. */
+      reviewQuorum?: ReviewQuorumEvidence;
     }
   | {
       kind: 'held';
@@ -276,6 +285,8 @@ export type OrchestrationResult =
       contextFailure?: ContextCloseoutFailure;
       relatedTestDiagnostic?: RelatedTestDiagnostic;
       adjudicationFailure?: AdjudicationFailure;
+      reviewQuorum?: ReviewQuorumEvidence;
+      reviewQuorumFailure?: ReviewQuorumFailure;
     }
   | {
       kind: 'blocked';
@@ -288,6 +299,8 @@ export type OrchestrationResult =
       /** An admissible adjudicator ruling upheld the fail — a substantive
        *  product block, NOT the `adjudicationFailure` operational hold. */
       adjudicationUpheldFail?: true;
+      reviewQuorum?: ReviewQuorumEvidence;
+      reviewQuorumFailure?: ReviewQuorumFailure;
     }
   | {
       kind: 'cancelled';
@@ -298,6 +311,8 @@ export type OrchestrationResult =
       cancellation?: RoleCancellation;
       /** Stable secondary outcomes from a cancelled judgment fan-out. */
       judgmentOutcomes?: JudgmentOutcomeEvidence[];
+      reviewQuorum?: ReviewQuorumEvidence;
+      reviewQuorumFailure?: ReviewQuorumFailure;
     };
 
 export interface ParkedTaskRun {
@@ -365,13 +380,20 @@ async function runProjectOrchestrationImpl(
       });
       const res = await runFinalizerHandoff(handoff, deps.finalize);
       const relatedTestDiagnostics = collectRelatedTestTaskDiagnostics(taskRecords);
+      const reviewQuorum = taskRecords.at(-1)?.reviewQuorum;
       return res.kind === 'finalized'
         ? {
             kind: 'finalized',
             outcome: res.outcome,
             ...(relatedTestDiagnostics.length > 0 ? { relatedTestDiagnostics } : {}),
+            ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
           }
-        : { kind: 'held', reason: res.reason, handoff: res.handoff };
+        : {
+            kind: 'held',
+            reason: res.reason,
+            handoff: res.handoff,
+            ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+          };
     }
 
     const task = selection.task;
@@ -438,6 +460,7 @@ async function runProjectOrchestrationImpl(
               ? `; terminal classification: ${classified}`
               : ''),
           taskRecords,
+          reviewQuorumDetails(evidence),
         );
       }
 
@@ -458,7 +481,7 @@ async function runProjectOrchestrationImpl(
       } else {
         evidence = { ...evidence, preCloseoutValidation: preCloseout.evidence };
       }
-      const cancelledAfterPreCloseout = cancellationResult(deps, task);
+      const cancelledAfterPreCloseout = cancellationAfterWorkflow(deps, task, evidence);
       if (cancelledAfterPreCloseout) return cancelledAfterPreCloseout;
       // Closeout itself is not entered until validation and post-validation
       // review-surface checks pass.
@@ -472,7 +495,7 @@ async function runProjectOrchestrationImpl(
       // Validation can settle at the same moment a cancellation arrives. Keep
       // the final boundary immediately before any context/task write or
       // closeout commit, mirroring the merge finalizer's pre-merge check.
-      const cancelledAfterChecks = cancellationResult(deps, task);
+      const cancelledAfterChecks = cancellationAfterWorkflow(deps, task, evidence);
       if (cancelledAfterChecks) return cancelledAfterChecks;
       const relatedTestDiagnostic = checks.ok
         ? checks.relatedTestDiagnostic
@@ -513,7 +536,10 @@ async function runProjectOrchestrationImpl(
           deps,
           reason,
           taskRecords,
-          { relatedTestDiagnostic: checks.failure.relatedTestDiagnostic },
+          {
+            relatedTestDiagnostic: checks.failure.relatedTestDiagnostic,
+            ...reviewQuorumDetails(evidence),
+          },
         );
       }
       closeout = checks.ok
@@ -531,6 +557,7 @@ async function runProjectOrchestrationImpl(
           deps,
           `validation capability unavailable for ${task.id}`,
           taskRecords,
+          reviewQuorumDetails(evidence),
         );
       }
       if (closeout.kind === 'ok' || closeout.closeoutFailure === undefined) break;
@@ -583,6 +610,7 @@ async function runProjectOrchestrationImpl(
             ...(closeout.closeoutFailure.relatedTestDiagnostic !== undefined
               ? { relatedTestDiagnostic: closeout.closeoutFailure.relatedTestDiagnostic }
               : {}),
+            ...reviewQuorumDetails(evidence),
             parked: {
               status: 'blocked-on-human',
               branch: deps.branch,
@@ -600,6 +628,7 @@ async function runProjectOrchestrationImpl(
           {
             relatedTestDiagnostic:
               closeout.closeoutFailure.relatedTestDiagnostic,
+            ...reviewQuorumDetails(evidence),
           },
         );
       }
@@ -614,10 +643,15 @@ async function runProjectOrchestrationImpl(
           deps,
           contextFailureSummary(contextFailure),
           taskRecords,
-          { contextFailure },
+          { contextFailure, ...reviewQuorumDetails(evidence) },
         );
       }
-      return buildOperationalHold(deps, closeout.reason, taskRecords);
+      return buildOperationalHold(
+        deps,
+        closeout.reason,
+        taskRecords,
+        reviewQuorumDetails(evidence),
+      );
     }
 
     const taskRecord = taskRecordFromEvidence(
@@ -635,7 +669,12 @@ async function runProjectOrchestrationImpl(
       closeout.tasksMd,
     );
     if (checkpoint.kind === 'blocked') {
-      return buildOperationalHold(deps, checkpoint.reason, taskRecords);
+      return buildOperationalHold(
+        deps,
+        checkpoint.reason,
+        taskRecords,
+        reviewQuorumDetails(evidence),
+      );
     }
     // The task already committed; recording any open objection-class finding to
     // the bug backlog is best-effort. The terminal-bug writer is an optional dep
@@ -648,9 +687,14 @@ async function runProjectOrchestrationImpl(
       missingWriter: 'ok',
     });
     if (terminalBugRecording.kind === 'blocked') {
-      return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
+      return buildOperationalHold(
+        deps,
+        terminalBugRecording.reason,
+        taskRecords,
+        reviewQuorumDetails(evidence),
+      );
     }
-    const cancelledAfterCloseout = cancellationResult(deps, task);
+    const cancelledAfterCloseout = cancellationAfterWorkflow(deps, task, evidence);
     if (cancelledAfterCloseout) return cancelledAfterCloseout;
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
@@ -693,6 +737,12 @@ function cancellationAfterWorkflow(
     ...(evidence.judgmentOutcomes !== undefined
       ? { judgmentOutcomes: evidence.judgmentOutcomes }
       : {}),
+    ...(evidence.reviewQuorum !== undefined
+      ? { reviewQuorum: evidence.reviewQuorum }
+      : {}),
+    ...(evidence.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: evidence.reviewQuorumFailure }
+      : {}),
   };
   if (
     cancellation.reason !== 'system' ||
@@ -713,6 +763,18 @@ function cancellationAfterWorkflow(
 
   emitSystemCancellationSuperseded(deps, task, superseded);
   return null;
+}
+
+function reviewQuorumDetails(evidence: TaskEvidence): Pick<
+  OperationalHoldDetails,
+  'reviewQuorum' | 'reviewQuorumFailure'
+> {
+  return {
+    ...(evidence.reviewQuorum !== undefined ? { reviewQuorum: evidence.reviewQuorum } : {}),
+    ...(evidence.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: evidence.reviewQuorumFailure }
+      : {}),
+  };
 }
 
 /** Run one task through the workflow. The workflow owns the per-task
@@ -908,6 +970,11 @@ function buildRunCursor(
   taskBase?: TaskBaseRecord,
 ): OrchestrationRunCursor {
   const next = selectNextTask(tasksMd);
+  const currentReviewBatch = deps.currentReviewBatch?.();
+  const durableReviewBatch = currentTask !== undefined &&
+      currentReviewBatch?.taskId === currentTask.id
+    ? currentReviewBatch
+    : undefined;
   return {
     runId: deps.runId,
     product: deps.product,
@@ -928,6 +995,7 @@ function buildRunCursor(
       nextTaskId: next.kind === 'task' ? next.task.id : null,
     },
     ...(taskBase !== undefined ? { taskBase: { ...taskBase } } : {}),
+    ...(durableReviewBatch !== undefined ? { reviewBatch: durableReviewBatch } : {}),
   };
 }
 
@@ -1242,6 +1310,12 @@ function taskRecordFromEvidence(
     ...(evidence.judgmentOutcomes !== undefined
       ? { judgmentOutcomes: evidence.judgmentOutcomes }
       : {}),
+    ...(evidence.reviewQuorum !== undefined
+      ? { reviewQuorum: evidence.reviewQuorum }
+      : {}),
+    ...(evidence.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: evidence.reviewQuorumFailure }
+      : {}),
     ...(evidence.taskBaseTree !== undefined
       ? { taskBaseTree: evidence.taskBaseTree }
       : {}),
@@ -1260,7 +1334,8 @@ function taskRecordFromEvidence(
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
   return evidence.executionFailure !== undefined ||
     evidence.adjudicationFailure !== undefined ||
-    evidence.invariantReviewFailure !== undefined;
+    evidence.invariantReviewFailure !== undefined ||
+    evidence.reviewQuorumFailure !== undefined;
 }
 
 /** Terminal routing for task evidence that did not reach ready-for-closeout:
@@ -1281,6 +1356,10 @@ async function resolveNonCloseoutEvidence(
       ...(evidence.judgmentOutcomes !== undefined
         ? { judgmentOutcomes: evidence.judgmentOutcomes }
         : {}),
+      ...(evidence.reviewQuorum !== undefined ? { reviewQuorum: evidence.reviewQuorum } : {}),
+      ...(evidence.reviewQuorumFailure !== undefined
+        ? { reviewQuorumFailure: evidence.reviewQuorumFailure }
+        : {}),
     };
   }
   if (hasNonReversibleSevereTerminalFinding(evidence)) {
@@ -1288,7 +1367,12 @@ async function resolveNonCloseoutEvidence(
       missingWriter: 'ok',
     });
     if (terminalBugRecording.kind === 'blocked') {
-      return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
+      return buildOperationalHold(
+        deps,
+        terminalBugRecording.reason,
+        taskRecords,
+        reviewQuorumDetails(evidence),
+      );
     }
     return buildFindingHold(
       deps,
@@ -1296,6 +1380,7 @@ async function resolveNonCloseoutEvidence(
         evidence.failureReason ??
         'non-reversible high/critical terminal finding must hold the branch',
       taskRecords,
+      reviewQuorumDetails(evidence),
     );
   }
   if (isOperationalTerminal(evidence)) {
@@ -1306,6 +1391,8 @@ async function resolveNonCloseoutEvidence(
       {
         executionFailure: evidence.executionFailure,
         adjudicationFailure: evidence.adjudicationFailure,
+        reviewQuorum: evidence.reviewQuorum,
+        reviewQuorumFailure: evidence.reviewQuorumFailure,
       },
     );
   }
@@ -1316,6 +1403,10 @@ async function resolveNonCloseoutEvidence(
     task,
     ...(parked !== undefined ? { parked } : {}),
     ...(evidence.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true as const } : {}),
+    ...(evidence.reviewQuorum !== undefined ? { reviewQuorum: evidence.reviewQuorum } : {}),
+    ...(evidence.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: evidence.reviewQuorumFailure }
+      : {}),
   };
 }
 
@@ -1431,6 +1522,8 @@ interface OperationalHoldDetails {
   contextFailure?: ContextCloseoutFailure;
   relatedTestDiagnostic?: RelatedTestDiagnostic;
   adjudicationFailure?: AdjudicationFailure;
+  reviewQuorum?: ReviewQuorumEvidence;
+  reviewQuorumFailure?: ReviewQuorumFailure;
 }
 
 function buildOperationalHold(
@@ -1439,7 +1532,14 @@ function buildOperationalHold(
   taskRecords: TaskRunRecord[],
   details: OperationalHoldDetails = {},
 ): Extract<OrchestrationResult, { kind: 'held' }> {
-  const { executionFailure, contextFailure, relatedTestDiagnostic, adjudicationFailure } = details;
+  const {
+    executionFailure,
+    contextFailure,
+    relatedTestDiagnostic,
+    adjudicationFailure,
+    reviewQuorum,
+    reviewQuorumFailure,
+  } = details;
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
     project: deps.project,
@@ -1462,6 +1562,8 @@ function buildOperationalHold(
     ...(contextFailure !== undefined ? { contextFailure } : {}),
     ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
     ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
+    ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+    ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
   };
 }
 
@@ -1469,6 +1571,7 @@ function buildFindingHold(
   deps: OrchestrationDeps,
   reason: string,
   taskRecords: TaskRunRecord[],
+  details: Pick<OperationalHoldDetails, 'reviewQuorum' | 'reviewQuorumFailure'> = {},
 ): Extract<OrchestrationResult, { kind: 'held' }> {
   const handoff = buildFinalizerHandoff({
     runId: deps.runId,
@@ -1486,6 +1589,10 @@ function buildFindingHold(
     ...(deps.worktreePath !== undefined ? { worktreePath: deps.worktreePath } : {}),
     preserveBranch: true,
     preserveWorktree: true,
+    ...(details.reviewQuorum !== undefined ? { reviewQuorum: details.reviewQuorum } : {}),
+    ...(details.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: details.reviewQuorumFailure }
+      : {}),
   };
 }
 

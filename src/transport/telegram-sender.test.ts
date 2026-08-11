@@ -581,6 +581,26 @@ describe('TelegramSender', () => {
       expect(text).toContain('rune(rune): closeout');
     });
 
+    it('delivers typed review-quorum progress with role, duration, retry, and failure category', async () => {
+      sender.onMutationEvent({
+        ...workRunEvent('completed', {}),
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: {
+          event: 'review-quorum-satisfied',
+          satisfyingRole: 'security',
+          line: 'security satisfied independent review quorum; reviewer operational-failure in 270500ms (executor-exit), retry exhausted; security pass in 900ms.',
+        },
+      } as any);
+      await flush();
+
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('security satisfied independent review quorum');
+      expect(text).toContain('270500ms');
+      expect(text).toContain('executor-exit');
+      expect(text).toContain('retry exhausted');
+    });
+
     it('does not deliver a progress event for a non-work-run mutation', async () => {
       sender.onMutationEvent({
         kind: 'mutation-event',

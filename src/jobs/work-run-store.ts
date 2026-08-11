@@ -37,9 +37,13 @@ import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 import { readJsonlTail } from './jsonl-tail.js';
 import type { WorkRunTarget } from '../intent/run-target.js';
 import type { OperationCancellation } from '../cancellation.js';
-import type {
-  AdjudicationFailure,
-  JudgmentOutcomeEvidence,
+import {
+  parseReviewQuorumEvidence,
+  parseReviewQuorumFailure,
+  type ReviewQuorumEvidence,
+  type ReviewQuorumFailure,
+  type AdjudicationFailure,
+  type JudgmentOutcomeEvidence,
 } from '../intent/team-task-workflow.js';
 // Runtime value, same rationale as `PHASE_ORDER` above: the workflow does NOT
 // import this module, so there is no cycle, and deriving the allowlist from the
@@ -175,6 +179,8 @@ export interface WorkRunSummary {
   cancellation?: WorkRunCancellation;
   /** Bounded secondary outcomes from a post-coder judgment batch. */
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
+  reviewQuorum?: ReviewQuorumEvidence;
+  reviewQuorumFailure?: ReviewQuorumFailure;
   /** Immutable cause plus separate cleanup result. Absent on legacy summaries. */
   trigger?: ExecutionTerminalTrigger;
   disposition?: ExecutionTerminalDisposition;
@@ -284,6 +290,9 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
   const rawCancellation = (parsed as Record<string, unknown>)['cancellation'];
   const rawJudgmentOutcomes =
     (parsed as Record<string, unknown>)['judgmentOutcomes'];
+  const rawReviewQuorum = (parsed as Record<string, unknown>)['reviewQuorum'];
+  const rawReviewQuorumFailure =
+    (parsed as Record<string, unknown>)['reviewQuorumFailure'];
   const rawTrigger = (parsed as Record<string, unknown>)['trigger'];
   const rawDisposition = (parsed as Record<string, unknown>)['disposition'];
   const rawContextFailure = (parsed as Record<string, unknown>)['contextFailure'];
@@ -317,6 +326,14 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     : parseJudgmentOutcomes(rawJudgmentOutcomes);
   const judgmentOutcomesValid =
     rawJudgmentOutcomes === undefined || judgmentOutcomes !== undefined;
+  const reviewQuorum = parseReviewQuorumEvidence(rawReviewQuorum);
+  const reviewQuorumValid = rawReviewQuorum === undefined || reviewQuorum !== undefined;
+  const reviewQuorumFailure = parseReviewQuorumFailure(rawReviewQuorumFailure);
+  const reviewQuorumFailureValid =
+    rawReviewQuorumFailure === undefined || reviewQuorumFailure !== undefined;
+  const reviewQuorumStateConsistent = reviewQuorum?.status === 'failed'
+    ? reviewQuorumFailure !== undefined
+    : reviewQuorumFailure === undefined;
   const triggerValid = rawTrigger === undefined || isExecutionTerminalTrigger(rawTrigger);
   const dispositionValid = rawDisposition === undefined || isExecutionTerminalDisposition(rawDisposition);
   const contextFailure = rawContextFailure === undefined
@@ -365,7 +382,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
     s.product.trim() !== '' &&
     typeof s.outcome === 'string' &&
     targetValid &&
-    cancellationValid && judgmentOutcomesValid &&
+    cancellationValid && judgmentOutcomesValid && reviewQuorumValid && reviewQuorumFailureValid &&
+    reviewQuorumStateConsistent &&
     triggerValid && dispositionValid && contextFailureValid &&
     relatedTestDiagnosticValid && relatedTestDiagnosticsValid &&
     relatedTestProjectionConsistent && adjudicationFailureValid &&
@@ -380,6 +398,8 @@ export function readWorkRunSummaryResult(dir: string, id: string): WorkRunSummar
       ...baseSummary,
       ...(cancellation !== undefined ? { cancellation } : {}),
       ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
+      ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+      ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
       ...(relatedTestDiagnostics !== undefined ? { relatedTestDiagnostics } : {}),

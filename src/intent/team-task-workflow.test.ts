@@ -787,7 +787,7 @@ describe('team-task-workflow — reviewer independence', () => {
     expect(reviewerInput).not.toHaveProperty('hiddenReasoning');
   });
 
-  it('BLOCKS fail-closed when no distinct-provider reviewer can be resolved', async () => {
+  it('keeps reviewer independence fail-closed without suppressing a tech-lead quorum path', async () => {
     let reviewerCalled = false;
     const deps = makeDeps({
       resolveReviewerProvider: () => null, // executor unavailable
@@ -797,8 +797,12 @@ describe('team-task-workflow — reviewer independence', () => {
       },
     });
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.blockedReason).toContain('independ');
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewQuorum).toMatchObject({
+      status: 'satisfied',
+      satisfyingRole: 'tech-lead',
+      roles: { reviewer: { status: 'operational-failure' } },
+    });
     // Never a same-provider review.
     expect(reviewerCalled).toBe(false);
   });
@@ -1849,7 +1853,7 @@ describe('team-task-workflow — objection gate', () => {
     ]);
   });
 
-  it('rejects the retired irreversibility class as malformed review-gate output', async () => {
+  it('records a retired irreversibility class as an operational reviewer failure while sibling quorum proceeds', async () => {
     const deps = makeDeps({
       reviewer: async () => ({
         outcome: 'fail',
@@ -1865,16 +1869,17 @@ describe('team-task-workflow — objection gate', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('failed');
-    expect(ev.loopExitReason).toBe('operational');
-    expect(ev.failureReason).toMatch(/operational|malformed class|unsupported class/i);
-    expect(ev).not.toHaveProperty('blockedReason');
-    expect(ev.rejectionFeedback).toMatchObject({
-      rejectingRole: 'reviewer',
-      rejectedRole: 'coder',
-      rejectedArtifact: 'reviewer-verdict',
-      reason: expect.stringMatching(/irreversibility|malformed class|unsupported class/i),
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewQuorum).toMatchObject({
+      status: 'satisfied',
+      satisfyingRole: 'tech-lead',
+      roles: { reviewer: { status: 'operational-failure' } },
     });
+    expect(ev.judgmentOutcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'reviewer', status: 'failed' }),
+      expect.objectContaining({ role: 'tech-lead', status: 'pass' }),
+    ]));
+    expect(ev).not.toHaveProperty('rejectionFeedback');
   });
 });
 
@@ -1967,7 +1972,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }
   });
 
-  it('fails closed to operational failed evidence on an unknown reviewer outcome without spending a coder correction round', async () => {
+  it('treats an unknown reviewer outcome as an operational role failure without spending a coder correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const deps = makeDeps({
       coder: async (input) => {
@@ -1983,17 +1988,19 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('failed');
-    expect(ev.loopExitReason).toBe('operational');
+    expect(ev.outcome).toBe('ready-for-closeout');
     expect(ev.objectionOpen).toBe(false);
-    expect(ev.failureReason).toMatch(/operational|unknown outcome|unsupported outcome/i);
-    expect(ev).not.toHaveProperty('blockedReason');
+    expect(ev.reviewQuorum).toMatchObject({
+      status: 'satisfied',
+      satisfyingRole: 'tech-lead',
+      roles: { reviewer: { status: 'operational-failure' } },
+    });
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
 
-  it('fails closed on an unsupported reviewer outcome without public block residue or a blocked task outcome', async () => {
+  it('normalizes an unsupported reviewer outcome while a valid sibling supplies quorum', async () => {
     const ev = await runTeamTaskWorkflow(
       codeTask,
       { ...INPUT, cap: 1 },
@@ -2006,10 +2013,8 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       }),
     );
 
-    expect(ev.outcome).toBe('failed');
-    expect(ev.loopExitReason).toBe('operational');
-    expect(ev.failureReason).toMatch(/unsupported outcome/i);
-    expect(ev).not.toHaveProperty('blockedReason');
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewQuorum).toMatchObject({ status: 'satisfied', satisfyingRole: 'tech-lead' });
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(ev.gateVerdicts?.reviewer?.outcome).toBe('fail');
     expect(ev.reviewerVerdict?.outcome).not.toBe('block');
@@ -2187,7 +2192,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev).not.toHaveProperty('acceptance');
   });
 
-  it('fails safe to operational failed evidence when reviewer severity is malformed, without spending a coder correction round', async () => {
+  it('records malformed reviewer severity as an operational role failure while a sibling can satisfy quorum', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const malformedFinding = {
       class: 'security',
@@ -2207,18 +2212,22 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('failed');
-    expect(ev.loopExitReason).toBe('operational');
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.loopExitReason).toBe('all-low');
     expect(ev.objectionOpen).toBe(false);
-    expect(ev.failureReason).toMatch(/operational|malformed severity/i);
-    expect(ev).not.toHaveProperty('blockedReason');
-    expect(ev.rejectionFeedback).toMatchObject({
-      rejectingRole: 'reviewer',
-      rejectedRole: 'coder',
-      rejectedArtifact: 'reviewer-verdict',
-      reason: expect.stringMatching(/malformed severity|unsupported severity/i),
+    expect(ev.reviewQuorum).toMatchObject({
+      status: 'satisfied',
+      satisfyingRole: 'tech-lead',
+      roles: {
+        reviewer: expect.objectContaining({
+          status: 'operational-failure',
+          failureCategory: 'invalid-verdict',
+        }),
+      },
     });
-    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.rejectionFeedback).toBeUndefined();
+    expect(ev.gateVerdicts?.reviewer).toBeUndefined();
+    expect(ev.findingsLedger).toEqual([]);
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
@@ -2397,18 +2406,6 @@ describe('team-task-workflow — gate rejection records', () => {
       expected: Partial<GateRejectionFeedback>;
     }> = [
       {
-        name: 'reviewer independence',
-        task: codeTask,
-        deps: { resolveReviewerProvider: () => null },
-        expected: {
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          rejectedRole: 'coder',
-          artifact: 'reviewer-verdict',
-          rejectedArtifact: 'reviewer-verdict',
-        },
-      },
-      {
         name: 'tech-lead test intent',
         task: codeTask,
         deps: {
@@ -2480,17 +2477,6 @@ describe('team-task-workflow — gate rejection records', () => {
       deps: Partial<TeamTaskDeps>;
       expected: Partial<GateRejectionFeedback>;
     }> = [
-      {
-        name: 'reviewer independence',
-        task: codeTask,
-        deps: { resolveReviewerProvider: () => null },
-        expected: {
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          rejectedRole: 'coder',
-          rejectedArtifact: 'reviewer-verdict',
-        },
-      },
       {
         name: 'tech-lead test intent',
         task: codeTask,
@@ -2571,7 +2557,7 @@ describe('team-task-workflow — gate rejection records', () => {
     }
   });
 
-  it('records fail-closed reviewer-independence rejection through the gate-rejection hook', async () => {
+  it('records reviewer-binding unavailability as operational quorum evidence, not a gate rejection', async () => {
     const recorded: GateRejectionFeedback[] = [];
     const ev = await runTeamTaskWorkflow(
       codeTask,
@@ -2584,14 +2570,14 @@ describe('team-task-workflow — gate rejection records', () => {
       }),
     );
 
-    expect(ev.outcome).toBe('blocked');
-    expect(recorded).toEqual([ev.rejectionFeedback]);
-    expect(recorded[0]).toMatchObject({
-      rejectingRole: 'reviewer',
-      counterpartRole: 'coder',
-      rejectedRole: 'coder',
-      rejectedArtifact: 'reviewer-verdict',
-      reason: 'reviewer independence: no distinct-provider reviewer available',
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(recorded).toEqual([]);
+    expect(ev).toMatchObject({
+      reviewQuorum: {
+        status: 'satisfied',
+        satisfyingRole: 'tech-lead',
+        roles: { reviewer: { status: 'operational-failure' } },
+      },
     });
   });
 });
@@ -4762,7 +4748,7 @@ describe('team-task-workflow — security routing', () => {
 
     const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 1 }, deps);
     expect(evidence.outcome).toBe('blocked');
-    expect(evidence.blockedReason).toMatch(/security review/i);
+    expect(evidence.blockedReason).toMatch(/unresolved task feedback/i);
   });
 
   it('keeps a failed security gate authoritative after non-final split adjudication', async () => {
@@ -4789,7 +4775,7 @@ describe('team-task-workflow — security routing', () => {
 
     const evidence = await runTeamTaskWorkflow(securityTask, { ...INPUT, cap: 3 }, deps);
 
-    expect(adjudicatorCalls).toBe(1);
+    expect(adjudicatorCalls).toBe(2);
     expect(evidence.outcome).toBe('blocked');
     expect(evidence.blockedReason).toMatch(/security review/i);
   });
@@ -5311,16 +5297,14 @@ describe('team-task-workflow — parallel judgment batch', () => {
     });
   });
 
-  it('forces and bounds sibling cleanup when a cancelled judgment never settles', async () => {
+  it('forces and bounds unresolved sibling cleanup after quorum is satisfied', async () => {
     vi.useFakeTimers();
     try {
       const forceCancelJudgmentBatch = vi.fn();
       const finishJudgmentBatch = vi.fn();
       const never = new Promise<{ pass: boolean }>(() => {});
       const deps = makeDeps({
-        reviewer: async () => {
-          throw new Error('reviewer provider failed');
-        },
+        reviewer: async () => ({ outcome: 'pass', findings: [] }),
         techLeadReviewDiff: async () => never,
         forceCancelJudgmentBatch,
         finishJudgmentBatch,
@@ -5333,12 +5317,12 @@ describe('team-task-workflow — parallel judgment batch', () => {
       );
 
       await expect(pending).resolves.toMatchObject({
-        outcome: 'failed',
-        failureReason: 'reviewer provider failed',
+        outcome: 'ready-for-closeout',
         judgmentOutcomes: [
-          { role: 'reviewer', status: 'failed' },
+          { role: 'reviewer', status: 'pass' },
           { role: 'tech-lead', status: 'cancelled' },
         ],
+        reviewQuorum: { status: 'satisfied', satisfyingRole: 'reviewer' },
       });
       expect(forceCancelJudgmentBatch).toHaveBeenCalledOnce();
       expect(finishJudgmentBatch).toHaveBeenCalledOnce();
@@ -5347,40 +5331,36 @@ describe('team-task-workflow — parallel judgment batch', () => {
     }
   });
 
-  it('keeps the stable primary failure while awaiting internally-cancelled siblings', async () => {
+  it('terminates on a non-coordinator internal cancellation without recasting it as rejection', async () => {
     const internalCancellation = {
       operationId: 'internal-batch-member',
       source: 'internal' as const,
       requestedAt: '2026-07-29T12:00:00.000Z',
     };
     let cancelBatchCalls = 0;
-    let cancelTechLead: (() => void) | undefined;
-    const techLeadPending = new Promise<{ pass: boolean }>((_resolve, reject) => {
-      cancelTechLead = () =>
-        reject(new RoleCancellationError('tech-lead', internalCancellation));
-    });
     const deps = makeDeps({
       reviewer: async () => {
         throw new Error('reviewer provider failed');
       },
-      techLeadReviewDiff: async () => techLeadPending,
+      techLeadReviewDiff: async () => {
+        throw new RoleCancellationError('tech-lead', internalCancellation);
+      },
       cancelJudgmentBatch: () => {
         cancelBatchCalls += 1;
-        cancelTechLead?.();
       },
     });
 
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
     expect(evidence).toMatchObject({
-      outcome: 'failed',
-      failureReason: 'reviewer provider failed',
+      outcome: 'cancelled',
+      cancellation: { source: 'internal' },
       judgmentOutcomes: [
         { role: 'reviewer', status: 'failed' },
         { role: 'tech-lead', status: 'cancelled' },
       ],
     });
-    expect(cancelBatchCalls).toBeGreaterThan(0);
+    expect(cancelBatchCalls).toBe(0);
   });
 
   it('selects the primary operational failure by role order, not completion order', async () => {
@@ -5399,14 +5379,16 @@ describe('team-task-workflow — parallel judgment batch', () => {
     const evidence = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
     expect(evidence.outcome).toBe('failed');
-    expect(evidence.failureReason).toBe('reviewer operational failure');
+    expect(evidence.failureReason).toMatch(
+      /Review quorum operational hold: reviewer provider after \d+ms: reviewer operational failure; tech-lead provider after \d+ms: tech-lead operational failure/,
+    );
     expect(evidence.judgmentOutcomes).toEqual([
       { role: 'reviewer', status: 'failed', summary: 'reviewer operational failure' },
       { role: 'tech-lead', status: 'failed', summary: 'tech-lead operational failure' },
     ]);
   });
 
-  it('produces identical findings, feedback evidence, and public events across completion orders', async () => {
+  it('makes the first completed objection authoritative and cancels only unresolved siblings', async () => {
     const reviewerFinding: ObjectionFinding = {
       class: 'security',
       severity: 'medium',
@@ -5453,12 +5435,23 @@ describe('team-task-workflow — parallel judgment batch', () => {
     const forward = await runWithDelays({ reviewer: 2, 'tech-lead': 3, designer: 4 });
     const reverse = await runWithDelays({ reviewer: 3, 'tech-lead': 2, designer: 1 });
 
-    expect(reverse.evidence).toEqual(forward.evidence);
-    expect(reverse.events).toEqual(forward.events);
-    expect(forward.evidence.findingsLedger.map(({ sourceGate }) => sourceGate)).toEqual([
-      'reviewer',
-      'tech-lead',
-      'designer',
+    expect(forward.evidence.reviewQuorum).toMatchObject({
+      status: 'objected',
+      objectingRole: 'reviewer',
+    });
+    expect(reverse.evidence.reviewQuorum).toMatchObject({
+      status: 'objected',
+      objectingRole: 'tech-lead',
+    });
+    expect(forward.evidence.judgmentOutcomes).toEqual([
+      { role: 'reviewer', status: 'reject' },
+      { role: 'tech-lead', status: 'cancelled', summary: 'tech-lead cancelled' },
+      { role: 'designer', status: 'cancelled', summary: 'designer cancelled' },
+    ]);
+    expect(reverse.evidence.judgmentOutcomes).toEqual([
+      { role: 'reviewer', status: 'cancelled', summary: 'reviewer cancelled' },
+      { role: 'tech-lead', status: 'reject' },
+      { role: 'designer', status: 'pass' },
     ]);
   });
 });

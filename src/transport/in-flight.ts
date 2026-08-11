@@ -55,6 +55,7 @@ interface CorrelatedCancellation {
 }
 
 const correlatedCancellations = new Map<string, CorrelatedCancellation>();
+const correlatedAgentCancellations = new Map<string, CorrelatedCancellation>();
 
 let _bus: NotificationBus | null = null;
 let _ticker: ReturnType<typeof setInterval> | null = null;
@@ -190,7 +191,12 @@ export function registerOp(input: {
   ensureTicker();
   const correlatedCancellation = op.batchId === undefined
     ? undefined
-    : correlatedCancellations.get(correlationKey(op.batchId, ownerOf(op)))?.cancellation;
+    : correlatedCancellations.get(correlationKey(op.batchId, ownerOf(op)))?.cancellation ??
+      (op.agentName === undefined
+        ? undefined
+        : correlatedAgentCancellations.get(
+            agentCorrelationKey(op.batchId, ownerOf(op), op.agentName),
+          )?.cancellation);
   if (correlatedCancellation !== undefined) {
     cancelWithRecord(op, inducedCancellationFor(op, correlatedCancellation));
   }
@@ -282,6 +288,40 @@ export function cancelCorrelatedOps(
   return siblings.length;
 }
 
+/** Cancel only named agents in a batch. Per-agent tombstones close the spawn
+ * registration race without cancelling a required designer in the same batch. */
+export function cancelCorrelatedAgentOps(
+  batchId: string,
+  agentNames: readonly string[],
+  requestedOwner?: CorrelatedOpOwner,
+): number {
+  const owner = resolveCorrelationOwner(batchId, 'internal', requestedOwner);
+  if (owner === undefined) return 0;
+  const selected = new Set(agentNames);
+  const siblings = [...ops.values()].filter((op) =>
+    op.batchId === batchId && sameOwner(ownerOf(op), owner) &&
+    op.agentName !== undefined && selected.has(op.agentName));
+  const requestedAt = new Date().toISOString();
+  for (const agentName of selected) {
+    correlatedAgentCancellations.set(agentCorrelationKey(batchId, owner, agentName), {
+      owner: { ...owner },
+      cancellation: {
+        operationId: siblings.find((op) => op.agentName === agentName)?.opId ?? batchId,
+        source: 'internal',
+        requestedAt,
+      },
+    });
+  }
+  for (const sibling of siblings) {
+    cancelWithRecord(sibling, {
+      operationId: sibling.opId,
+      source: 'internal',
+      requestedAt,
+    });
+  }
+  return siblings.length;
+}
+
 /** Drop a batch cancellation tombstone after its owner has awaited every
  * member. Active operations retain their own cancellation records. */
 export function clearCorrelatedCancellation(
@@ -290,10 +330,18 @@ export function clearCorrelatedCancellation(
 ): void {
   if (owner !== undefined) {
     correlatedCancellations.delete(correlationKey(batchId, owner));
+    for (const key of correlatedAgentCancellations.keys()) {
+      if (key.startsWith(`${correlationKey(batchId, owner)}\0`)) {
+        correlatedAgentCancellations.delete(key);
+      }
+    }
     return;
   }
   for (const key of correlatedCancellations.keys()) {
     if (key.startsWith(`${batchId}\0`)) correlatedCancellations.delete(key);
+  }
+  for (const key of correlatedAgentCancellations.keys()) {
+    if (key.startsWith(`${batchId}\0`)) correlatedAgentCancellations.delete(key);
   }
 }
 
@@ -309,6 +357,21 @@ export function forceCancelCorrelatedOps(
   const siblings = [...ops.values()].filter(
     (op) => op.batchId === batchId && sameOwner(ownerOf(op), owner),
   );
+  for (const sibling of siblings) signalOp(sibling, 'SIGKILL');
+  return siblings.length;
+}
+
+export function forceCancelCorrelatedAgentOps(
+  batchId: string,
+  agentNames: readonly string[],
+  requestedOwner?: CorrelatedOpOwner,
+): number {
+  const owner = resolveCorrelationOwner(batchId, 'internal', requestedOwner);
+  if (owner === undefined) return 0;
+  const selected = new Set(agentNames);
+  const siblings = [...ops.values()].filter((op) =>
+    op.batchId === batchId && sameOwner(ownerOf(op), owner) &&
+    op.agentName !== undefined && selected.has(op.agentName));
   for (const sibling of siblings) signalOp(sibling, 'SIGKILL');
   return siblings.length;
 }
@@ -363,6 +426,14 @@ function sameOwner(left: CorrelatedOpOwner, right: CorrelatedOpOwner): boolean {
 
 function correlationKey(batchId: string, owner: CorrelatedOpOwner): string {
   return `${batchId}\0${owner.userId}\0${owner.scope ?? ''}`;
+}
+
+function agentCorrelationKey(
+  batchId: string,
+  owner: CorrelatedOpOwner,
+  agentName: string,
+): string {
+  return `${correlationKey(batchId, owner)}\0${agentName}`;
 }
 
 function resolveCorrelationOwner(

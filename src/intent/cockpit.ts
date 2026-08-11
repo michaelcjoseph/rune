@@ -100,6 +100,8 @@ export interface WorkRunProjection {
   contextFailure?: import('./context-closeout.js').ContextCloseoutFailure;
   gateValidationReceipt?: import('./full-suite-attestation.js').GateValidationReceipt;
   preCloseoutValidation?: import('./pre-closeout-validation.js').PreCloseoutValidationEvidence;
+  reviewQuorum?: import('./team-task-workflow.js').ReviewQuorumEvidence;
+  reviewQuorumFailure?: import('./team-task-workflow.js').ReviewQuorumFailure;
 }
 
 /** One project as the cockpit presents it — lifecycle status and run-status side by side. */

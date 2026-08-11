@@ -3,10 +3,21 @@ import { join } from 'node:path';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
 import { isExecutionCheckpoint } from '../intent/execution-failure.js';
 import { isGitObjectId } from '../intent/team-task-workflow.js';
+import { parseReviewBatchState } from '../intent/review-batch-state.js';
 import { writeFileAtomic } from '../intent/backlog-write-lock.js';
 
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
 
+/** Atomically persist a resumable cursor.
+ *
+ *  Deliberately synchronous. `persistReviewBatch` calls this on every review-role
+ *  state transition with a `ReviewBatchState` bounded at 256,000 chars, so this
+ *  is a real blocking cost on the shared event loop — but the callers in
+ *  `orchestrated-work-runner.test.ts` drive terminal flows through a
+ *  microtask-only `waitForCondition` (deliberately not setTimeout, because the
+ *  suite runs under fake timers), and real `fs/promises` I/O resolves on the
+ *  thread pool where a microtask poll can never observe it. Converting this to
+ *  async requires reworking that helper first — see the review notes. */
 export function writeOrchestratedRunCursor(
   baseDir: string,
   runId: string,
@@ -69,6 +80,7 @@ function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCurs
         position.currentTaskId === cursor.taskBase.taskId
       )
     ) &&
-    (cursor.executionCheckpoint === undefined || isExecutionCheckpoint(cursor.executionCheckpoint))
+    (cursor.executionCheckpoint === undefined || isExecutionCheckpoint(cursor.executionCheckpoint)) &&
+    (cursor.reviewBatch === undefined || parseReviewBatchState(cursor.reviewBatch) !== undefined)
   );
 }

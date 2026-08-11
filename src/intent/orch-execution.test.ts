@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { assembleTaskContext } from './orch-context-assembly.js';
 import { buildTaskRunRecord, type TaskRunRecord } from './orch-run-record.js';
+import type { ReviewQuorumFailure } from './team-task-workflow.js';
 import {
   buildFinalizerHandoff,
   runFinalizerHandoff,
@@ -186,6 +187,103 @@ describe('orch-run-record — required fields', () => {
     expect(rec.judgmentOutcomes?.[0]?.summary).toHaveLength(500);
     expect(rec.judgmentOutcomes).not.toBe(judgmentOutcomes);
     expect(rec.judgmentOutcomes?.[0]).not.toBe(judgmentOutcomes[0]);
+  });
+
+  it('defensively copies typed review quorum evidence into the task record', () => {
+    const reviewQuorum = {
+      status: 'satisfied' as const,
+      satisfyingRole: 'security' as const,
+      roles: {
+        reviewer: {
+          status: 'operational-failure' as const,
+          attemptsConsumed: 2,
+          retryEligible: false,
+          failureCategory: 'timeout' as const,
+          diagnostic: '/Users/operator/private/reviewer timed out',
+        },
+        security: {
+          status: 'pass' as const,
+          attemptsConsumed: 1,
+          retryEligible: false,
+          durationMs: 900,
+        },
+      },
+    };
+    const rec = buildTaskRunRecord({
+      taskId: 'quorum-evidence',
+      taskText: 'Persist quorum evidence',
+      attemptId: 'a-quorum',
+      rolesInvoked: ['reviewer', 'security'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      reviewQuorum,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.reviewQuorum).toMatchObject({
+      status: 'satisfied',
+      satisfyingRole: 'security',
+      roles: { reviewer: { status: 'operational-failure' } },
+    });
+    expect(rec.reviewQuorum?.roles.reviewer?.diagnostic).not.toContain('/Users/operator');
+    expect(rec.reviewQuorum).not.toBe(reviewQuorum);
+  });
+
+  it('defensively copies and scrubs typed review quorum failure evidence into the task record', () => {
+    const reviewQuorumFailure: ReviewQuorumFailure = {
+      category: 'review-paths-exhausted',
+      failedRoles: ['reviewer', 'tech-lead'],
+      diagnostic: 'every eligible path failed while reading /Users/operator/private/notes.md',
+    };
+    const rec = buildTaskRunRecord({
+      taskId: 'quorum-failure-evidence',
+      taskText: 'Persist quorum failure evidence',
+      attemptId: 'a-quorum-failure',
+      rolesInvoked: ['reviewer', 'tech-lead'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      reviewQuorumFailure,
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'failed',
+    });
+
+    expect(rec.reviewQuorumFailure).toMatchObject({
+      category: 'review-paths-exhausted',
+      failedRoles: ['reviewer', 'tech-lead'],
+    });
+    expect(rec.reviewQuorumFailure?.diagnostic).not.toContain('/Users/operator');
+    expect(rec.reviewQuorumFailure).not.toBe(reviewQuorumFailure);
+    expect(rec.reviewQuorumFailure?.failedRoles).not.toBe(reviewQuorumFailure.failedRoles);
+  });
+
+  it('drops a malformed review quorum failure rather than persisting an unrecognized category', () => {
+    const rec = buildTaskRunRecord({
+      taskId: 'quorum-failure-malformed',
+      taskText: 'Reject malformed quorum failure evidence',
+      attemptId: 'a-quorum-failure-malformed',
+      rolesInvoked: ['reviewer'],
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: null,
+      verdicts: {},
+      reviewQuorumFailure: {
+        category: 'not-a-real-category',
+        failedRoles: ['reviewer'],
+        diagnostic: 'malformed',
+      } as unknown as TaskRunRecord['reviewQuorumFailure'],
+      contextOutcome: 'unchanged',
+      gates: { objectionOpen: false },
+      outcome: 'failed',
+    });
+
+    expect(rec.reviewQuorumFailure).toBeUndefined();
   });
 
   it('persists bounded adjudication and downgrade evidence with path scrubbing', () => {

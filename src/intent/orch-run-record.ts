@@ -23,6 +23,10 @@ import {
   type JudgmentOutcomeEvidence,
   type ObjectionFinding,
   type PmAcceptance,
+  type ReviewQuorumEvidence,
+  type ReviewQuorumFailure,
+  parseReviewQuorumEvidence,
+  parseReviewQuorumFailure,
 } from './team-task-workflow.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 import {
@@ -107,6 +111,10 @@ export interface TaskRunRecord {
   preCloseoutValidation?: PreCloseoutValidationEvidence;
   /** Stable, bounded post-coder fan-in outcomes. Optional for historical JSONL. */
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
+  /** Batch-level quorum truth, distinct from individual call outcomes. */
+  reviewQuorum?: ReviewQuorumEvidence;
+  /** Typed reason no durable review path could complete. */
+  reviewQuorumFailure?: ReviewQuorumFailure;
   /** Stable pre-mutation task tree. Optional for historical JSONL. */
   taskBaseTree?: string;
   /** Exact tree judged by the downstream reviewer/tech-lead/designer gates. */
@@ -134,6 +142,8 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
   );
   const invariantChecklist = durableInvariantChecklistEvidence(input.invariantChecklist);
   const invariantReviewFailure = durableInvariantReviewFailure(input.invariantReviewFailure);
+  const reviewQuorum = parseReviewQuorumEvidence(input.reviewQuorum);
+  const reviewQuorumFailure = parseReviewQuorumFailure(input.reviewQuorumFailure);
   return {
     taskId: input.taskId,
     taskText: input.taskText,
@@ -217,6 +227,8 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
           })),
         }
       : {}),
+    ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+    ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
     ...(input.taskBaseTree !== undefined
       ? { taskBaseTree: input.taskBaseTree }
       : {}),

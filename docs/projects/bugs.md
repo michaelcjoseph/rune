@@ -1,51 +1,5 @@
 ## Active
 
-- [ ] **A transient failure in one parallel review cancels the other independent reviews and terminally parks otherwise reviewable work.**
-  - **What is broken.** Rune starts reviewer, security, and tech-lead diff reviews in parallel, but treats the first operational failure from any one of them as terminal. It cancels the remaining in-flight reviews, even when one of them could still return a valid independent verdict. A model transport failure therefore has more authority than a completed review.
-
-  - **Observed failure.** Run `f8d9e37b-5ebc-4581-b72c-6e20902f9e91` for Project 24 entered its final review wave after the coder repaired the closeout timeout-reaping defect. At `2026-08-08T16:44:24Z`, Rune started:
-    - `reviewer` on Claude Opus
-    - `security` on Claude Opus
-    - `tech-lead` on Claude Fable
-
-    The reviewer process aborted mid-stream after 270.5 seconds with exit code 143 and `terminal_reason: "aborted_streaming"`. Rune recorded the failure as `Claude timed out after 1800s`, then cancelled security 197ms later and tech-lead 215ms later. Neither cancelled role returned a verdict. Rune parked the worktree at WIP commit `37072d8`.
-
-  - **User impact.** A transient failure in one external model call strands valid work even though independent reviewers are still actively evaluating it. The operator must diagnose and restart a run that could have safely progressed. The displayed timeout diagnostic is also inaccurate: the call ran for roughly 270 seconds, not 1,800.
-
-  - **Root cause.** The parallel review stage uses failure-fast fan-out semantics. Any role-call error rejects the shared review operation, and terminal cleanup cancels sibling calls before the orchestrator evaluates whether another completed or still-active review can satisfy the review requirement. Rune has no review-quorum model that distinguishes:
-    - a negative review verdict,
-    - a transient operational failure,
-    - an in-flight independent review that can still complete.
-
-  - **Policy decision.** The general review quorum is one completed independent review. A valid completed reviewer, security, or tech-lead verdict can satisfy quorum. Coder self-review, QA confirmation, and copied prior-tree verdicts do not count.
-
-    A completed hard objection from any review role remains blocking. A transient review-call failure is not a negative verdict and must not cancel sibling reviews.
-
-  - **Required fix.**
-    1. Model each parallel review role as an independent durable state: `pending`, `running`, `verdict`, `operational-failure`, or `cancelled`, with timestamps, model/provider metadata, and bounded diagnostics.
-    2. Replace fail-fast parallel review handling with quorum-aware coordination. When one review fails operationally, preserve every sibling call that is already running.
-    3. Continue when one independent review returns a valid non-blocking verdict. Record which role satisfied quorum and preserve unfinished or failed sibling outcomes as diagnostic evidence.
-    4. If a completed review returns a hard objection, cancel unnecessary sibling calls and block the task through the existing objection path.
-    5. Retry or replace a failed reviewer only when no completed or still-running independent review can satisfy quorum. Retry policy must be bounded, durable across restart, and use the existing model-policy fallback rules where available.
-    6. If all review paths fail operationally before quorum, surface an operational hold with the exact failed roles, actual durations, retry eligibility, and preserved work state. Do not mislabel an aborted stream as an elapsed timeout.
-    7. Do not change the immutable terminal history of a prior run. A retry remains a new attempt linked to the parked source run and WIP SHA.
-
-  - **Cockpit and notification contract.**
-    - Show review quorum status separately from individual review-call status.
-    - When one review fails while others continue, publish progress such as: `Reviewer unavailable; security and tech-lead reviews continue. One completed independent review will satisfy review quorum.`
-    - On quorum success, state which completed role satisfied it and which sibling reviews were unavailable, still running, or cancelled after quorum.
-    - On operational hold, show actual call durations and the raw typed failure category without exposing prompt contents or host paths.
-    - Never present a completed reviewer failure as though security and tech-lead independently rejected the work.
-
-  - **Acceptance criteria.**
-    - With reviewer, security, and tech-lead reviews running in parallel, a reviewer transport failure does not cancel the still-running security or tech-lead calls.
-    - If either remaining role returns a valid non-blocking verdict, the task continues through the normal closeout path and records that role as the independent review quorum.
-    - A completed hard objection from any review role blocks the task, even if another role has already satisfied ordinary quorum.
-    - If one review fails and no sibling is active or has completed a valid verdict, Rune performs a bounded retry or model-policy replacement before creating an operational hold.
-    - If all eligible review attempts fail operationally, Rune preserves the work, records per-role outcomes and actual durations, and emits an actionable retry/hold notification.
-    - An `aborted_streaming` / exit-143 failure records its measured duration and is not reported as a configured timeout unless the configured timeout actually elapsed.
-    - Restart recovery preserves pending quorum state and does not launch duplicate reviews or lose completed verdicts.
-    - Tests cover reviewer failure with sibling quorum success, security failure with sibling quorum success, simultaneous failures, hard objection precedence, retry exhaustion, cancellation only after quorum or objection, restart recovery, and truthful duration/error reporting....
 - [ ] **Terminal WIP preservation has no explicit retry path, leaving a valid preserved branch stranded or tempting Recover to rewrite immutable terminal truth.**
   - **What is broken.** When terminal cleanup preserves dirty work as WIP, the run correctly retains its failure/cancellation/completion trigger and preservation disposition. The operator has no dedicated way to retry that terminal work. The existing Recover control is designed only for an active interrupted run and its resumable cursor. Reusing it for a terminal WIP would either violate its active-run preconditions or overwrite the original terminal record with a synthetic recovery.
   - **Root cause.** Rune models active-run recovery and terminal disposition separately, but exposes no operation that starts a new attempt from a terminal run's verified preserved branch/worktree while linking that attempt to the original terminal evidence. Cockpit recovery eligibility is deliberately restricted to active orchestrated mutations, and `requestOrchestratedRunRecovery()` correctly rejects a run that is no longer active.
@@ -141,6 +95,16 @@
     - Regression tests prove missing `uv` blocks before role dispatch and that a supported provisioned fixture reaches normal validation.
 
 ## Done
+
+- [x] **A transient failure in one parallel review cancels the other independent reviews and terminally parks otherwise reviewable work.**
+  - **Fixed 2026-08-10.** Post-coder review now uses a versioned durable quorum coordinator: reviewer, tech lead, and security are independently eligible, while designer remains a required conditional gate. Operational failures no longer cancel viable siblings; already-settled objections win; retries are bounded to one and reuse the durable binding unless an explicit escalation is declared; exact-tree resume restores role attempts, convergence, repair, adjudication, and handoff evidence without rerunning QA/coder/completed reviews. Quorum and typed operational failures reach run records, summaries, Cockpit, live activity, and Telegram. Claude/Codex now classify SIGTERM/143 as timeout only when Rune's timer fired and report other executor exits with measured duration. Verified by 14 focused suites (**891 tests**), repeated concurrency/restart runs, `npm run build`, architecture review (**0 blockers**), and the full suite (**359 files / 6,554 passed / 8 todo**).
+  - **What was broken.** Rune started reviewer, security, and tech-lead diff reviews in parallel, but treated the first operational failure from any one of them as terminal. It cancelled the remaining in-flight reviews, even when one of them could still return a valid independent verdict. A model transport failure therefore had more authority than a completed review.
+
+  - **Observed failure.** Run `f8d9e37b-5ebc-4581-b72c-6e20902f9e91` for Project 24 entered its final review wave after the coder repaired the closeout timeout-reaping defect. At `2026-08-08T16:44:24Z`, Rune started reviewer, security, and tech-lead reviews. The reviewer aborted mid-stream after 270.5 seconds with exit code 143 and `terminal_reason: "aborted_streaming"`. Rune reported a 1,800-second timeout, cancelled both siblings within 215ms, and parked WIP commit `37072d8` before either sibling could return a verdict.
+
+  - **Policy preserved.** One completed non-blocking reviewer, tech-lead, or security verdict satisfies general review quorum. The conditional designer is required when selected but cannot satisfy quorum. Completed objections remain blocking. Coder self-review, QA confirmation, and verdicts for a different canonical tree do not count.
+
+  - **Acceptance evidence.** Tests cover reviewer/security transport failure with sibling success, simultaneous failures, one bounded retry and escalation selection, designer gating, settled objection precedence, role-subset cancellation, exact-tree restart recovery, interrupted attempts, binding stability across policy reload, checkpoint failure, terminal projections, and truthful executor duration/category reporting.
 
 - [x] **Security-sensitive tasks discover predictable runtime invariants only in post-implementation review, creating serial coder-repair loops.**
   - **Fixed 2026-08-07.** Tasks carrying `securityNeeded` now run a bounded, read-only tech-lead draft and independent security ratification before QA. Rune validates the evidence-backed five-category contract, fails malformed/provider/checkpoint/contradictory output as a typed operational hold, and propagates one hash-bearing canonical checklist byte-for-byte through QA, test-intent review, coder/self-review, and every post-coder judgment role without replacing any existing gate. Accepted evidence and bounded failure metadata survive task records, restart diagnostics, and Cockpit activity; ordinary tasks retain the existing fast path. Verified by focused contract/workflow/executor/persistence/diagnostics/orchestrator tests, `npm run build`, and the full host suite (**357 files / 6,470 passed / 8 todo**).

@@ -1134,6 +1134,10 @@ function readNewCockpitRecentWorkRuns(): ProductDeepViewWorkRun[] {
         ? { adjudicationFailure: summary.adjudicationFailure }
         : {}),
       ...(summary?.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
+      ...(summary?.reviewQuorum ? { reviewQuorum: summary.reviewQuorum } : {}),
+      ...(summary?.reviewQuorumFailure
+        ? { reviewQuorumFailure: summary.reviewQuorumFailure }
+        : {}),
       transcriptExists: Boolean(summary?.transcriptPath),
       ...(summary?.contextFailure ? { contextFailure: summary.contextFailure } : {}),
       ...(summary?.disposition ? { disposition: summary.disposition } : {}),

@@ -363,6 +363,78 @@ describe('model map — policies/model-policy.json (Phase 8)', () => {
     expect(models.coder.provider).not.toBe(models.reviewer?.provider);
   });
 
+  it('uses a declared role escalation only for attempt two and otherwise repeats the base binding', () => {
+    const policy = loadRealPolicy();
+    const reviewerEscalation = policy.roleDefaults['tech-lead']!;
+    const models = resolveTeamRoleModels({
+      ...policy,
+      roleEscalations: { reviewer: reviewerEscalation },
+    });
+    const production = buildDeps(models);
+
+    expect(production.resolveReviewRoleBinding?.('reviewer', 1)).toMatchObject({
+      model: models.reviewer?.alias,
+    });
+    expect(production.resolveReviewRoleBinding?.('reviewer', 2)).toMatchObject({
+      model: reviewerEscalation,
+    });
+    expect(production.resolveReviewRoleBinding?.('tech-lead', 2)).toMatchObject({
+      model: models.techLead.alias,
+    });
+    expect(production.resolveReviewRoleEscalation?.('reviewer')).toMatchObject({
+      model: reviewerEscalation,
+    });
+    expect(production.resolveReviewRoleEscalation?.('tech-lead')).toBeUndefined();
+  });
+
+  it('ignores a deprecated escalation and repeats the resolved base binding', () => {
+    const policy = loadRealPolicy();
+    const deprecated = {
+      ...policy.models[0]!,
+      alias: 'deprecated-review-escalation',
+      status: 'deprecated' as const,
+    };
+    const models = resolveTeamRoleModels({
+      ...policy,
+      models: [...policy.models, deprecated],
+      roleEscalations: { reviewer: deprecated.alias },
+    });
+    const production = buildDeps(models);
+
+    expect(production.resolveReviewRoleBinding?.('reviewer', 2)).toMatchObject({
+      model: models.reviewer?.alias,
+      provider: models.reviewer?.provider,
+    });
+  });
+
+  it('executes a judgment with the coordinator-frozen durable binding', async () => {
+    let executed: { model: string; provider?: string; format?: string } | undefined;
+    const models = resolveTeamRoleModels(loadRealPolicy());
+    const production = buildDeps(models, makeSeams({
+      judgmentCall: async ({ model, provider, format }) => {
+        executed = { model, provider, format };
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    await production.techLeadReviewDiff({
+      task: sizedTask,
+      diff: 'diff --git a/src/x.ts b/src/x.ts',
+      judgmentAttempt: 2,
+      judgmentBinding: {
+        model: 'frozen-tech-lead-model',
+        provider: 'openai',
+        format: 'codex',
+      },
+    });
+
+    expect(executed).toEqual({
+      model: 'frozen-tech-lead-model',
+      provider: 'openai',
+      format: 'codex',
+    });
+  });
+
   it('keeps the adjudicator on a different provider from both disputing roles', () => {
     const policy = loadRealPolicy();
     const models = resolveTeamRoleModels(policy);
@@ -1034,6 +1106,107 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(deps.resolveReviewerProvider('openai')).toBe('anthropic');
   });
 
+  describe('production judgment-batch cancellation wiring', () => {
+    it('cancels only named agents when roles are given, and every op in the batch otherwise', async () => {
+      const { registerOp, unregisterOp, getCancellation } = await import('../transport/in-flight.js');
+      const production = buildDeps(resolveTeamRoleModels(loadRealPolicy()));
+      const batchId = 'judgment-batch-cancel-wiring-partial';
+      const reviewerOp = registerOp({
+        kind: 'agent',
+        label: 'reviewer',
+        agentName: 'reviewer',
+        userId: 12345,
+        scope: 'rune',
+        batchId,
+        child: { kill: vi.fn() } as any,
+      });
+      const designerOp = registerOp({
+        kind: 'agent',
+        label: 'designer',
+        agentName: 'designer',
+        userId: 12345,
+        scope: 'rune',
+        batchId,
+        child: { kill: vi.fn() } as any,
+      });
+
+      try {
+        production.cancelJudgmentBatch?.(batchId, 'quorum-satisfied', ['reviewer']);
+        expect(getCancellation(reviewerOp.opId)).toBeDefined();
+        expect(getCancellation(designerOp.opId)).toBeUndefined();
+      } finally {
+        unregisterOp(reviewerOp.opId, 'success');
+        unregisterOp(designerOp.opId, 'success');
+      }
+
+      const wholeBatchId = 'judgment-batch-cancel-wiring-whole';
+      const reviewerOp2 = registerOp({
+        kind: 'agent',
+        label: 'reviewer',
+        agentName: 'reviewer',
+        userId: 12345,
+        scope: 'rune',
+        batchId: wholeBatchId,
+        child: { kill: vi.fn() } as any,
+      });
+      const designerOp2 = registerOp({
+        kind: 'agent',
+        label: 'designer',
+        agentName: 'designer',
+        userId: 12345,
+        scope: 'rune',
+        batchId: wholeBatchId,
+        child: { kill: vi.fn() } as any,
+      });
+
+      try {
+        production.cancelJudgmentBatch?.(wholeBatchId);
+        expect(getCancellation(reviewerOp2.opId)).toBeDefined();
+        expect(getCancellation(designerOp2.opId)).toBeDefined();
+      } finally {
+        unregisterOp(reviewerOp2.opId, 'success');
+        unregisterOp(designerOp2.opId, 'success');
+      }
+    });
+
+    it('force-cancels (SIGKILLs) only the named process-group agents in the batch', async () => {
+      const { registerOp, unregisterOp } = await import('../transport/in-flight.js');
+      const production = buildDeps(resolveTeamRoleModels(loadRealPolicy()));
+      const batchId = 'judgment-batch-force-cancel-wiring';
+      const reviewerOp = registerOp({
+        kind: 'agent',
+        label: 'reviewer',
+        agentName: 'reviewer',
+        userId: 12345,
+        scope: 'rune',
+        batchId,
+        processGroup: true,
+        child: { kill: vi.fn(), pid: 44201 } as any,
+      });
+      const designerOp = registerOp({
+        kind: 'agent',
+        label: 'designer',
+        agentName: 'designer',
+        userId: 12345,
+        scope: 'rune',
+        batchId,
+        processGroup: true,
+        child: { kill: vi.fn(), pid: 44202 } as any,
+      });
+
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      try {
+        production.forceCancelJudgmentBatch?.(batchId, ['reviewer']);
+        expect(kill).toHaveBeenCalledWith(-44201, 'SIGKILL');
+        expect(kill).not.toHaveBeenCalledWith(-44202, 'SIGKILL');
+      } finally {
+        kill.mockRestore();
+        unregisterOp(reviewerOp.opId, 'success');
+        unregisterOp(designerOp.opId, 'success');
+      }
+    });
+  });
+
   it('renders suggested changes under actionable retry notes', async () => {
     const prompts: string[] = [];
     const deps = buildDeps(
@@ -1161,7 +1334,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(reviewerPrompt).toContain('concrete change');
   });
 
-  it('fails closed when only a same-provider reviewer is available: reviewer binding is null and the workflow blocks', async () => {
+  it('keeps the independent tech-lead quorum path alive when no reviewer binding is available', async () => {
     // A policy with ONLY anthropic models: the reviewer cannot resolve distinct
     // from an anthropic coder. `evaluatorDistinctFromGenerator: false` is
     // irrelevant here — that flag only forces `distinctFromProvider` on the
@@ -1193,15 +1366,25 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const deps = buildDeps(models);
     expect(deps.resolveReviewerProvider(models.coder.provider)).toBeNull();
 
-    // Fail-closed end to end: the workflow blocks on independence, it never
-    // downgrades to a same-provider review.
+    // The reviewer still fails closed instead of downgrading to a same-provider
+    // review, but that operational failure must not suppress the independent
+    // tech-lead path.
     const evidence = await runTeamTaskWorkflow(
       sizedTask,
       { spec: 'spec', contextMd: 'ctx', coderProvider: models.coder.provider, cap: 2 },
       deps,
     );
-    expect(evidence.outcome).toBe('blocked');
-    expect(evidence.blockedReason).toContain('reviewer independence');
+    expect(evidence).toMatchObject({
+      outcome: 'ready-for-closeout',
+      reviewQuorum: {
+        status: 'satisfied',
+        satisfyingRole: 'tech-lead',
+        roles: {
+          reviewer: { status: 'operational-failure' },
+          'tech-lead': { status: 'pass' },
+        },
+      },
+    });
   });
 
   it('judgment seams parse fenced verdicts from the injected model call (no live call), passing the resolved binding', async () => {

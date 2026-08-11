@@ -36,8 +36,10 @@ import { join } from 'node:path';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { runCodex } from '../ai/codex.js';
 import {
+  cancelCorrelatedAgentOps,
   cancelCorrelatedOps,
   clearCorrelatedCancellation,
+  forceCancelCorrelatedAgentOps,
   forceCancelCorrelatedOps,
 } from '../transport/in-flight.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
@@ -84,6 +86,7 @@ import {
   type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
 import type { ExecutionPreflightFailure } from '../intent/execution-preflight.js';
+import type { ReviewBatchBinding } from '../intent/review-batch-state.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import {
   captureCanonicalReviewState,
@@ -138,6 +141,10 @@ import {
   validateTaskValidationAdmission,
 } from './task-validation.js';
 import type { TaskValidationFailure } from '../intent/task-validation.js';
+import type {
+  ReviewBatchEligibleRole,
+  ReviewBatchState,
+} from '../intent/review-batch-state.js';
 import {
   InvariantReviewFailureError,
   parseInvariantReview,
@@ -192,6 +199,10 @@ export interface TeamRoleModels {
    *  share a model. `escalate` still reaches the prompt, so the adjudicator
    *  knows a coder round already failed to settle the objection. */
   adjudicator: RoleModelBinding | null;
+  /** Optional declared replacement bindings for the single bounded retry in
+   * the post-coder quorum wave. Missing entries intentionally reuse the base
+   * role binding. */
+  reviewEscalations?: Partial<Record<ReviewBatchEligibleRole, RoleModelBinding>>;
 }
 
 const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
@@ -269,6 +280,31 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     });
   }
 
+  const reviewEscalations: NonNullable<TeamRoleModels['reviewEscalations']> = {};
+  for (const role of ['reviewer', 'tech-lead', 'security'] as const) {
+    const alias = policy.roleEscalations?.[role];
+    if (alias === undefined) continue;
+    let binding: RoleModelBinding;
+    try {
+      binding = toBinding(alias, policy, `${role} escalation`);
+    } catch (err) {
+      log.warn('resolveTeamRoleModels: escalation binding is unavailable; using base binding', {
+        role,
+        alias,
+        error: (err as Error).message,
+      });
+      continue;
+    }
+    if (role === 'reviewer' && binding.provider === coder.provider) {
+      log.warn('resolveTeamRoleModels: reviewer escalation violates provider independence; using base binding', {
+        alias,
+        coderProvider: coder.provider,
+      });
+      continue;
+    }
+    reviewEscalations[role] = binding;
+  }
+
   return {
     pm,
     techLead,
@@ -278,6 +314,7 @@ export function resolveTeamRoleModels(policy: ModelPolicy): TeamRoleModels {
     designer,
     security,
     adjudicator,
+    reviewEscalations,
   };
 }
 
@@ -287,6 +324,9 @@ function toBinding(alias: string, policy: ModelPolicy, role: string): RoleModelB
   const entry = policy.models.find((m) => m.alias === alias);
   if (!entry) {
     throw new Error(`role '${role}': resolved alias '${alias}' is not in the model registry`);
+  }
+  if (entry.status === 'deprecated') {
+    throw new Error(`role '${role}': resolved alias '${alias}' is deprecated`);
   }
   if (!SUPPORTED_PROVIDERS.has(entry.provider)) {
     throw new Error(`role '${role}': provider '${entry.provider}' has no wired executor`);
@@ -1325,6 +1365,7 @@ export interface BuildTeamTaskDepsArgs {
   /** Persisted before each artifact-role child is invoked. A failed write
    * blocks before spawn so restart attribution never lies. */
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  persistReviewBatch?: (state: ReviewBatchState) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
 
@@ -1358,15 +1399,12 @@ function judgmentBatchCheckpoint(
   batchId: string,
   models: TeamRoleModels,
 ): ExecutionCheckpoint {
-  if (models.reviewer === null) {
-    throw new Error('judgment batch requires an independent reviewer binding');
-  }
   const members = [
-    {
+    ...(models.reviewer === null ? [] : [{
       role: 'reviewer',
       binding: models.reviewer,
       workflowStage: 'reviewer-review',
-    },
+    }]),
     {
       role: 'tech-lead',
       binding: models.techLead,
@@ -1387,12 +1425,13 @@ function judgmentBatchCheckpoint(
         }]
       : []),
   ];
+  const coordinatorBinding = models.reviewer ?? models.techLead;
   return {
     taskId: task.id,
     role: 'judgment-batch',
-    provider: models.reviewer.provider,
-    format: models.reviewer.format,
-    model: models.reviewer.alias,
+    provider: coordinatorBinding.provider,
+    format: coordinatorBinding.format,
+    model: coordinatorBinding.alias,
     workflowStage: 'post-coder-judgments',
     checkpointedAt: new Date().toISOString(),
     judgmentBatch: {
@@ -1405,6 +1444,34 @@ function judgmentBatchCheckpoint(
         workflowStage,
       })),
     },
+  };
+}
+
+function reviewAttemptBinding(
+  models: TeamRoleModels,
+  role: ReviewBatchEligibleRole | 'designer',
+  attempt = 1,
+): RoleModelBinding {
+  if (attempt > 1 && role !== 'designer') {
+    const escalation = models.reviewEscalations?.[role];
+    if (escalation !== undefined) return escalation;
+  }
+  const base = bindingForRole(models, role);
+  if (base === null) throw new Error(`${role} review binding is unavailable`);
+  return base;
+}
+
+function executedReviewBinding(
+  models: TeamRoleModels,
+  role: ReviewBatchEligibleRole | 'designer',
+  attempt: number | undefined,
+  durable?: ReviewBatchBinding,
+): RoleModelBinding {
+  if (durable === undefined) return reviewAttemptBinding(models, role, attempt ?? 1);
+  return {
+    alias: durable.model,
+    provider: durable.provider,
+    format: durable.format ?? (durable.provider === 'openai' ? 'codex' : 'claude'),
   };
 }
 
@@ -2536,9 +2603,8 @@ export function buildProductionTeamTaskDeps(
       }
     },
 
-    // `reviewerProvider` from ReviewerInput is intentionally unused here: the
-    // provider identity is baked into `models.reviewer` at construction time
-    // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
+    // The attempt binding is resolved here so an eligible escalation can
+    // recover from an unavailable base reviewer without resetting its budget.
     reviewer: async ({
       diff,
       spec,
@@ -2550,17 +2616,13 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      judgmentAttempt,
+      judgmentBinding,
       invariantChecklistBlock,
     }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const findingsBlock = formatFindingsLedger(findingsLedger);
       const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
-      if (models.reviewer === null) {
-        // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
-        // reviewer verdict must never be fabricable without a resolved
-        // independent reviewer, even if a future caller skips the gate.
-        return { outcome: 'fail', findings: [] };
-      }
       const body = [
         `## Task\n\n${task.text}`,
         '',
@@ -2577,7 +2639,7 @@ export function buildProductionTeamTaskDeps(
       ].join('\n');
       return judge(
         'reviewer',
-        models.reviewer,
+        executedReviewBinding(models, 'reviewer', judgmentAttempt, judgmentBinding),
         REVIEWER_INSTRUCTION,
         body,
         task.id,
@@ -2601,6 +2663,8 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      judgmentAttempt,
+      judgmentBinding,
       invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2617,7 +2681,7 @@ export function buildProductionTeamTaskDeps(
       ].join('\n');
       return judge(
         'tech-lead',
-        models.techLead,
+        executedReviewBinding(models, 'tech-lead', judgmentAttempt, judgmentBinding),
         TL_DIFF_REVIEW_INSTRUCTION,
         body,
         task.id,
@@ -2642,6 +2706,8 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      judgmentAttempt,
+      judgmentBinding,
       invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2662,7 +2728,7 @@ export function buildProductionTeamTaskDeps(
       ].join('\n');
       return judge(
         'designer',
-        models.designer,
+        executedReviewBinding(models, 'designer', judgmentAttempt, judgmentBinding),
         DESIGNER_INSTRUCTION,
         body,
         task.id,
@@ -2687,6 +2753,8 @@ export function buildProductionTeamTaskDeps(
       reviewState,
       judgmentContext,
       judgmentBatchId,
+      judgmentAttempt,
+      judgmentBinding,
       invariantChecklistBlock,
     }) => {
       const findingsBlock = formatFindingsLedger(findingsLedger);
@@ -2707,7 +2775,7 @@ export function buildProductionTeamTaskDeps(
       ].join('\n');
       return judge(
         'security',
-        models.security,
+        executedReviewBinding(models, 'security', judgmentAttempt, judgmentBinding),
         SECURITY_INSTRUCTION,
         body,
         task.id,
@@ -2945,17 +3013,40 @@ export function buildProductionTeamTaskDeps(
       models.reviewer !== null && models.reviewer.provider !== coderProvider
         ? models.reviewer.provider
         : null,
-    cancelJudgmentBatch: (batchId) => {
-      cancelCorrelatedOps(batchId, 'internal', {
-        userId: config.TELEGRAM_USER_ID,
-        scope: sandbox.product,
-      });
+    ...(args.persistReviewBatch !== undefined
+      ? { persistReviewBatch: args.persistReviewBatch }
+      : {}),
+    resolveReviewRoleBinding: (role, attempt) => {
+      const binding = reviewAttemptBinding(models, role, attempt);
+      return {
+        model: binding.alias,
+        provider: binding.provider,
+        format: binding.format,
+      };
     },
-    forceCancelJudgmentBatch: (batchId) => {
-      forceCancelCorrelatedOps(batchId, {
+    resolveReviewRoleEscalation: (role) => {
+      const binding = models.reviewEscalations?.[role];
+      return binding === undefined
+        ? undefined
+        : { model: binding.alias, provider: binding.provider, format: binding.format };
+    },
+    captureReviewStateForResume: (baseTree) =>
+      captureCanonicalReviewState(seams.runCanonicalGit, sandbox.worktree, baseTree),
+    cancelJudgmentBatch: (batchId, _reason, roles) => {
+      const owner = {
         userId: config.TELEGRAM_USER_ID,
         scope: sandbox.product,
-      });
+      };
+      if (roles !== undefined) cancelCorrelatedAgentOps(batchId, roles, owner);
+      else cancelCorrelatedOps(batchId, 'internal', owner);
+    },
+    forceCancelJudgmentBatch: (batchId, roles) => {
+      const owner = {
+        userId: config.TELEGRAM_USER_ID,
+        scope: sandbox.product,
+      };
+      if (roles !== undefined) forceCancelCorrelatedAgentOps(batchId, roles, owner);
+      else forceCancelCorrelatedOps(batchId, owner);
     },
     finishJudgmentBatch: async (batchId) => {
       const batchCheckpoint = batchCheckpoints.get(batchId);
@@ -3026,6 +3117,8 @@ export interface TaskWorkflowRunnerArgs {
   /** Optional live activity sink forwarded into runTeamTaskWorkflow. */
   emit?: (event: WorkflowActivityEvent) => void;
   persistExecutionCheckpoint?: (checkpoint: ExecutionCheckpoint) => Promise<void>;
+  persistReviewBatch?: (state: ReviewBatchState) => Promise<void>;
+  readReviewBatch?: () => ReviewBatchState | undefined;
   persistTaskValidationFailure?: (failure: TaskValidationFailure) => Promise<void>;
   cancellationDuringBackoff?: () => import('../cancellation.js').OperationCancellation | undefined;
 }
@@ -3380,6 +3473,9 @@ export function createProductionTaskWorkflowRunner(
           await args.persistExecutionCheckpoint?.(checkpoint);
           latestCheckpoint = checkpoint;
         },
+        ...(args.persistReviewBatch !== undefined
+          ? { persistReviewBatch: args.persistReviewBatch }
+          : {}),
         ...(args.cancellationDuringBackoff !== undefined
           ? { cancellationDuringBackoff: args.cancellationDuringBackoff }
           : {}),
@@ -3388,6 +3484,12 @@ export function createProductionTaskWorkflowRunner(
     );
     const emit = args.emit !== undefined
       ? attributeWorkflowEvents(args.emit, models)
+      : undefined;
+    const durableReviewBatch = args.readReviewBatch?.();
+    const resumeReviewBatch = durableReviewBatch?.taskId === task.id &&
+        (durableReviewBatch.workflowAttempt === ctx.workflowAttempt ||
+          (ctx.workflowAttempt === 1 && durableReviewBatch.workflowAttempt > 1))
+      ? durableReviewBatch
       : undefined;
 
     const evidence = await runTeamTaskWorkflow(
@@ -3398,7 +3500,10 @@ export function createProductionTaskWorkflowRunner(
         spec: ctx.handoff,
         contextMd: ctx.contextMd,
         coderProvider: models.coder.provider,
-        workflowAttempt: ctx.workflowAttempt,
+        workflowAttempt: resumeReviewBatch?.workflowAttempt ?? ctx.workflowAttempt,
+        ...(resumeReviewBatch !== undefined
+          ? { resumeReviewBatch }
+          : {}),
         ...(ctx.rejectionFeedback !== undefined
           ? { rejectionFeedback: ctx.rejectionFeedback }
           : {}),

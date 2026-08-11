@@ -319,6 +319,13 @@ function eventFromSummary(summary: WorkRunSummary): MutationEvent {
       reason: summary.reason,
       workProduct: summary.workProduct,
       exit: summary.exit,
+      ...(summary.judgmentOutcomes !== undefined
+        ? { judgmentOutcomes: summary.judgmentOutcomes }
+        : {}),
+      ...(summary.reviewQuorum !== undefined ? { reviewQuorum: summary.reviewQuorum } : {}),
+      ...(summary.reviewQuorumFailure !== undefined
+        ? { reviewQuorumFailure: summary.reviewQuorumFailure }
+        : {}),
     },
   };
 }

@@ -806,6 +806,107 @@ describe('readWorkRunSummaryResult', () => {
 
     expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
   });
+
+  it('round-trips batch quorum separately from individual operational failures', () => {
+    const id = 'review-quorum-summary';
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    const reviewQuorum = {
+      status: 'satisfied' as const,
+      satisfyingRole: 'tech-lead' as const,
+      roles: {
+        reviewer: {
+          status: 'operational-failure' as const,
+          attemptsConsumed: 2,
+          retryEligible: false,
+          durationMs: 270_500,
+          failureCategory: 'executor-exit' as const,
+          diagnostic: 'aborted_streaming',
+        },
+        'tech-lead': {
+          status: 'pass' as const,
+          attemptsConsumed: 1,
+          retryEligible: false,
+          durationMs: 1_250,
+        },
+      },
+    };
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      reviewQuorum,
+      judgmentOutcomes: [
+        { role: 'reviewer', status: 'failed', summary: 'aborted_streaming' },
+        { role: 'tech-lead', status: 'pass' },
+      ],
+    }));
+
+    expect(readWorkRunSummary(tmpDir, id)).toMatchObject({ reviewQuorum });
+    expect(readWorkRunSummary(tmpDir, id)?.reviewQuorum?.roles.reviewer?.status)
+      .toBe('operational-failure');
+  });
+
+  it('rejects malformed quorum evidence instead of treating it as a role rejection', () => {
+    const id = 'malformed-review-quorum';
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      reviewQuorum: {
+        status: 'satisfied',
+        satisfyingRole: 'designer',
+        roles: {},
+      },
+    }));
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
+
+  it.each([
+    [{ status: 'satisfied', roles: {} }, 'satisfied without satisfying role'],
+    [{ status: 'objected', roles: {} }, 'objected without objecting role'],
+    [{ status: 'pending', satisfyingRole: 'reviewer', roles: {} }, 'pending with satisfying role'],
+    [{ status: 'failed', objectingRole: 'security', roles: {} }, 'failed with objecting role'],
+  ])('rejects incoherent quorum state: %s (%s)', (reviewQuorum, label) => {
+    const id = `incoherent-review-quorum-${label.replaceAll(' ', '-')}`;
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      reviewQuorum,
+    }));
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
+
+  it.each([
+    ['satisfied quorum with a failure', {
+      reviewQuorum: {
+        status: 'satisfied',
+        satisfyingRole: 'reviewer',
+        roles: {
+          reviewer: { status: 'pass', attemptsConsumed: 1, retryEligible: false },
+        },
+      },
+      reviewQuorumFailure: {
+        category: 'review-checkpoint-failure',
+        failedRoles: [],
+        diagnostic: 'terminal snapshot was not durable',
+      },
+    }],
+    ['failed quorum without a failure', {
+      reviewQuorum: { status: 'failed', roles: {} },
+    }],
+  ])('rejects contradictory quorum/failure pairing: %s', (_label, evidence) => {
+    const id = `contradictory-quorum-${_label.replaceAll(' ', '-')}`;
+    const runDir = join(tmpDir, id);
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, 'summary.json'), JSON.stringify({
+      ...makeSummary({ id }),
+      ...evidence,
+    }));
+
+    expect(readWorkRunSummaryResult(tmpDir, id)).toEqual({ status: 'invalid' });
+  });
 });
 
 describe('merge-gate validation receipt', () => {

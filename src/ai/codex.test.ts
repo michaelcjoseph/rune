@@ -11,8 +11,15 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, existsSync: vi.fn() };
 });
 
+const loggerMock = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+
 vi.mock('../utils/logger.js', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  createLogger: () => loggerMock,
 }));
 
 vi.mock('../config.js', () => ({
@@ -77,6 +84,7 @@ describe('ai/codex', () => {
     existsSyncMock.mockReset();
     registerMock.mockReset();
     unregisterMock.mockReset();
+    loggerMock.warn.mockReset();
   });
 
   // ── resolveCodexPath ───────────────────────────────────────────────────────
@@ -140,7 +148,7 @@ describe('ai/codex', () => {
       expect(result).toEqual({ text: 'collected stdout', error: null, exitCode: 0 });
     });
 
-    it('requests codex JSON mode when an onEvent callback is injected', async () => {
+    it('requests codex JSON mode with an onEvent callback injected', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockReturnValue(createChild({ stdout: '{"type":"turn.completed"}\n', code: 0 }));
 
@@ -150,6 +158,94 @@ describe('ai/codex', () => {
 
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).toContain('--json');
+    });
+
+    it('requests codex JSON mode even without an onEvent callback, so terminal categories stay observable', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'collected stdout', code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--json');
+    });
+
+    it('prefers the last agent_message item text over raw stdout on success', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const events = [
+        { type: 'item.completed', item: { type: 'reasoning', text: 'thinking about the diff' } },
+        { type: 'item.completed', item: { type: 'agent_message', text: 'final answer text' } },
+      ];
+      const stdout = events.map((event) => `${JSON.stringify(event)}\n`).join('');
+      spawnMock.mockReturnValue(createChild({ stdout, code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result.text).toBe('final answer text');
+      expect(result.text).not.toBe(stdout.trim());
+    });
+
+    it('extracts the agent message from realistic interleaved JSONL without an onEvent subscriber', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const events = [
+        { type: 'thread.started', thread_id: 'thread-abc' },
+        { type: 'item.completed', item: { type: 'reasoning', text: 'considering the gate' } },
+        { type: 'item.started', item: { type: 'command_execution', command: 'npm test' } },
+        { type: 'item.completed', item: { type: 'command_execution', exit_code: 0 } },
+        { type: 'item.completed', item: { type: 'agent_message', text: 'VERDICT: pass' } },
+        { type: 'turn.completed', usage: { input_tokens: 120, output_tokens: 8 } },
+      ];
+      const stdout = events.map((event) => `${JSON.stringify(event)}\n`).join('');
+      spawnMock.mockReturnValue(createChild({ stdout, code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      // A verdict parser downstream must see plain text, never the JSONL blob.
+      expect(result.text).toBe('VERDICT: pass');
+      expect(result.text).not.toContain('thread.started');
+      expect(loggerMock.warn).not.toHaveBeenCalled();
+    });
+
+    it('warns when JSONL arrived but carried no agent_message, instead of silently returning the blob', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const events = [
+        { type: 'thread.started', thread_id: 'thread-abc' },
+        { type: 'item.completed', item: { type: 'reasoning', text: 'considering the gate' } },
+        { type: 'turn.completed', usage: { input_tokens: 120, output_tokens: 0 } },
+      ];
+      const stdout = events.map((event) => `${JSON.stringify(event)}\n`).join('');
+      spawnMock.mockReturnValue(createChild({ stdout, code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      // The fallback still returns something, but it must not be silent — this is
+      // the case where raw JSONL reaches a verdict parser with no other signal.
+      expect(result.text).toBe(stdout.trim());
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        'codex emitted no agent_message item; falling back to raw JSONL stdout',
+        expect.objectContaining({ jsonlEvents: 3 }),
+      );
+    });
+
+    it('extracts agent text on the non-zero-exit path rather than returning raw JSONL', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const events = [
+        { type: 'item.completed', item: { type: 'agent_message', text: 'partial work so far' } },
+        { type: 'turn.failed', terminal_reason: 'context_limit' },
+      ];
+      const stdout = events.map((event) => `${JSON.stringify(event)}\n`).join('');
+      spawnMock.mockReturnValue(createChild({ stdout, stderr: 'boom', code: 1 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result.error).toBeTruthy();
+      expect(result.failureKind).toBe('executor-exit');
+      expect(result.text).toBe('partial work so far');
     });
 
     it('fires injected onStdout and onEvent callbacks for streamed JSONL stdout', async () => {
@@ -302,6 +398,110 @@ describe('ai/codex', () => {
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       expect(result.error).toMatch(/timeout|timed out/i);
       expect(result.failureKind).toBe('timeout');
+    });
+
+    it('reports an external exit 143 as an executor exit with terminal reason and duration', async () => {
+      vi.useFakeTimers();
+      try {
+        execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+        const child = createChild({ neverClose: true });
+        spawnMock.mockReturnValue(child);
+
+        const { runCodex } = await import('./codex.js');
+        const pending = runCodex('review the canonical diff', {
+          timeoutMs: 1_800_000,
+        });
+        await vi.advanceTimersByTimeAsync(270_500);
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'turn.failed',
+          terminal_reason: 'aborted_streaming /Users/operator/private.ts\tBearer secret-token-value',
+        })}\n`));
+        child.emit('close', 143, null);
+
+        const result = await pending;
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          error: expect.stringContaining('aborted_streaming'),
+          exitCode: 143,
+          failureKind: 'executor-exit',
+          terminalReason: expect.stringContaining('aborted_streaming'),
+          durationMs: 270_500,
+        });
+        expect(result.terminalReason).not.toMatch(/\/Users\/operator|secret-token-value|[\r\n\t]/);
+        expect(result.error).not.toMatch(/timed out|1800000ms/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats an external SIGTERM close with no timer fired as an executor exit, not a timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+        const child = createChild({ neverClose: true });
+        spawnMock.mockReturnValue(child);
+
+        const { runCodex } = await import('./codex.js');
+        const pending = runCodex('review the canonical diff', { timeoutMs: 1_800_000 });
+        // Advance well short of the timeout, then simulate an operator/OS-level
+        // SIGTERM the CLI reports as a bare signal close — our own timer never
+        // fired, so this must not be classified as a Rune timeout.
+        await vi.advanceTimersByTimeAsync(5_000);
+        child.emit('close', null, 'SIGTERM');
+
+        const result = await pending;
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(result.failureKind).toBe('executor-exit');
+        expect(result.error).not.toMatch(/timed out/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports failureKind timeout with a measured duration when the process actually exceeds the limit', async () => {
+      vi.useFakeTimers();
+      try {
+        execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+        const child = createChild({ neverClose: true });
+        child.kill = vi.fn(() => {
+          child.emit('close', 143, null);
+        });
+        spawnMock.mockReturnValue(child);
+
+        const { runCodex } = await import('./codex.js');
+        const pending = runCodex('slow query', { timeoutMs: 60_000 });
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        const result = await pending;
+        expect(result).toMatchObject({
+          failureKind: 'timeout',
+          durationMs: 60_000,
+        });
+        expect(result.error).toMatch(/timeout|timed out/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports failureKind spawn with a measured duration on a spawn error', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      spawnMock.mockImplementation(() => {
+        process.nextTick(() => child.emit('error', new Error('ENOENT: codex not found')));
+        return child;
+      });
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result).toMatchObject({
+        text: null,
+        failureKind: 'spawn',
+        durationMs: expect.any(Number),
+      });
     });
 
     it('returns structured cancellation metadata for a registered Codex op', async () => {
@@ -463,6 +663,7 @@ describe('ai/codex', () => {
         'exec',
         'resume',
         '--skip-git-repo-check',
+        '--json',
         '--strict-config',
         '--ignore-user-config',
         '--ignore-rules',

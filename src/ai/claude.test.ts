@@ -197,16 +197,27 @@ describe('ai/claude', () => {
       expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);
     });
 
-    it('returns error on non-zero exit', async () => {
+    it('returns a typed executor exit with measured duration on an ordinary non-zero exit', async () => {
       spawnMock.mockReturnValue(createChild({ stderr: 'something broke', code: 1 }));
       const result = await askClaudeOneShot('test');
-      expect(result).toEqual({ text: null, error: 'something broke' });
+      expect(result).toMatchObject({
+        text: null,
+        error: 'something broke',
+        exitCode: 1,
+        failureKind: 'executor-exit',
+        durationMs: expect.any(Number),
+      });
     });
 
     it('returns exit code when no stderr', async () => {
       spawnMock.mockReturnValue(createChild({ code: 1 }));
       const result = await askClaudeOneShot('test');
       expect(result.error).toBe('Claude exited with code 1');
+      expect(result).toMatchObject({
+        exitCode: 1,
+        failureKind: 'executor-exit',
+        durationMs: expect.any(Number),
+      });
     });
 
     it('returns error on spawn error event', async () => {
@@ -1022,6 +1033,106 @@ Synthesize from provided context only.`);
   });
 
   describe('timeout', () => {
+    it('reports an external exit 143 by its parsed terminal reason and measured duration', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = createControlledChild();
+        spawnMock.mockReturnValue(child);
+
+        const pending = askClaudeOneShot(
+          'review the canonical diff',
+          1_800_000,
+          'team:reviewer',
+        );
+        await vi.advanceTimersByTimeAsync(270_500);
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: 'stream ended before completion',
+          terminal_reason: 'aborted_streaming /Users/operator/private.ts\tBearer secret-token-value',
+        })}\n`));
+        child.emit('close', 143, null);
+
+        const result = await pending;
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          error: expect.stringContaining('aborted_streaming'),
+          exitCode: 143,
+          failureKind: 'executor-exit',
+          terminalReason: expect.stringContaining('aborted_streaming'),
+          durationMs: 270_500,
+        });
+        expect(result.terminalReason).not.toMatch(/\/Users\/operator|secret-token-value|[\r\n\t]/);
+        expect(result.error).not.toMatch(/timed out|1800s/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats an external SIGTERM close with no timer fired as an executor exit, not a timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = createControlledChild();
+        spawnMock.mockReturnValue(child);
+
+        const pending = askClaudeOneShot('review the canonical diff', 1_800_000);
+        // Advance well short of the timeout, then simulate an operator/OS-level
+        // SIGTERM the CLI reports as a bare signal close (no code 143) — our own
+        // timer never fired, so this must not be classified as a Rune timeout.
+        await vi.advanceTimersByTimeAsync(5_000);
+        child.emit('close', null, 'SIGTERM');
+
+        const result = await pending;
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(result.failureKind).toBe('executor-exit');
+        expect(result.error).not.toMatch(/timed out/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports failureKind timeout with a measured duration when the process actually exceeds the limit', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = createControlledChild();
+        child.kill = vi.fn(() => {
+          child.emit('close', 143, null);
+        });
+        spawnMock.mockReturnValue(child);
+
+        const pending = askClaudeOneShot('slow query', 60_000);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        const result = await pending;
+        expect(result).toMatchObject({
+          text: null,
+          failureKind: 'timeout',
+          durationMs: 60_000,
+        });
+        expect(result.error).toMatch(/^Claude timed out after/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports failureKind spawn with a measured duration on a spawn error', async () => {
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      process.nextTick(() => child.emit('error', new Error('ENOENT')));
+      spawnMock.mockReturnValue(child);
+
+      const result = await askClaudeOneShot('test');
+      expect(result).toMatchObject({
+        text: null,
+        error: 'ENOENT',
+        failureKind: 'spawn',
+        durationMs: expect.any(Number),
+      });
+    });
+
     it('returns timeout error when process exceeds limit', async () => {
       const child = new EventEmitter() as any;
       child.stdout = new EventEmitter();

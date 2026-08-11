@@ -31,9 +31,21 @@ import type { OperationCancellation } from '../cancellation.js';
 import type { ExecutionPreflightFailure } from './execution-preflight.js';
 import {
   executionFailureSummary,
+  sanitizeExecutionDiagnostic,
   type ArtifactAttemptEvidence,
   type ExecutionFailure,
 } from './execution-failure.js';
+import {
+  REVIEW_BATCH_MAX_ATTEMPTS,
+  ReviewBatchResumeError,
+  resumeReviewBatchState,
+  type ReviewBatchBinding,
+  type ReviewBatchCancellationReason,
+  type ReviewBatchEligibleRole,
+  type ReviewBatchFailureCategory,
+  type ReviewBatchRole,
+  type ReviewBatchState,
+} from './review-batch-state.js';
 import type { RelatedTestDiagnostic } from './related-test-diagnostic.js';
 import type {
   DurableValidationReceipt,
@@ -79,6 +91,14 @@ export class RoleCancellationError extends Error {
     this.name = 'RoleCancellationError';
     this.cancellation = { role, ...cancellation };
   }
+}
+
+function operationCancellation(cancellation: RoleCancellation): OperationCancellation {
+  return {
+    operationId: cancellation.operationId,
+    source: cancellation.source,
+    requestedAt: cancellation.requestedAt,
+  };
 }
 
 export class ExecutionFailureError extends Error {
@@ -463,6 +483,8 @@ export interface ReviewerInput {
   judgmentContext?: JudgmentContext;
   judgmentBatchId?: string;
   invariantChecklistBlock?: string;
+  judgmentAttempt?: number;
+  judgmentBinding?: ReviewBatchBinding;
 }
 
 /** The roles that judge the coder's diff. QA is deliberately absent: QA authors
@@ -495,6 +517,29 @@ export interface JudgmentOutcomeEvidence {
   status: 'pass' | 'reject' | 'failed' | 'cancelled';
   /** Bounded, scrubbed by the role/provider boundary before it reaches here. */
   summary?: string;
+}
+
+export interface ReviewQuorumRoleEvidence {
+  status: 'pending' | 'running' | 'pass' | 'reject' | 'operational-failure' | 'cancelled';
+  attemptsConsumed: number;
+  retryEligible: boolean;
+  durationMs?: number;
+  failureCategory?: ReviewBatchFailureCategory;
+  diagnostic?: string;
+}
+
+export interface ReviewQuorumEvidence {
+  status: 'pending' | 'satisfied' | 'objected' | 'failed';
+  satisfyingRole?: ReviewBatchEligibleRole;
+  objectingRole?: ReviewBatchRole;
+  roles: Partial<Record<ReviewBatchRole, ReviewQuorumRoleEvidence>>;
+}
+
+export interface ReviewQuorumFailure {
+  category: 'review-paths-exhausted' | 'required-designer-unavailable' |
+    'review-surface-drift' | 'review-checkpoint-failure';
+  failedRoles: ReviewBatchRole[];
+  diagnostic: string;
 }
 
 export type WorkflowActivityEvent = {
@@ -580,6 +625,8 @@ export interface TeamTaskDeps {
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
     invariantChecklistBlock?: string;
+    judgmentAttempt?: number;
+    judgmentBinding?: ReviewBatchBinding;
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
@@ -594,6 +641,8 @@ export interface TeamTaskDeps {
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
     invariantChecklistBlock?: string;
+    judgmentAttempt?: number;
+    judgmentBinding?: ReviewBatchBinding;
   }) => Promise<GateReviewVerdict>;
   security?: (input: {
     task: SizedTask;
@@ -608,6 +657,8 @@ export interface TeamTaskDeps {
     judgmentContext?: JudgmentContext;
     judgmentBatchId?: string;
     invariantChecklistBlock?: string;
+    judgmentAttempt?: number;
+    judgmentBinding?: ReviewBatchBinding;
   }) => Promise<GateReviewVerdict>;
   /** Last-resort wrap-up call at the round cap, per `agents/pm/SOUL.md`. Only a
    *  block that survived every coder round reaches this seam, and only when no
@@ -658,16 +709,29 @@ export interface TeamTaskDeps {
   /** Optional gate-time learning hook. Awaited before a corrective retry so a
    *  written lesson can load into the counterpart role's next invocation. */
   onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
-  /** Resolve a reviewer provider distinct from the coder's, or null when none is
-   *  available (executor down). Null ⇒ the task blocks — independence is
-   *  fail-closed, never a silent same-provider review. */
+  /** Resolve a reviewer provider distinct from the coder's, or null when that
+   * independent quorum path is unavailable. Never silently reuse the coder. */
   resolveReviewerProvider: (coderProvider: DispatchProvider) => DispatchProvider | null;
-  /** Best-effort internal cleanup for a failed judgment batch. */
-  cancelJudgmentBatch?: (batchId: string) => void;
+  /** Best-effort internal cleanup after quorum, objection, or external cancellation. */
+  cancelJudgmentBatch?: (
+    batchId: string,
+    reason?: ReviewBatchCancellationReason,
+    roles?: ReviewBatchRole[],
+  ) => void;
   /** Escalate a SIGTERM-ignoring judgment batch to process-group SIGKILL. */
-  forceCancelJudgmentBatch?: (batchId: string) => void;
+  forceCancelJudgmentBatch?: (batchId: string, roles?: ReviewBatchRole[]) => void;
   /** Release internal cancellation correlation after every member settles. */
   finishJudgmentBatch?: (batchId: string) => void | Promise<void>;
+  /** Durable serialized checkpoint for every review-role transition. */
+  persistReviewBatch?: (state: ReviewBatchState) => Promise<void>;
+  /** Production binding metadata, including declared attempt-2 escalation. */
+  resolveReviewRoleBinding?: (role: ReviewBatchRole, attempt: number) => ReviewBatchBinding;
+  /** Explicit attempt-2 replacement. When absent, the coordinator freezes the
+   * prior durable binding so a restart or policy reload cannot change it. */
+  resolveReviewRoleEscalation?: (role: ReviewBatchEligibleRole) => ReviewBatchBinding | undefined;
+  /** Re-capture the canonical Git review surface before resuming a durable
+   * post-coder wave. No role is invoked by this read-only check. */
+  captureReviewStateForResume?: (baseTree: string) => Promise<CanonicalReviewState>;
 }
 
 export interface TeamTaskRunInput {
@@ -682,6 +746,8 @@ export interface TeamTaskRunInput {
   cap: number;
   /** Whole-workflow attempt number: 1 initially, >1 for closeout repair. */
   workflowAttempt?: number;
+  /** Exact-tree post-coder review wave recovered from the run cursor. */
+  resumeReviewBatch?: ReviewBatchState;
 }
 
 export type WorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed' | 'cancelled';
@@ -782,6 +848,10 @@ export interface TaskEvidence {
   /** Latest post-coder batch outcomes in stable role order. Optional for
    * historical evidence written before judgment fan-out. */
   judgmentOutcomes?: JudgmentOutcomeEvidence[];
+  /** Quorum status is distinct from the status of any individual role call. */
+  reviewQuorum?: ReviewQuorumEvidence;
+  /** Typed operational hold after every eligible review path is exhausted. */
+  reviewQuorumFailure?: ReviewQuorumFailure;
 }
 
 /** Run the team-task workflow for one selected task. */
@@ -814,6 +884,7 @@ export async function runTeamTaskWorkflow(
     TaskEvidence,
     'invariantChecklist' | 'invariantReviewFailure'
   > = {};
+  const quorumEvidence: Pick<TaskEvidence, 'reviewQuorum' | 'reviewQuorumFailure'> = {};
 
   try {
     const evidence = await runGated(
@@ -828,11 +899,13 @@ export async function runTeamTaskWorkflow(
       findingsEvidence,
       judgmentOutcomes,
       invariantEvidence,
+      quorumEvidence,
     );
     return {
       ...evidence,
       ...reviewEvidence,
       ...invariantEvidence,
+      ...quorumEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(judgmentOutcomes.length > 0
         ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -854,6 +927,7 @@ export async function runTeamTaskWorkflow(
         loopExitReason: 'operational',
         ...reviewEvidence,
         ...invariantEvidence,
+        ...quorumEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -876,6 +950,7 @@ export async function runTeamTaskWorkflow(
         loopExitReason: 'operational',
         ...reviewEvidence,
         ...invariantEvidence,
+        ...quorumEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -898,6 +973,7 @@ export async function runTeamTaskWorkflow(
         findingsLedger: [...findingsEvidence],
         loopExitReason: 'operational',
         ...reviewEvidence,
+        ...quorumEvidence,
         coderSelfReviews: [...coderSelfReviews],
       };
     }
@@ -914,6 +990,7 @@ export async function runTeamTaskWorkflow(
         loopExitReason: 'operational',
         ...reviewEvidence,
         ...invariantEvidence,
+        ...quorumEvidence,
         coderSelfReviews: [...coderSelfReviews],
         ...(judgmentOutcomes.length > 0
           ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -936,6 +1013,7 @@ export async function runTeamTaskWorkflow(
       loopExitReason: 'operational',
       ...reviewEvidence,
       ...invariantEvidence,
+      ...quorumEvidence,
       coderSelfReviews: [...coderSelfReviews],
       ...(judgmentOutcomes.length > 0
         ? { judgmentOutcomes: [...judgmentOutcomes] }
@@ -962,30 +1040,90 @@ async function runGated(
   findingsLedger: FindingsLedgerEntry[],
   judgmentOutcomes: JudgmentOutcomeEvidence[],
   invariantEvidence: Pick<TaskEvidence, 'invariantChecklist' | 'invariantReviewFailure'>,
+  quorumEvidence: Pick<TaskEvidence, 'reviewQuorum' | 'reviewQuorumFailure'>,
 ): Promise<TaskEvidence> {
-  // Gate 0: reviewer independence, resolved up-front and fail-closed — block
-  // before any coder work rather than risk a same-provider review later.
+  // Reviewer independence is resolved up front, but an unavailable independent
+  // reviewer is now one operationally unavailable quorum path. It must never
+  // fall back to the coder's provider, and it must not suppress independent
+  // tech-lead/security paths that can still satisfy quorum.
   const reviewerProvider = deps.resolveReviewerProvider(input.coderProvider);
-  if (reviewerProvider === null) {
-    const feedback = buildGateRejectionFeedback({
-      rejectingRole: 'reviewer',
-      counterpartRole: 'coder',
-      artifact: 'reviewer-verdict',
-      reason: 'reviewer independence: no distinct-provider reviewer available',
-    });
-    await recordGateRejection(deps, feedback);
-    emitGateRejection(input, feedback);
-    return block(task, roles, handoffNotes, {
-      blockedReason: 'reviewer independence: no distinct-provider reviewer available',
-      rejectionFeedback: feedback,
-      findingsLedger: [],
-      loopExitReason: 'operational',
-    });
+
+  const resumeBatch = input.resumeReviewBatch;
+  const resumeContext = resumeBatch?.resumeContext;
+  let resumedReviewState: CanonicalReviewState | undefined;
+  if (resumeBatch !== undefined) {
+    const resumeFailure = (diagnostic: string): TaskEvidence => {
+      const failure: ReviewQuorumFailure = {
+        category: 'review-surface-drift',
+        failedRoles: [],
+        diagnostic: sanitizeExecutionDiagnostic(diagnostic),
+      };
+      const evidence = reviewQuorumEvidence({
+        ...resumeBatch,
+        quorum: { status: 'failed' },
+      });
+      quorumEvidence.reviewQuorum = evidence;
+      quorumEvidence.reviewQuorumFailure = failure;
+      return fail(task, roles, handoffNotes, {
+        failureReason: failure.diagnostic,
+        reviewQuorum: evidence,
+        reviewQuorumFailure: failure,
+        findingsLedger,
+        loopExitReason: 'operational',
+        objectionOpen: false,
+      });
+    };
+    if (resumeContext === undefined || deps.captureReviewStateForResume === undefined) {
+      return resumeFailure('Review quorum operational hold: durable review resume context is unavailable');
+    }
+    try {
+      resumedReviewState = await deps.captureReviewStateForResume(resumeBatch.taskBaseTree);
+      resumeReviewBatchState(resumeBatch, {
+        taskId: task.id,
+        baseTree: resumedReviewState.baseTree,
+        currentTree: resumedReviewState.currentTree,
+        canonicalHash: resumedReviewState.hash,
+        interruptedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return resumeFailure(
+        `Review quorum operational hold: ${(err as Error).message}`,
+      );
+    }
+    for (const role of ['qa', 'tech-lead', 'coder', 'reviewer'] as const) roles.add(role);
+    if (task.designerNeeded) roles.add('designer');
+    if (task.securityNeeded) roles.add('security');
+    if (resumeContext.findingsLedger !== undefined) {
+      findingsLedger.push(...structuredClone(
+        resumeContext.findingsLedger,
+      ) as unknown as FindingsLedgerEntry[]);
+    }
+    if (resumeContext.coderSelfReviews !== undefined) {
+      coderSelfReviews.push(...structuredClone(
+        resumeContext.coderSelfReviews,
+      ) as unknown as CoderSelfReviewRecord[]);
+    }
+    if (resumeContext.accumulatedHandoffNotes !== undefined) {
+      handoffNotes.push(...resumeContext.accumulatedHandoffNotes);
+    }
+    if (resumeContext.testIntentRepair !== undefined) {
+      repairEvidence.testIntentRepair = structuredClone(resumeContext.testIntentRepair);
+    }
+    if (resumeContext.adjudications !== undefined && resumeContext.adjudications.length > 0) {
+      roles.add('adjudicator');
+    }
+    reviewEvidence.taskBaseTree = resumedReviewState.baseTree;
+    reviewEvidence.currentReviewTree = resumedReviewState.currentTree;
+    reviewEvidence.fullTaskReviewHash = resumedReviewState.hash;
+    reviewEvidence.reviewSurfaceHash = resumedReviewState.hash;
   }
 
   let previousRole: RoleName | undefined;
-  let invariantChecklistBlock: string | undefined;
-  if (task.securityNeeded) {
+  let invariantChecklistBlock: string | undefined = resumeContext?.invariantChecklistBlock;
+  if (resumeContext?.invariantChecklist !== undefined) {
+    invariantEvidence.invariantChecklist = structuredClone(resumeContext.invariantChecklist);
+  }
+  if (task.securityNeeded && resumeContext === undefined) {
     if (deps.techLeadDraftInvariants === undefined) {
       throw new InvariantReviewFailureError({
         stage: 'tech-lead-draft',
@@ -1040,7 +1178,13 @@ async function runGated(
   let noCodeTestRationale: string | undefined;
   let tests: string[] | string | undefined;
   let repairAttempted = false;
-  for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
+  if (resumeContext !== undefined) {
+    qa = structuredClone(resumeContext.qa);
+    tests = Array.isArray(resumeContext.tests)
+      ? [...resumeContext.tests]
+      : resumeContext.tests;
+    noCodeTestRationale = qa.kind === 'no-code-test-rationale' ? qa.rationale : undefined;
+  } else for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
     roles.add('qa');
     previousRole = emitRoleTransition(input, previousRole, 'qa', 'test', 'qa-tests');
     qa = await deps.qaWriteTests({
@@ -1200,108 +1344,131 @@ async function runGated(
   let lastJudgmentContext: JudgmentContext | undefined;
   // Accumulated across rounds: a finding downgraded in round 1 stays visible in
   // the terminal record even if the role never raises it again.
-  const downgradedFindings: DowngradedFinding[] = [];
-  const adjudications: AdjudicationRecord[] = [];
+  const downgradedFindings: DowngradedFinding[] = resumeContext?.downgradedFindings === undefined
+    ? []
+    : structuredClone(resumeContext.downgradedFindings) as unknown as DowngradedFinding[];
+  const adjudications: AdjudicationRecord[] = resumeContext?.adjudications === undefined
+    ? []
+    : structuredClone(resumeContext.adjudications) as unknown as AdjudicationRecord[];
   /** Disputed-objection signatures seen in an earlier round. A repeat means the
    *  coder round did not settle it, so the ruling escalates. */
-  const seenSplitSignatures = new Set<string>();
+  const seenSplitSignatures = new Set(resumeContext?.seenSplitSignatures ?? []);
   const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
-  let round = 0;
-  let previousMaxOpenSeverity: ObjectionSeverity | undefined;
-  let flatMaxOpenSeverityRounds = 0;
+  let round = resumeBatch !== undefined ? resumeBatch.round - 1 : 0;
+  let resumeCurrentRound = resumedReviewState !== undefined;
+  let previousMaxOpenSeverity: ObjectionSeverity | undefined =
+    resumeContext?.previousMaxOpenSeverity;
+  let flatMaxOpenSeverityRounds = resumeContext?.flatMaxOpenSeverityRounds ?? 0;
   let continueConvergingPastConfiguredCap = false;
   let approvedReviewSurfaceHash: string | undefined;
-  const explicitNonReversibleFindingIds = new Set<string>();
+  const explicitNonReversibleFindingIds = new Set(
+    resumeContext?.explicitNonReversibleFindingIds ?? [],
+  );
   while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
     continueConvergingPastConfiguredCap = false;
     round += 1;
-    roles.add('coder');
-    previousRole = emitRoleTransition(
-      input,
-      previousRole,
-      'coder',
-      'implementation',
-      'coder-implementation',
-    );
-    const coder = await deps.coder({
-      task,
-      spec: input.spec,
-      context: input.contextMd,
-      tests,
-      ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
-      ...coderFindingsLedger(findingsLedger),
-      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
-    });
-    emitRoleStage(input, 'coder', 'self-review');
-    const reviewed = await deps.coderSelfReview({
-      task,
-      artifact: coder,
-      spec: input.spec,
-      context: input.contextMd,
-      tests,
-      qa,
-      ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
-      ...coderFindingsLedger(findingsLedger),
-      ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
-    });
-    const selfReviewRecord: CoderSelfReviewRecord = {
-      round,
-      outcome: reviewed.outcome,
-      notes: reviewed.notes,
-      canonicalHash: reviewed.reviewState.hash,
-      taskBaseTree: reviewed.reviewState.baseTree,
-      currentReviewTree: reviewed.reviewState.currentTree,
-      changedPaths: reviewed.reviewState.changedPaths.slice(
-        0,
-        CANONICAL_CHANGED_PATHS_MAX,
-      ),
-      ...(reviewed.artifactAttempts !== undefined
-        ? {
-            artifactAttempts: reviewed.artifactAttempts.map((attempt) => ({
-              ...attempt,
-            })),
-          }
-        : {}),
-    };
-    coderSelfReviews.push(selfReviewRecord);
-    emitCoderSelfReview(input, selfReviewRecord);
-    // A `revised` self-review edited the worktree after the coder handed off,
-    // so the canonical diff downstream roles judge is no longer the one the
-    // coder's own notes describe. The self-review notes are the only channel
-    // explaining what changed and why — including a justified test removal,
-    // which the reviewer and tech lead look for in the handoff notes — so they
-    // join the coder's notes rather than staying evidence-only. Already
-    // scrubbed by the self-review parser.
-    const canonicalCoder = {
-      ...coder,
-      diff: reviewed.reviewState.diff,
-      handoffNotes:
-        reviewed.outcome === 'revised'
-          ? [...coder.handoffNotes, `coder self-review (revised): ${reviewed.notes}`]
-          : coder.handoffNotes,
-    };
+    let canonicalCoder: CoderResult;
+    let reviewState: Omit<CanonicalReviewState, 'diff'>;
+    const resumedThisRound = resumeCurrentRound && resumedReviewState !== undefined &&
+      resumeContext !== undefined;
+    if (resumedThisRound && resumedReviewState !== undefined && resumeContext !== undefined) {
+      canonicalCoder = {
+        diff: resumedReviewState.diff,
+        handoffNotes: [...resumeContext.coderHandoffNotes],
+      };
+      reviewState = {
+        hash: resumedReviewState.hash,
+        baseTree: resumedReviewState.baseTree,
+        currentTree: resumedReviewState.currentTree,
+        changedPaths: [...resumedReviewState.changedPaths],
+      };
+      resumeCurrentRound = false;
+    } else {
+      roles.add('coder');
+      previousRole = emitRoleTransition(
+        input,
+        previousRole,
+        'coder',
+        'implementation',
+        'coder-implementation',
+      );
+      const coder = await deps.coder({
+        task,
+        spec: input.spec,
+        context: input.contextMd,
+        tests,
+        ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
+        ...coderFindingsLedger(findingsLedger),
+        ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
+      });
+      emitRoleStage(input, 'coder', 'self-review');
+      const reviewed = await deps.coderSelfReview({
+        task,
+        artifact: coder,
+        spec: input.spec,
+        context: input.contextMd,
+        tests,
+        qa,
+        ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
+        ...coderFindingsLedger(findingsLedger),
+        ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
+      });
+      const selfReviewRecord: CoderSelfReviewRecord = {
+        round,
+        outcome: reviewed.outcome,
+        notes: reviewed.notes,
+        canonicalHash: reviewed.reviewState.hash,
+        taskBaseTree: reviewed.reviewState.baseTree,
+        currentReviewTree: reviewed.reviewState.currentTree,
+        changedPaths: reviewed.reviewState.changedPaths.slice(
+          0,
+          CANONICAL_CHANGED_PATHS_MAX,
+        ),
+        ...(reviewed.artifactAttempts !== undefined
+          ? {
+              artifactAttempts: reviewed.artifactAttempts.map((attempt) => ({
+                ...attempt,
+              })),
+            }
+          : {}),
+      };
+      coderSelfReviews.push(selfReviewRecord);
+      emitCoderSelfReview(input, selfReviewRecord);
+      canonicalCoder = {
+        ...coder,
+        diff: reviewed.reviewState.diff,
+        handoffNotes:
+          reviewed.outcome === 'revised'
+            ? [...coder.handoffNotes, `coder self-review (revised): ${reviewed.notes}`]
+            : coder.handoffNotes,
+      };
+      reviewState = {
+        hash: reviewed.reviewState.hash,
+        baseTree: reviewed.reviewState.baseTree,
+        currentTree: reviewed.reviewState.currentTree,
+        changedPaths: reviewed.reviewState.changedPaths,
+      };
+    }
     // Same value, three destinations, on purpose: `approvedReviewSurfaceHash`
     // reaches only the ready-for-closeout terminals (the approval identity
     // closeout re-verifies), while the `reviewEvidence` collector reaches every
     // terminal — including cancelled/failed — so a run that never approved
     // still carries the trees and hash it was judged on. See `TaskEvidence`.
-    approvedReviewSurfaceHash = reviewed.reviewState.hash;
-    reviewEvidence.taskBaseTree = reviewed.reviewState.baseTree;
-    reviewEvidence.currentReviewTree = reviewed.reviewState.currentTree;
-    reviewEvidence.fullTaskReviewHash = reviewed.reviewState.hash;
-    reviewEvidence.reviewSurfaceHash = reviewed.reviewState.hash;
-    const reviewState = {
-      hash: reviewed.reviewState.hash,
-      baseTree: reviewed.reviewState.baseTree,
-      currentTree: reviewed.reviewState.currentTree,
-      changedPaths: reviewed.reviewState.changedPaths,
-    };
+    approvedReviewSurfaceHash = reviewState.hash;
+    reviewEvidence.taskBaseTree = reviewState.baseTree;
+    reviewEvidence.currentReviewTree = reviewState.currentTree;
+    reviewEvidence.fullTaskReviewHash = reviewState.hash;
+    reviewEvidence.reviewSurfaceHash = reviewState.hash;
 
-    handoffNotes.push(...canonicalCoder.handoffNotes);
+    if (!resumedThisRound || resumeContext?.accumulatedHandoffNotes === undefined) {
+      handoffNotes.push(...canonicalCoder.handoffNotes);
+    }
     const roundFeedback: GateRejectionFeedback[] = [];
     const roundFindingsLedger = openFindingsLedger(findingsLedger);
     const artifactPass: JudgmentContext['artifactPass'] =
-      (input.workflowAttempt ?? 1) > 1
+      resumeBatch?.round === round && resumeContext !== undefined
+        ? resumeContext.artifactPass
+        : (input.workflowAttempt ?? 1) > 1
         ? 'closeout-retry'
         : round > 1
           ? 'coder-retry'
@@ -1338,11 +1505,12 @@ async function runGated(
       artifactPass,
     });
     lastJudgmentContext = judgmentContext;
-    const judgmentBatchId = randomUUID();
+    const resumeBatchForRound = resumeBatch?.round === round ? resumeBatch : undefined;
+    const judgmentBatchId = resumeBatchForRound?.batchId ?? randomUUID();
 
-    // Publish starts in canonical order before invoking any role. Completion
-    // order is deliberately invisible; verdict processing below uses this same
-    // order after every child has settled.
+    // Publish starts in canonical order before invoking any role. The quorum
+    // coordinator drains already-settled results, then processing below maps
+    // the durable outcomes back into this stable role order.
     roles.add('reviewer');
     previousRole = emitRoleTransition(
       input,
@@ -1379,41 +1547,57 @@ async function runGated(
       );
     }
 
-    let cleanupRequested = false;
-    let cleanupRequestedAt = '';
-    let releaseCleanupRequest: (() => void) | undefined;
-    const cleanupRequest = new Promise<void>((resolve) => {
-      releaseCleanupRequest = resolve;
-    });
-    const requestCleanup = (): void => {
-      if (cleanupRequested) return;
-      cleanupRequested = true;
-      cleanupRequestedAt = new Date().toISOString();
-      deps.cancelJudgmentBatch?.(judgmentBatchId);
-      releaseCleanupRequest?.();
+    const contractReviewVerdict = async (
+      role: JudgmentRole,
+      rawVerdict: unknown,
+    ): Promise<GateVerdict | NormalizedReviewerVerdict> => {
+      if (role === 'reviewer') {
+        const reviewerVerdict = normalizeReviewerVerdict(rawVerdict as ReviewerVerdict);
+        if (reviewerVerdict.operationalFailureReason !== undefined) return reviewerVerdict;
+        const contracted = await applyEvidenceContract(
+          deps, task, role, reviewerVerdict, round, judgmentContext, downgradedFindings,
+        );
+        return {
+          ...reviewerVerdict,
+          outcome: contracted.outcome,
+          findings: contracted.findings,
+          objections: contracted.findings,
+        };
+      }
+      return applyEvidenceContract(
+        deps,
+        task,
+        role,
+        normalizeGateVerdict(rawVerdict as GateReviewVerdict),
+        round,
+        judgmentContext,
+        downgradedFindings,
+      );
     };
-    const startJudgment = <T>(
-      call: () => Promise<T>,
-    ): Promise<T> => Promise.resolve().then(call).catch((err) => {
-      requestCleanup();
-      throw err;
-    });
+
     const judgmentCalls: Array<{
       role: JudgmentRole;
-      promise: Promise<unknown>;
+      call: (attempt: number, binding: ReviewBatchBinding) => Promise<unknown>;
     }> = [
       {
         role: 'reviewer',
-        promise: startJudgment(() => deps.reviewer({
+        call: (attempt, binding) => {
+          if (binding.model === 'unavailable' ||
+              (reviewerProvider === null && deps.resolveReviewRoleBinding === undefined)) {
+            throw new Error('reviewer independence: no distinct-provider reviewer available');
+          }
+          return deps.reviewer({
           diff: judgmentContext.diff,
           spec: judgmentContext.spec,
           tests: judgmentContext.tests,
           task: judgmentContext.task,
           context: judgmentContext.projectContext,
-          reviewerProvider,
+          reviewerProvider: binding.provider,
           reviewState: judgmentContext.reviewState,
           judgmentContext,
           judgmentBatchId,
+          judgmentAttempt: attempt,
+          judgmentBinding: binding,
           ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
           ...(roundFindingsLedger.length > 0
             ? { findingsLedger: [...judgmentContext.findingsLedger] }
@@ -1421,11 +1605,12 @@ async function runGated(
           ...(canonicalCoder.handoffNotes.length > 0
             ? { coderHandoffNotes: [...judgmentContext.coderHandoffNotes] }
             : {}),
-        })),
+          });
+        },
       },
       {
         role: 'tech-lead',
-        promise: startJudgment(() => deps.techLeadReviewDiff({
+        call: (attempt, binding) => deps.techLeadReviewDiff({
           task: judgmentContext.task,
           diff: judgmentContext.diff,
           spec: judgmentContext.spec,
@@ -1433,6 +1618,8 @@ async function runGated(
           reviewState: judgmentContext.reviewState,
           judgmentContext,
           judgmentBatchId,
+          judgmentAttempt: attempt,
+          judgmentBinding: binding,
           ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
           ...(roundFindingsLedger.length > 0
             ? { findingsLedger: [...judgmentContext.findingsLedger] }
@@ -1440,12 +1627,12 @@ async function runGated(
           ...(canonicalCoder.handoffNotes.length > 0
             ? { coderHandoffNotes: [...judgmentContext.coderHandoffNotes] }
             : {}),
-        })),
+        }),
       },
       ...(task.designerNeeded
         ? [{
             role: 'designer' as const,
-            promise: startJudgment(() => deps.designer({
+            call: (attempt: number, binding: ReviewBatchBinding) => deps.designer({
               task: judgmentContext.task,
               diff: judgmentContext.diff,
               spec: judgmentContext.spec,
@@ -1456,17 +1643,19 @@ async function runGated(
               coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
               judgmentContext,
               judgmentBatchId,
+              judgmentAttempt: attempt,
+              judgmentBinding: binding,
               ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
               ...(roundFindingsLedger.length > 0
                 ? { findingsLedger: [...judgmentContext.findingsLedger] }
                 : {}),
-            })),
+            }),
           }]
         : []),
       ...(task.securityNeeded
         ? [{
             role: 'security' as const,
-            promise: startJudgment(() => {
+            call: async (attempt: number, binding: ReviewBatchBinding) => {
               if (deps.security === undefined) {
                 throw new Error('security review gate is not configured');
               }
@@ -1481,73 +1670,65 @@ async function runGated(
                 coderHandoffNotes: [...judgmentContext.coderHandoffNotes],
                 judgmentContext,
                 judgmentBatchId,
+                judgmentAttempt: attempt,
+                judgmentBinding: binding,
                 ...(invariantChecklistBlock !== undefined ? { invariantChecklistBlock } : {}),
                 ...(roundFindingsLedger.length > 0
                   ? { findingsLedger: [...judgmentContext.findingsLedger] }
                   : {}),
               });
-            }),
+            },
           }]
         : []),
     ];
-    const partiallySettled = new Map<
-      JudgmentRole,
-      PromiseSettledResult<unknown>
-    >();
-    const allSettled = Promise.all(judgmentCalls.map(async ({ role, promise }) => {
-      let result: PromiseSettledResult<unknown>;
-      try {
-        result = { status: 'fulfilled', value: await promise };
-      } catch (reason) {
-        result = { status: 'rejected', reason };
-      }
-      partiallySettled.set(role, result);
-      return result;
-    }));
-    let cancelGraceTimer: ReturnType<typeof setTimeout> | undefined;
-    let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
-    let finishFailure: unknown;
-    const cleanupDeadline = new Promise<'deadline'>((resolve) => {
-      void cleanupRequest.then(() => {
-        cancelGraceTimer = setTimeout(() => {
-          deps.forceCancelJudgmentBatch?.(judgmentBatchId);
-          forceSettleTimer = setTimeout(
-            () => resolve('deadline'),
-            JUDGMENT_FORCE_SETTLE_GRACE_MS,
-          );
-        }, JUDGMENT_CANCEL_GRACE_MS);
-      });
-    });
-    let settled: PromiseSettledResult<unknown>[];
+    // Cleanup guarantee for the *unanticipated* throw. Every expected failure
+    // inside the coordinator routes to its own finishBatch() before returning,
+    // but an unexpected exception would escape to runProjectOrchestration's
+    // outer handler, which knows nothing about this batch — orphaning a
+    // tombstone in in-flight.ts's process-lifetime correlation maps, which have
+    // no reaper. finishJudgmentBatch is idempotent (pure map deletes), so the
+    // normal paths make this a no-op.
+    let coordinated: CoordinatedReviewBatch;
     try {
-      const completion = await Promise.race([
-        allSettled.then((results) => ({ kind: 'settled' as const, results })),
-        cleanupDeadline.then(() => ({ kind: 'deadline' as const })),
-      ]);
-      settled = completion.kind === 'settled'
-        ? completion.results
-        : judgmentCalls.map(({ role }) => partiallySettled.get(role) ?? {
-            status: 'rejected',
-            reason: new RoleCancellationError(role, {
-              operationId: judgmentBatchId,
-              source: 'internal',
-              requestedAt: cleanupRequestedAt,
-            }),
-          });
-    } finally {
-      if (cancelGraceTimer !== undefined) clearTimeout(cancelGraceTimer);
-      if (forceSettleTimer !== undefined) clearTimeout(forceSettleTimer);
+      coordinated = await coordinateReviewBatch({
+        task,
+        input,
+        deps,
+        round,
+        judgmentBatchId,
+        reviewState,
+        judgmentContext,
+        invariantChecklistBlock,
+        invariantChecklist: invariantEvidence.invariantChecklist,
+        findingsLedger,
+        coderSelfReviews,
+        downgradedFindings,
+        handoffNotes,
+        testIntentRepair: repairEvidence.testIntentRepair,
+        adjudications,
+        seenSplitSignatures,
+        explicitNonReversibleFindingIds,
+        previousMaxOpenSeverity,
+        flatMaxOpenSeverityRounds,
+        finalizeVerdict: contractReviewVerdict,
+        resumeState: resumeBatchForRound,
+        calls: judgmentCalls,
+      });
+    } catch (err) {
       try {
         await deps.finishJudgmentBatch?.(judgmentBatchId);
-      } catch (err) {
-        finishFailure = err;
+      } catch {
+        // Cleanup is best-effort; the original failure is what matters.
       }
+      throw err;
     }
-    if (
-      finishFailure !== undefined &&
-      !settled.some((result) => result.status === 'rejected')
-    ) {
-      throw finishFailure;
+    const settled = judgmentCalls.map(({ role }) => coordinated.settled.get(role) ?? {
+      status: 'rejected' as const,
+      reason: new Error(`${role} review did not produce a terminal outcome`),
+    });
+    quorumEvidence.reviewQuorum = coordinated.evidence;
+    if (coordinated.failure !== undefined) {
+      quorumEvidence.reviewQuorumFailure = coordinated.failure;
     }
     const settledByRole = new Map(
       judgmentCalls.map((call, index) => [call.role, settled[index]!] as const),
@@ -1556,14 +1737,11 @@ async function runGated(
       const result = settled[index]!;
       return result.status === 'rejected' ? [{ role, reason: result.reason }] : [];
     });
-    const externalCancellation = rejected.find(
+    const externalCancellation = coordinated.cancellation ?? rejected.find(
       ({ reason }) =>
         reason instanceof RoleCancellationError &&
         reason.cancellation.source !== 'internal',
-    );
-    const primaryFailure = externalCancellation ??
-      rejected.find(({ reason }) => !(reason instanceof RoleCancellationError)) ??
-      rejected[0];
+    )?.reason;
 
     const reviewerSettled = settledByRole.get('reviewer');
     const techLeadSettled = settledByRole.get('tech-lead');
@@ -1584,38 +1762,6 @@ async function runGated(
     lastSecurity = securitySettled?.status === 'fulfilled'
       ? normalizeGateVerdict(securitySettled.value as GateReviewVerdict)
       : undefined;
-
-    // Evidence contract — between normalization and every consumer (ledger
-    // merge, gate evaluation, judgment outcomes, coder feedback), so an
-    // unevidenced blocking finding never reaches any of them. An operational
-    // reviewer failure is exempt: its findings are already fail-closed evidence
-    // of a malformed verdict, not an objection to weigh.
-    if (lastReviewer !== undefined && lastReviewer.operationalFailureReason === undefined) {
-      const contracted = await applyEvidenceContract(
-        deps, task, 'reviewer', lastReviewer, round, judgmentContext, downgradedFindings,
-      );
-      lastReviewer = {
-        ...lastReviewer,
-        outcome: contracted.outcome,
-        findings: contracted.findings,
-        objections: contracted.findings,
-      };
-    }
-    if (lastTechLeadDiff !== undefined) {
-      lastTechLeadDiff = await applyEvidenceContract(
-        deps, task, 'tech-lead', lastTechLeadDiff, round, judgmentContext, downgradedFindings,
-      );
-    }
-    if (lastDesigner !== undefined) {
-      lastDesigner = await applyEvidenceContract(
-        deps, task, 'designer', lastDesigner, round, judgmentContext, downgradedFindings,
-      );
-    }
-    if (lastSecurity !== undefined) {
-      lastSecurity = await applyEvidenceContract(
-        deps, task, 'security', lastSecurity, round, judgmentContext, downgradedFindings,
-      );
-    }
 
     judgmentOutcomes.splice(0, judgmentOutcomes.length, ...judgmentCalls.map(({ role }, index) => {
       const result = settled[index]!;
@@ -1647,48 +1793,49 @@ async function runGated(
         ...(verdict?.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
       } satisfies JudgmentOutcomeEvidence;
     }));
+    if (externalCancellation !== undefined) throw externalCancellation;
 
     // Consume completed results before surfacing the stable primary operational
     // failure so bounded sibling outcomes and findings remain durable.
-    let reviewerOperationalFeedback: GateRejectionFeedback | undefined;
     if (lastReviewer !== undefined) {
-      mergeFindingsIntoLedger(
-        findingsLedger,
-        explicitNonReversibleFindingIds,
-        'reviewer',
-        lastReviewer.findings,
-        round,
-      );
-      applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
-      emitRoleVerdict(input, {
-        role: 'reviewer',
-        gate: 'reviewer-verdict',
-        verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
-        summary: summarizeReviewerVerdict(lastReviewer),
-      });
       if (lastReviewer.operationalFailureReason !== undefined) {
-        reviewerOperationalFeedback = buildGateRejectionFeedback({
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          artifact: 'reviewer-verdict',
-          reason: lastReviewer.operationalFailureReason,
+        emitReviewQuorumProgress(input, {
+          event: 'review-role-operational-failure',
+          role: 'reviewer',
+          failureCategory: 'invalid-verdict',
+          line: `Reviewer unavailable: ${boundedJudgmentSummary(lastReviewer.operationalFailureReason)}. ` +
+            'Other independent reviews continue toward quorum.',
         });
-        await recordGateRejection(deps, reviewerOperationalFeedback);
-        emitGateRejection(input, reviewerOperationalFeedback);
-      } else if (!isReviewerPass(lastReviewer)) {
-        const feedback = buildGateRejectionFeedback({
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          artifact: 'reviewer-verdict',
-          reason: lastReviewer.findings.length > 0
-            ? summarizeReviewerVerdict(lastReviewer)
-            : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
-          actionableNotes: suggestedChangesFromVerdict(lastReviewer),
+      } else {
+        mergeFindingsIntoLedger(
+          findingsLedger,
+          explicitNonReversibleFindingIds,
+          'reviewer',
+          lastReviewer.findings,
+          round,
+        );
+        applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
+        emitRoleVerdict(input, {
+          role: 'reviewer',
+          gate: 'reviewer-verdict',
+          verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
+          summary: summarizeReviewerVerdict(lastReviewer),
         });
-        await recordGateRejection(deps, feedback);
-        emitGateRejection(input, feedback);
-        lastRejectionFeedback = feedback;
-        roundFeedback.push(feedback);
+        if (!isReviewerPass(lastReviewer)) {
+          const feedback = buildGateRejectionFeedback({
+            rejectingRole: 'reviewer',
+            counterpartRole: 'coder',
+            artifact: 'reviewer-verdict',
+            reason: lastReviewer.findings.length > 0
+              ? summarizeReviewerVerdict(lastReviewer)
+              : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
+            actionableNotes: suggestedChangesFromVerdict(lastReviewer),
+          });
+          await recordGateRejection(deps, feedback);
+          emitGateRejection(input, feedback);
+          lastRejectionFeedback = feedback;
+          roundFeedback.push(feedback);
+        }
       }
     }
     if (lastTechLeadDiff !== undefined) {
@@ -1787,14 +1934,11 @@ async function runGated(
         roundFeedback.push(feedback);
       }
     }
-    if (primaryFailure !== undefined) {
-      throw primaryFailure.reason;
-    }
-    if (reviewerOperationalFeedback !== undefined && lastReviewer !== undefined) {
+    if (coordinated.failure !== undefined) {
       return fail(task, roles, handoffNotes, {
-        failureReason: lastReviewer.operationalFailureReason!,
-        rejectionFeedback: reviewerOperationalFeedback,
-        reviewerVerdict: lastReviewer,
+        failureReason: coordinated.failure.diagnostic,
+        reviewQuorum: coordinated.evidence,
+        reviewQuorumFailure: coordinated.failure,
         gateVerdicts: buildWorkflowGateVerdicts(
           lastReviewer,
           lastTechLeadDiff,
@@ -1809,19 +1953,20 @@ async function runGated(
         noCodeTestRationale,
       });
     }
-
+    if (coordinated.evidence.status === 'satisfied' &&
+        coordinated.evidence.satisfyingRole !== 'reviewer') {
+      resolveQuorumReviewedFindings(findingsLedger, roundFindingsLedger);
+    }
     if (
-      lastReviewer !== undefined &&
-      isReviewerPass(lastReviewer) &&
-      isGatePass(lastTechLeadDiff) &&
+      coordinated.evidence.status === 'satisfied' &&
       isGatePass(lastDesigner) &&
-      isGatePass(lastSecurity) &&
-      reviewerVerificationAllowsCloseout(
-        roundFindingsLedger,
-        lastReviewer?.verifiedFindings,
-        findingsLedger,
-        round < configuredRoundBudget,
-      )
+      (coordinated.evidence.satisfyingRole !== 'reviewer' ||
+        reviewerVerificationAllowsCloseout(
+          roundFindingsLedger,
+          lastReviewer?.verifiedFindings,
+          findingsLedger,
+          round < configuredRoundBudget,
+        ))
     ) {
       return {
         taskId: task.id,
@@ -1839,6 +1984,7 @@ async function runGated(
           ? { reviewSurfaceHash: approvedReviewSurfaceHash }
           : {}),
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+        reviewQuorum: coordinated.evidence,
       };
     }
 
@@ -1850,7 +1996,6 @@ async function runGated(
     const roundConditionalGateFailure = conditionalGateBlockReason(
       task,
       lastDesigner,
-      lastSecurity,
     );
     if (lastRound && roundConditionalGateFailure !== undefined) {
       emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
@@ -2091,7 +2236,6 @@ async function runGated(
             const conditionalGateFailure = conditionalGateBlockReason(
               task,
               lastDesigner,
-              lastSecurity,
             );
             if (conditionalGateFailure !== undefined) {
               emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
@@ -2113,6 +2257,36 @@ async function runGated(
                 downgradedFindings,
                 adjudications,
                 noCodeTestRationale,
+              });
+            }
+            // Adjudication settles only the reviewer/tech-lead split. A
+            // separately completed security dissent remains ordinary coder
+            // feedback and cannot be erased by that ruling.
+            if (!isGatePass(lastSecurity)) {
+              if (!lastRound) {
+                coderFeedback = roundFeedback;
+                continue;
+              }
+              emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
+              return block(task, roles, handoffNotes, {
+                blockedReason: 'security review failed at the round cap',
+                ...(lastRejectionFeedback !== undefined
+                  ? { rejectionFeedback: lastRejectionFeedback }
+                  : {}),
+                reviewerVerdict: lastReviewer,
+                gateVerdicts: buildWorkflowGateVerdicts(
+                  lastReviewer,
+                  lastTechLeadDiff,
+                  lastDesigner,
+                  lastSecurity,
+                ),
+                findingsLedger,
+                loopExitReason: 'hard-budget',
+                objectionOpen: false,
+                downgradedFindings,
+                adjudications,
+                noCodeTestRationale,
+                reviewQuorum: coordinated.evidence,
               });
             }
             emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
@@ -2196,7 +2370,6 @@ async function runGated(
         const conditionalGateFailure = conditionalGateBlockReason(
           task,
           lastDesigner,
-          lastSecurity,
         );
         if (conditionalGateFailure !== undefined) {
           emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
@@ -2264,7 +2437,6 @@ async function runGated(
     const conditionalGateFailure = conditionalGateBlockReason(
       task,
       lastDesigner,
-      lastSecurity,
     );
     if (conditionalGateFailure !== undefined) {
       return block(task, roles, handoffNotes, {
@@ -2335,7 +2507,6 @@ async function runGated(
   const conditionalGateFailure = conditionalGateBlockReason(
     task,
     lastDesigner,
-    lastSecurity,
   );
   if (conditionalGateFailure !== undefined) {
     emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner, lastSecurity);
@@ -2499,6 +2670,8 @@ function block(
     downgradedFindings?: DowngradedFinding[];
     adjudications?: AdjudicationRecord[];
     adjudicationFailure?: AdjudicationFailure;
+    reviewQuorum?: ReviewQuorumEvidence;
+    reviewQuorumFailure?: ReviewQuorumFailure;
     adjudicationUpheldFail?: true;
   },
 ): TaskEvidence {
@@ -2521,6 +2694,10 @@ function block(
       : {}),
     ...(extra.adjudicationFailure !== undefined
       ? { adjudicationFailure: extra.adjudicationFailure }
+      : {}),
+    ...(extra.reviewQuorum !== undefined ? { reviewQuorum: extra.reviewQuorum } : {}),
+    ...(extra.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: extra.reviewQuorumFailure }
       : {}),
     ...(extra.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true as const } : {}),
     ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
@@ -2548,6 +2725,8 @@ function fail(
     downgradedFindings?: DowngradedFinding[];
     adjudications?: AdjudicationRecord[];
     adjudicationFailure?: AdjudicationFailure;
+    reviewQuorum?: ReviewQuorumEvidence;
+    reviewQuorumFailure?: ReviewQuorumFailure;
   },
 ): TaskEvidence {
   return {
@@ -2569,6 +2748,10 @@ function fail(
       : {}),
     ...(extra.adjudicationFailure !== undefined
       ? { adjudicationFailure: extra.adjudicationFailure }
+      : {}),
+    ...(extra.reviewQuorum !== undefined ? { reviewQuorum: extra.reviewQuorum } : {}),
+    ...(extra.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: extra.reviewQuorumFailure }
       : {}),
     ...(extra.downgradedFindings !== undefined && extra.downgradedFindings.length > 0
       ? { downgradedFindings: extra.downgradedFindings }
@@ -2875,10 +3058,1028 @@ export const JUDGMENT_FORCE_SETTLE_GRACE_MS = 1_000;
 export const JUDGMENT_SUMMARY_MAX_CHARS = 500;
 
 function boundedJudgmentSummary(value: string): string {
-  return scrubAbsolutePaths(value)
+  return scrubGenericAbsolutePaths(scrubAbsolutePaths(value))
     .replace(/[\r\n\t]+/g, ' ')
     .trim()
     .slice(0, JUDGMENT_SUMMARY_MAX_CHARS);
+}
+
+/** Backward-compatible parser for durable/API projections. Legacy records
+ * simply omit this field; malformed new evidence is dropped fail-closed. */
+export function parseReviewQuorumEvidence(value: unknown): ReviewQuorumEvidence | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  if (!['pending', 'satisfied', 'objected', 'failed'].includes(String(source['status'])) ||
+      !source['roles'] || typeof source['roles'] !== 'object' || Array.isArray(source['roles'])) {
+    return undefined;
+  }
+  const satisfyingRole = source['satisfyingRole'];
+  const objectingRole = source['objectingRole'];
+  if ((satisfyingRole !== undefined && !isEligibleReviewRole(satisfyingRole)) ||
+      (objectingRole !== undefined && !isReviewRole(objectingRole))) return undefined;
+  const status = source['status'];
+  if (
+    (status === 'satisfied' && (satisfyingRole === undefined || objectingRole !== undefined)) ||
+    (status === 'objected' && (objectingRole === undefined || satisfyingRole !== undefined)) ||
+    ((status === 'pending' || status === 'failed') &&
+      (satisfyingRole !== undefined || objectingRole !== undefined))
+  ) return undefined;
+  const roles: ReviewQuorumEvidence['roles'] = {};
+  for (const [key, raw] of Object.entries(source['roles'] as Record<string, unknown>)) {
+    if (!isReviewRole(key) || !raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const role = raw as Record<string, unknown>;
+    if (!['pending', 'running', 'pass', 'reject', 'operational-failure', 'cancelled']
+      .includes(String(role['status'])) || !Number.isSafeInteger(role['attemptsConsumed']) ||
+      Number(role['attemptsConsumed']) < 0 || Number(role['attemptsConsumed']) > REVIEW_BATCH_MAX_ATTEMPTS ||
+      typeof role['retryEligible'] !== 'boolean' ||
+      (role['durationMs'] !== undefined && (!Number.isSafeInteger(role['durationMs']) || Number(role['durationMs']) < 0)) ||
+      (role['failureCategory'] !== undefined && !isReviewFailureCategory(role['failureCategory'])) ||
+      (role['diagnostic'] !== undefined && typeof role['diagnostic'] !== 'string')) return undefined;
+    roles[key] = {
+      status: role['status'] as ReviewQuorumRoleEvidence['status'],
+      attemptsConsumed: role['attemptsConsumed'] as number,
+      retryEligible: role['retryEligible'] as boolean,
+      ...(role['durationMs'] !== undefined ? { durationMs: role['durationMs'] as number } : {}),
+      ...(role['failureCategory'] !== undefined
+        ? { failureCategory: role['failureCategory'] as ReviewBatchFailureCategory }
+        : {}),
+      ...(role['diagnostic'] !== undefined
+        ? { diagnostic: boundedJudgmentSummary(role['diagnostic'] as string) }
+        : {}),
+    };
+  }
+  if (satisfyingRole !== undefined && roles[satisfyingRole]?.status !== 'pass') return undefined;
+  if (objectingRole !== undefined && roles[objectingRole]?.status !== 'reject') return undefined;
+  return {
+    status: status as ReviewQuorumEvidence['status'],
+    ...(satisfyingRole !== undefined ? { satisfyingRole } : {}),
+    ...(objectingRole !== undefined ? { objectingRole } : {}),
+    roles,
+  };
+}
+
+export function parseReviewQuorumFailure(value: unknown): ReviewQuorumFailure | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  if (!['review-paths-exhausted', 'required-designer-unavailable', 'review-surface-drift',
+    'review-checkpoint-failure']
+    .includes(String(source['category'])) || !Array.isArray(source['failedRoles']) ||
+    !source['failedRoles'].every(isReviewRole) || typeof source['diagnostic'] !== 'string') {
+    return undefined;
+  }
+  return {
+    category: source['category'] as ReviewQuorumFailure['category'],
+    failedRoles: [...source['failedRoles']] as ReviewBatchRole[],
+    diagnostic: boundedJudgmentSummary(source['diagnostic']),
+  };
+}
+
+function isReviewRole(value: unknown): value is ReviewBatchRole {
+  return value === 'reviewer' || value === 'tech-lead' || value === 'designer' || value === 'security';
+}
+
+function isEligibleReviewRole(value: unknown): value is ReviewBatchEligibleRole {
+  return value === 'reviewer' || value === 'tech-lead' || value === 'security';
+}
+
+function isReviewFailureCategory(value: unknown): value is ReviewBatchFailureCategory {
+  return value === 'interrupted' || value === 'provider' || value === 'timeout' ||
+    value === 'executor-exit' || value === 'checkpoint' || value === 'invalid-verdict' ||
+    value === 'unknown';
+}
+
+interface ReviewBatchCall {
+  role: JudgmentRole;
+  call: (attempt: number, binding: ReviewBatchBinding) => Promise<unknown>;
+}
+
+interface CoordinatedReviewBatch {
+  settled: Map<JudgmentRole, PromiseSettledResult<unknown>>;
+  evidence: ReviewQuorumEvidence;
+  failure?: ReviewQuorumFailure;
+  cancellation?: RoleCancellationError;
+}
+
+async function coordinateReviewBatch(args: {
+  task: SizedTask;
+  input: TeamTaskRunInput;
+  deps: TeamTaskDeps;
+  round: number;
+  judgmentBatchId: string;
+  reviewState: Omit<CanonicalReviewState, 'diff'>;
+  judgmentContext: JudgmentContext;
+  invariantChecklistBlock?: string;
+  invariantChecklist?: InvariantChecklistEvidence;
+  findingsLedger: FindingsLedgerEntry[];
+  coderSelfReviews: CoderSelfReviewRecord[];
+  downgradedFindings: DowngradedFinding[];
+  handoffNotes: string[];
+  testIntentRepair?: TaskEvidence['testIntentRepair'];
+  adjudications: AdjudicationRecord[];
+  seenSplitSignatures: Set<string>;
+  explicitNonReversibleFindingIds: Set<string>;
+  previousMaxOpenSeverity?: ObjectionSeverity;
+  flatMaxOpenSeverityRounds: number;
+  finalizeVerdict?: (role: JudgmentRole, rawVerdict: unknown) => Promise<unknown>;
+  resumeState?: ReviewBatchState;
+  calls: ReviewBatchCall[];
+}): Promise<CoordinatedReviewBatch> {
+  const now = new Date().toISOString();
+  const roleStates = args.calls.map(({ role }) => ({
+    role,
+    quorumEligible: role !== 'designer',
+    required: role === 'designer',
+    status: 'pending' as const,
+    attemptsConsumed: 0,
+    retryEligible: role !== 'designer',
+    attempts: [],
+  }));
+  const freshState: ReviewBatchState = {
+    version: 1,
+    batchId: args.judgmentBatchId,
+    taskId: args.task.id,
+    taskBaseTree: args.reviewState.baseTree,
+    currentReviewTree: args.reviewState.currentTree,
+    canonicalHash: args.reviewState.hash,
+    round: args.round,
+    workflowAttempt: args.input.workflowAttempt ?? 1,
+    createdAt: now,
+    updatedAt: now,
+    quorum: { status: 'pending' },
+    roles: roleStates,
+    resumeContext: {
+      artifactPass: args.judgmentContext.artifactPass,
+      tests: Array.isArray(args.judgmentContext.tests)
+        ? [...args.judgmentContext.tests]
+        : args.judgmentContext.tests,
+      qa: args.judgmentContext.qa.kind === 'tests-written'
+        ? { kind: 'tests-written', testIds: [...args.judgmentContext.qa.testIds] }
+        : { ...args.judgmentContext.qa },
+      coderHandoffNotes: [...args.judgmentContext.coderHandoffNotes],
+      accumulatedHandoffNotes: [...args.handoffNotes],
+      ...(args.testIntentRepair !== undefined
+        ? { testIntentRepair: structuredClone(args.testIntentRepair) }
+        : {}),
+      ...(args.adjudications.length > 0
+        ? {
+            adjudications: structuredClone(args.adjudications) as unknown as Array<Record<string, unknown>>,
+          }
+        : {}),
+      ...(args.invariantChecklistBlock !== undefined
+        ? { invariantChecklistBlock: args.invariantChecklistBlock }
+        : {}),
+      ...(args.invariantChecklist !== undefined
+        ? { invariantChecklist: structuredClone(args.invariantChecklist) }
+        : {}),
+      ...(args.findingsLedger.length > 0
+        ? {
+            findingsLedger: structuredClone(args.findingsLedger) as unknown as Array<Record<string, unknown>>,
+          }
+        : {}),
+      ...(args.coderSelfReviews.length > 0
+        ? {
+            coderSelfReviews: structuredClone(args.coderSelfReviews) as unknown as Array<Record<string, unknown>>,
+          }
+        : {}),
+      ...(args.downgradedFindings.length > 0
+        ? {
+            downgradedFindings: structuredClone(args.downgradedFindings) as unknown as Array<Record<string, unknown>>,
+          }
+        : {}),
+      ...(args.seenSplitSignatures.size > 0
+        ? { seenSplitSignatures: [...args.seenSplitSignatures] }
+        : {}),
+      ...(args.explicitNonReversibleFindingIds.size > 0
+        ? { explicitNonReversibleFindingIds: [...args.explicitNonReversibleFindingIds] }
+        : {}),
+      ...(args.previousMaxOpenSeverity !== undefined
+        ? { previousMaxOpenSeverity: args.previousMaxOpenSeverity }
+        : {}),
+      ...(args.flatMaxOpenSeverityRounds > 0
+        ? { flatMaxOpenSeverityRounds: args.flatMaxOpenSeverityRounds }
+        : {}),
+    },
+  };
+  let resumeFailure: ReviewQuorumFailure | undefined;
+  let state = freshState;
+  if (args.resumeState !== undefined) {
+    try {
+      state = resumeReviewBatchState(args.resumeState, {
+        taskId: args.task.id,
+        baseTree: args.reviewState.baseTree,
+        currentTree: args.reviewState.currentTree,
+        canonicalHash: args.reviewState.hash,
+        interruptedAt: now,
+      });
+    } catch (err) {
+      if (!(err instanceof ReviewBatchResumeError)) throw err;
+      resumeFailure = {
+        category: 'review-surface-drift',
+        failedRoles: [],
+        diagnostic: sanitizeExecutionDiagnostic(
+          `Review quorum operational hold: ${err.category}; ${err.message}`,
+        ),
+      };
+      state = { ...freshState, quorum: { status: 'failed' } };
+    }
+  }
+  if (resumeFailure === undefined && args.resumeState !== undefined) {
+    const expectedRoles = args.calls.map(({ role }) => role).sort();
+    const durableRoles = state.roles.map(({ role }) => role).sort();
+    if (JSON.stringify(expectedRoles) !== JSON.stringify(durableRoles)) {
+      resumeFailure = {
+        category: 'review-surface-drift',
+        failedRoles: [],
+        diagnostic: 'Review quorum operational hold: durable review role set changed',
+      };
+      state = { ...state, quorum: { status: 'failed' } };
+    }
+  }
+  let checkpointChain = Promise.resolve();
+  const persist = async (): Promise<void> => {
+    checkpointChain = checkpointChain
+      .catch(() => undefined)
+      .then(() => {
+        const resumeContext = state.resumeContext === undefined
+          ? undefined
+          : {
+              ...state.resumeContext,
+              ...(args.downgradedFindings.length > 0
+                ? {
+                    downgradedFindings: structuredClone(args.downgradedFindings) as unknown as Array<Record<string, unknown>>,
+                  }
+                : {}),
+            };
+        state = {
+          ...state,
+          updatedAt: new Date().toISOString(),
+          ...(resumeContext !== undefined ? { resumeContext } : {}),
+        };
+        return args.deps.persistReviewBatch?.(structuredClone(state));
+      });
+    await checkpointChain;
+  };
+  const finishBatch = async (): Promise<Error | undefined> => {
+    try {
+      await args.deps.finishJudgmentBatch?.(args.judgmentBatchId);
+      return undefined;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  };
+  try {
+    await persist();
+  } catch (err) {
+    state = { ...state, quorum: { status: 'failed' } };
+    const failure: ReviewQuorumFailure = {
+      category: 'review-checkpoint-failure',
+      failedRoles: [],
+      diagnostic: sanitizeExecutionDiagnostic(
+        `Review quorum operational hold: checkpoint write failed; ${(err as Error).message}`,
+      ),
+    };
+    const finishError = await finishBatch();
+    if (finishError !== undefined) {
+      failure.diagnostic = sanitizeExecutionDiagnostic(
+        `${failure.diagnostic}; batch cleanup failed: ${finishError.message}`,
+      );
+    }
+    return { settled: new Map(), evidence: reviewQuorumEvidence(state), failure };
+  }
+
+  if (resumeFailure !== undefined) {
+    const evidence = reviewQuorumEvidence(state);
+    const finishError = await finishBatch();
+    if (finishError !== undefined) {
+      resumeFailure.diagnostic = sanitizeExecutionDiagnostic(
+        `${resumeFailure.diagnostic}; batch cleanup failed: ${finishError.message}`,
+      );
+    }
+    return { settled: new Map(), evidence, failure: resumeFailure };
+  }
+
+  const latest = new Map<JudgmentRole, PromiseSettledResult<unknown>>();
+  const active = new Map<JudgmentRole, Promise<void>>();
+  const rawSettledFinalizing = new Set<JudgmentRole>();
+  const cancelledAtDecision = new Set<JudgmentRole>();
+  const attemptStarted = new Map<JudgmentRole, number>();
+  let suppressLateSettlements = false;
+  let completionSignal: (() => void) | undefined;
+  let queuedCompletions = 0;
+  const nextCompletion = (): Promise<void> => {
+    if (queuedCompletions > 0) {
+      queuedCompletions -= 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => { completionSignal = resolve; });
+  };
+  const completeRole = (role: JudgmentRole): void => {
+    active.delete(role);
+    if (completionSignal !== undefined) {
+      completionSignal();
+      completionSignal = undefined;
+    } else {
+      queuedCompletions += 1;
+    }
+  };
+
+  const bindingFor = (role: JudgmentRole, attempt: number): ReviewBatchBinding => {
+    try {
+      if (attempt > 1 && role !== 'designer') {
+        const escalation = args.deps.resolveReviewRoleEscalation?.(role);
+        if (escalation !== undefined) return escalation;
+        const prior = state.roles.find((item) => item.role === role)?.attempts.at(-1);
+        if (prior !== undefined) {
+          return {
+            model: prior.model,
+            provider: prior.provider,
+            ...(prior.format !== undefined ? { format: prior.format } : {}),
+          };
+        }
+      }
+      return args.deps.resolveReviewRoleBinding?.(role, attempt) ?? {
+        model: 'unspecified',
+        provider: role === 'reviewer' ? 'openai' : args.input.coderProvider,
+      };
+    } catch {
+      return {
+        model: 'unavailable',
+        provider: role === 'reviewer'
+          ? (args.input.coderProvider === 'anthropic' ? 'openai' : 'anthropic')
+          : args.input.coderProvider,
+      };
+    }
+  };
+  const roleState = (role: JudgmentRole) => state.roles.find((item) => item.role === role)!;
+  const replaceRole = (next: ReviewBatchState['roles'][number]): void => {
+    state = { ...state, roles: state.roles.map((item) => item.role === next.role ? next : item) };
+  };
+  const launch = async (spec: ReviewBatchCall, attempt: number): Promise<void> => {
+    const startedAt = new Date().toISOString();
+    const binding = bindingFor(spec.role, attempt);
+    const attemptCanRetry = spec.role !== 'designer' && attempt < REVIEW_BATCH_MAX_ATTEMPTS;
+    const previous = roleState(spec.role);
+    replaceRole({
+      ...previous,
+      status: 'running',
+      attemptsConsumed: attempt,
+      retryEligible: attemptCanRetry,
+      attempts: [...previous.attempts, {
+        attemptId: randomUUID(),
+        attempt,
+        status: 'running',
+        startedAt,
+        ...binding,
+        retryEligible: attemptCanRetry,
+      }],
+    });
+    attemptStarted.set(spec.role, Date.now());
+    try {
+      await persist();
+    } catch (err) {
+      const endedAt = new Date().toISOString();
+      const diagnostic = sanitizeExecutionDiagnostic(
+        `review running checkpoint write failed: ${(err as Error).message}`,
+      );
+      const failedRole = roleState(spec.role);
+      const failedAttempt = failedRole.attempts.at(-1)!;
+      replaceRole({
+        ...failedRole,
+        status: 'operational-failure',
+        retryEligible: attemptCanRetry,
+        attempts: [
+          ...failedRole.attempts.slice(0, -1),
+          {
+            ...failedAttempt,
+            status: 'operational-failure',
+            endedAt,
+            durationMs: Math.max(0, Date.now() - (attemptStarted.get(spec.role) ?? Date.now())),
+            failureCategory: 'checkpoint',
+            diagnostic,
+            retryEligible: attemptCanRetry,
+          },
+        ],
+      });
+      latest.set(spec.role, { status: 'rejected', reason: new Error(diagnostic) });
+      return;
+    }
+    const pending = Promise.resolve()
+      .then(() => spec.call(attempt, binding))
+      .then(async (value) => {
+        if (suppressLateSettlements || cancelledAtDecision.has(spec.role)) return value;
+        rawSettledFinalizing.add(spec.role);
+        return args.finalizeVerdict === undefined
+          ? value
+          : args.finalizeVerdict(spec.role, value);
+      })
+      .then(
+        (value) => {
+          if (!cancelledAtDecision.has(spec.role)) {
+            latest.set(spec.role, { status: 'fulfilled', value });
+          }
+          rawSettledFinalizing.delete(spec.role);
+        },
+        (reason) => {
+          rawSettledFinalizing.delete(spec.role);
+          if (!cancelledAtDecision.has(spec.role)) {
+            latest.set(spec.role, { status: 'rejected', reason });
+          }
+        },
+      )
+      .then(async () => {
+        if (suppressLateSettlements || cancelledAtDecision.has(spec.role)) {
+          completeRole(spec.role);
+          return;
+        }
+        const result = latest.get(spec.role)!;
+        const endedAt = new Date().toISOString();
+        const durationMs = Math.max(0, Date.now() - (attemptStarted.get(spec.role) ?? Date.now()));
+        const previousState = roleState(spec.role);
+        const previousAttempt = previousState.attempts.at(-1)!;
+        const classified = classifyReviewSettlement(spec.role, result);
+        const cancellation = result.status === 'rejected' &&
+          result.reason instanceof RoleCancellationError
+          ? operationCancellation(result.reason.cancellation)
+          : undefined;
+        const nextAttempt = {
+          ...previousAttempt,
+          status: classified.stateStatus,
+          endedAt,
+          durationMs,
+          retryEligible: classified.stateStatus === 'operational-failure' &&
+            attemptCanRetry,
+          ...(classified.failureCategory !== undefined
+            ? { failureCategory: classified.failureCategory }
+            : {}),
+          ...(classified.diagnostic !== undefined
+            ? { diagnostic: classified.diagnostic }
+            : {}),
+          ...(classified.verdict !== undefined ? { verdict: classified.verdict } : {}),
+          ...(classified.kind === 'cancelled'
+            ? {
+                cancellationReason: 'external' as const,
+                ...(cancellation !== undefined ? { cancellation: { ...cancellation } } : {}),
+              }
+            : {}),
+        };
+        replaceRole({
+          ...previousState,
+          status: classified.stateStatus,
+          retryEligible: nextAttempt.retryEligible,
+          attempts: [...previousState.attempts.slice(0, -1), nextAttempt],
+        });
+        try {
+          await persist();
+        } catch (err) {
+          const diagnostic = sanitizeExecutionDiagnostic(
+            `review checkpoint write failed: ${(err as Error).message}`,
+          );
+          latest.set(spec.role, { status: 'rejected', reason: new Error(diagnostic) });
+          const failedRole = roleState(spec.role);
+          const failedAttempt = failedRole.attempts.at(-1)!;
+          replaceRole({
+            ...failedRole,
+            status: 'operational-failure',
+            retryEligible: attemptCanRetry,
+            attempts: [
+              ...failedRole.attempts.slice(0, -1),
+              {
+                ...failedAttempt,
+                status: 'operational-failure',
+                failureCategory: 'checkpoint',
+                diagnostic,
+                retryEligible: attemptCanRetry,
+                verdict: undefined,
+              },
+            ],
+          });
+        } finally {
+          completeRole(spec.role);
+        }
+      });
+    active.set(spec.role, pending);
+  };
+
+  for (const role of state.roles) {
+    const verdict = role.attempts.at(-1)?.verdict;
+    if (role.status === 'verdict' && verdict !== undefined) {
+      const normalized = verdict.normalizedVerdict;
+      if (normalized !== undefined) {
+        latest.set(role.role, { status: 'fulfilled', value: structuredClone(normalized) });
+      } else if (verdict.findingCount === 0) {
+        latest.set(role.role, {
+          status: 'fulfilled',
+          value: { outcome: verdict.outcome, findings: [], notes: verdict.summary },
+        });
+      }
+    } else if (role.status === 'operational-failure') {
+      latest.set(role.role, {
+        status: 'rejected',
+        reason: new Error(role.attempts.at(-1)?.diagnostic ?? `${role.role} review interrupted`),
+      });
+    } else if (role.status === 'cancelled') {
+      const attempt = role.attempts.at(-1);
+      const cancellation = attempt?.cancellation;
+      if (attempt?.cancellationReason !== 'external') cancelledAtDecision.add(role.role);
+      latest.set(role.role, {
+        status: 'rejected',
+        reason: new RoleCancellationError(role.role, {
+          operationId: cancellation?.operationId ?? state.batchId,
+          source: cancellation?.source ?? 'internal',
+          requestedAt: cancellation?.requestedAt ?? attempt?.endedAt ?? state.updatedAt,
+        }),
+      });
+    }
+  }
+
+  let decision: ReviewBatchCancellationReason | undefined;
+  let satisfyingRole: ReviewBatchEligibleRole | undefined;
+  let objectingRole: ReviewBatchRole | undefined;
+  let externalCancellation: RoleCancellationError | undefined;
+  let terminalCheckpointError: Error | undefined;
+  let eligibleQuorumCheckpointed = state.quorum.status === 'satisfied';
+
+  const evaluate = (): void => {
+    // A role whose model call already completed is no longer an unresolved
+    // sibling: drain its bounded evidence-contract finalization before either
+    // a completed objection or a pass is allowed to cancel it.
+    if (rawSettledFinalizing.size > 0) return;
+    if (args.calls.some(({ role }) =>
+      active.has(role) && latest.has(role) && !cancelledAtDecision.has(role))) return;
+    for (const { role } of args.calls) {
+      if (active.has(role)) continue;
+      const result = latest.get(role);
+      if (result === undefined) continue;
+      const classified = classifyReviewSettlement(role, result);
+      if (classified.kind === 'reject') {
+        objectingRole = role;
+        decision = 'objection';
+        return;
+      }
+    }
+    const cancellations = args.calls.flatMap(({ role }) => {
+      if (active.has(role) || cancelledAtDecision.has(role)) return [];
+      const result = latest.get(role);
+      return result?.status === 'rejected' && result.reason instanceof RoleCancellationError
+        ? [result.reason]
+        : [];
+    });
+    if (cancellations.length > 0) {
+      externalCancellation = cancellations.find(
+        (item) => item.cancellation.source !== 'internal',
+      ) ?? cancellations[0];
+      decision = 'external';
+      return;
+    }
+    if (satisfyingRole === undefined) {
+      for (const role of ['reviewer', 'tech-lead', 'security'] as const) {
+        if (active.has(role)) continue;
+        if (classifyReviewSettlement(role, latest.get(role)).kind === 'pass') {
+          satisfyingRole = role;
+          break;
+        }
+      }
+    }
+    const designerPassed = !args.task.designerNeeded ||
+      (!active.has('designer') &&
+        classifyReviewSettlement('designer', latest.get('designer')).kind === 'pass');
+    if (satisfyingRole !== undefined && designerPassed) {
+      decision = 'quorum-satisfied';
+    }
+  };
+
+  const cancelRoles = async (
+    roles: ReviewBatchRole[],
+    reason: ReviewBatchCancellationReason,
+    cancellation?: OperationCancellation,
+  ): Promise<void> => {
+    if (roles.length === 0) return;
+    const requestedAt = new Date().toISOString();
+    args.deps.cancelJudgmentBatch?.(args.judgmentBatchId, reason, roles);
+    for (const role of roles) {
+      cancelledAtDecision.add(role);
+      const previous = roleState(role);
+      const attempts = previous.attempts.length === 0
+        ? [{
+            attemptId: randomUUID(),
+            attempt: 1,
+            status: 'cancelled' as const,
+            startedAt: requestedAt,
+            endedAt: requestedAt,
+            durationMs: 0,
+            ...bindingFor(role, 1),
+            retryEligible: false,
+            cancellationReason: reason,
+            ...(reason === 'external' && cancellation !== undefined
+              ? { cancellation: { ...cancellation } }
+              : {}),
+          }]
+        : previous.attempts.map((attempt, index) => index === previous.attempts.length - 1
+            ? {
+                ...attempt,
+                status: 'cancelled' as const,
+                endedAt: requestedAt,
+                durationMs: Math.max(0, Date.now() - (attemptStarted.get(role) ?? Date.now())),
+                retryEligible: false,
+                cancellationReason: reason,
+                ...(reason === 'external' && cancellation !== undefined
+                  ? { cancellation: { ...cancellation } }
+                  : {}),
+              }
+            : attempt);
+      replaceRole({
+        ...previous,
+        status: 'cancelled',
+        attemptsConsumed: attempts.length,
+        retryEligible: false,
+        attempts,
+      });
+      latest.set(role, {
+        status: 'rejected',
+        reason: new RoleCancellationError(role, {
+          operationId: args.judgmentBatchId,
+          source: 'internal',
+          requestedAt,
+        }),
+      });
+    }
+    try {
+      await persist();
+    } catch (err) {
+      terminalCheckpointError = err instanceof Error ? err : new Error(String(err));
+    }
+  };
+
+  const checkpointEligibleQuorum = async (): Promise<void> => {
+    if (satisfyingRole === undefined || eligibleQuorumCheckpointed) return;
+    eligibleQuorumCheckpointed = true;
+    state = { ...state, quorum: { status: 'satisfied', satisfyingRole } };
+    const unresolvedEligible = state.roles
+      .filter((role) => role.quorumEligible &&
+        (role.status === 'pending' || role.status === 'running') && !latest.has(role.role))
+      .map(({ role }) => role);
+    await cancelRoles(unresolvedEligible, 'quorum-satisfied');
+    if (unresolvedEligible.length === 0) {
+      try {
+        await persist();
+      } catch (err) {
+        terminalCheckpointError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    const evidence = reviewQuorumEvidence(state);
+    emitReviewQuorumProgress(args.input, {
+      event: 'review-quorum-satisfied',
+      line: `${satisfyingRole} satisfied independent review quorum; ${reviewRoleProgressLine(evidence)}.`,
+      satisfyingRole,
+      roles: evidence.roles,
+    });
+  };
+
+  evaluate();
+  await checkpointEligibleQuorum();
+  evaluate();
+  if (decision === undefined) {
+    const pendingCalls = args.calls.filter(({ role }) => roleState(role).status === 'pending' &&
+      !(satisfyingRole !== undefined && role !== 'designer'));
+    for (const spec of pendingCalls) {
+      await launch(spec, roleState(spec.role).attemptsConsumed + 1);
+    }
+    await drainReviewSettlementQueue();
+    evaluate();
+    await checkpointEligibleQuorum();
+    evaluate();
+  }
+  while (active.size > 0 && decision === undefined) {
+    const signal = nextCompletion();
+    await signal;
+    // Drain settlements already queued in this turn before a pass is allowed
+    // to cancel siblings; a completed objection always wins this comparison.
+    await drainReviewSettlementQueue();
+    evaluate();
+    await checkpointEligibleQuorum();
+    evaluate();
+  }
+
+  if (decision === undefined) {
+    const designerUnavailable = args.task.designerNeeded &&
+      classifyReviewSettlement('designer', latest.get('designer')).kind === 'operational-failure';
+    const eligiblePassCompleted = (['reviewer', 'tech-lead', 'security'] as const).some((role) =>
+      classifyReviewSettlement(role, latest.get(role)).kind === 'pass');
+    const retryCalls = designerUnavailable || eligiblePassCompleted ? [] : args.calls.filter(({ role }) => {
+      const classified = classifyReviewSettlement(role, latest.get(role));
+      return role !== 'designer' && classified.kind === 'operational-failure' &&
+        roleState(role).attemptsConsumed < REVIEW_BATCH_MAX_ATTEMPTS;
+    });
+    if (retryCalls.length > 0) {
+      emitReviewQuorumProgress(args.input, {
+        event: 'review-quorum-retry',
+        line: `Review quorum is still pending; retrying ${retryCalls.map(({ role }) => {
+          const attempt = roleState(role).attempts.at(-1);
+          return `${role} (${attempt?.failureCategory ?? 'unknown'}, ${attempt?.durationMs ?? 0}ms)`;
+        }).join(' and ')} once; each retry is the final eligible attempt.`,
+        retryingRoles: retryCalls.map(({ role }) => role),
+      });
+      for (const spec of retryCalls) {
+        await launch(spec, roleState(spec.role).attemptsConsumed + 1);
+      }
+      if (active.size === 0) {
+        evaluate();
+        await checkpointEligibleQuorum();
+        evaluate();
+      }
+      while (active.size > 0 && decision === undefined) {
+        const signal = nextCompletion();
+        await signal;
+        await drainReviewSettlementQueue();
+        evaluate();
+        await checkpointEligibleQuorum();
+        evaluate();
+      }
+    }
+  }
+
+  const unresolvedAtDecision = decision === undefined
+    ? []
+    : state.roles
+        .filter((role) => (role.status === 'pending' || role.status === 'running') && !latest.has(role.role))
+        .map(({ role }) => role);
+  if (decision !== undefined) {
+    if (unresolvedAtDecision.length > 0) {
+      await cancelRoles(
+        unresolvedAtDecision,
+        decision,
+        decision === 'external' && externalCancellation !== undefined
+          ? operationCancellation(externalCancellation.cancellation)
+          : undefined,
+      );
+    }
+    if (decision === 'quorum-satisfied') {
+      state = { ...state, quorum: { status: 'satisfied', satisfyingRole } };
+    } else if (decision === 'objection') {
+      state = { ...state, quorum: { status: 'objected', objectingRole } };
+    }
+    try {
+      await persist();
+    } catch (err) {
+      terminalCheckpointError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  let exhaustedFailure: ReviewQuorumFailure | undefined;
+  if (decision === undefined && terminalCheckpointError === undefined) {
+    const failedRoles = state.roles
+      .filter((role) => role.status === 'operational-failure')
+      .map(({ role }) => role);
+    const designerFailed = args.task.designerNeeded &&
+      roleState('designer').status === 'operational-failure';
+    const checkpointFailed = failedRoles.some((role) =>
+      roleState(role).attempts.at(-1)?.failureCategory === 'checkpoint');
+    exhaustedFailure = {
+      category: checkpointFailed
+        ? 'review-checkpoint-failure'
+        : designerFailed ? 'required-designer-unavailable' : 'review-paths-exhausted',
+      failedRoles,
+      diagnostic: sanitizeExecutionDiagnostic(
+        `Review quorum operational hold: ${failedRoles.map((role) => {
+          const item = roleState(role).attempts.at(-1);
+          return `${role} ${item?.failureCategory ?? 'unknown'} after ${item?.durationMs ?? 0}ms` +
+            (item?.diagnostic === undefined ? '' : `: ${item.diagnostic}`);
+        }).join('; ') || 'no independent review verdict completed'}`,
+      ),
+    };
+    state = { ...state, quorum: { status: 'failed' } };
+    try {
+      await persist();
+    } catch (err) {
+      terminalCheckpointError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  if (active.size > 0 && decision !== undefined) {
+    await waitForReviewCleanup(args.deps, args.judgmentBatchId, active);
+  }
+  suppressLateSettlements = true;
+  const finishError = await finishBatch();
+  terminalCheckpointError ??= finishError;
+  if (externalCancellation !== undefined) {
+    return {
+      settled: latest,
+      evidence: reviewQuorumEvidence(state),
+      cancellation: externalCancellation,
+    };
+  }
+
+  if (terminalCheckpointError !== undefined) {
+    state = { ...state, quorum: { status: 'failed' } };
+    const failedRoles = state.roles
+      .filter((role) => role.status === 'operational-failure')
+      .map(({ role }) => role);
+    const failure: ReviewQuorumFailure = {
+      category: 'review-checkpoint-failure',
+      failedRoles,
+      diagnostic: sanitizeExecutionDiagnostic(
+        `Review quorum operational hold: checkpoint write failed; ${terminalCheckpointError.message}`,
+      ),
+    };
+    const failedEvidence = reviewQuorumEvidence(state);
+    emitReviewQuorumProgress(args.input, {
+      event: 'review-quorum-hold',
+      line: failure.diagnostic,
+      failureCategory: failure.category,
+      failedRoles,
+      roles: failedEvidence.roles,
+    });
+    return { settled: latest, evidence: failedEvidence, failure };
+  }
+
+  const evidence = reviewQuorumEvidence(state);
+  if (decision === 'quorum-satisfied' || decision === 'objection') {
+    emitReviewQuorumProgress(args.input, {
+      event: decision === 'quorum-satisfied' ? 'review-quorum-satisfied' : 'review-quorum-objection',
+      line: decision === 'quorum-satisfied'
+        ? `${satisfyingRole} satisfied independent review quorum; ${reviewRoleProgressLine(evidence)}.`
+        : `${objectingRole} completed an objection; ${reviewRoleProgressLine(evidence)}.`,
+      ...(satisfyingRole !== undefined ? { satisfyingRole } : {}),
+      ...(objectingRole !== undefined ? { objectingRole } : {}),
+      roles: evidence.roles,
+    });
+    return { settled: latest, evidence };
+  }
+
+  const failure = exhaustedFailure ?? {
+    category: 'review-paths-exhausted' as const,
+    failedRoles: [],
+    diagnostic: 'Review quorum operational hold: no independent review verdict completed',
+  };
+  const failedEvidence = reviewQuorumEvidence(state);
+  emitReviewQuorumProgress(args.input, {
+    event: 'review-quorum-hold',
+    line: failure.diagnostic,
+    failureCategory: failure.category,
+    failedRoles: failure.failedRoles,
+    roles: failedEvidence.roles,
+  });
+  return { settled: latest, evidence: failedEvidence, failure };
+}
+
+function reviewRoleProgressLine(evidence: ReviewQuorumEvidence): string {
+  return Object.entries(evidence.roles).map(([role, state]) => {
+    const duration = state?.durationMs === undefined ? '' : ` in ${state.durationMs}ms`;
+    const failure = state?.failureCategory === undefined ? '' : ` (${state.failureCategory})`;
+    const retry = state?.retryEligible ? ', retry remains' : ', retry exhausted/not applicable';
+    return `${role} ${state?.status ?? 'pending'}${duration}${failure}${retry}`;
+  }).join('; ');
+}
+
+async function drainReviewSettlementQueue(): Promise<void> {
+  // A role call and its durable settlement span several promise reactions
+  // (invoke → classify → checkpoint). Drain the finite chain without waiting
+  // on genuinely unresolved siblings or introducing a timer dependency.
+  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+}
+
+function classifyReviewSettlement(
+  role: JudgmentRole,
+  result: PromiseSettledResult<unknown> | undefined,
+): {
+  kind: 'pending' | 'pass' | 'reject' | 'operational-failure' | 'cancelled';
+  stateStatus: ReviewBatchState['roles'][number]['status'];
+  failureCategory?: ReviewBatchFailureCategory;
+  diagnostic?: string;
+  verdict?: {
+    outcome: GateOutcome;
+    findingCount: number;
+    summary?: string;
+    normalizedVerdict?: Record<string, unknown>;
+  };
+} {
+  if (result === undefined) return { kind: 'pending', stateStatus: 'pending' };
+  if (result.status === 'rejected') {
+    if (result.reason instanceof RoleCancellationError) {
+      return { kind: 'cancelled', stateStatus: 'cancelled' };
+    }
+    const diagnostic = sanitizeExecutionDiagnostic(result.reason);
+    return {
+      kind: 'operational-failure',
+      stateStatus: 'operational-failure',
+      failureCategory: reviewFailureCategory(result.reason),
+      diagnostic,
+    };
+  }
+  if (role === 'reviewer' && result.value && typeof result.value === 'object' &&
+      !Array.isArray(result.value) &&
+      typeof (result.value as Record<string, unknown>)['operationalFailureReason'] === 'string') {
+    return {
+      kind: 'operational-failure',
+      stateStatus: 'operational-failure',
+      failureCategory: 'invalid-verdict',
+      diagnostic: sanitizeExecutionDiagnostic(
+        (result.value as Record<string, unknown>)['operationalFailureReason'],
+      ),
+    };
+  }
+  const verdict = role === 'reviewer'
+    ? normalizeReviewerVerdict(result.value as ReviewerVerdict)
+    : normalizeGateVerdict(result.value as GateReviewVerdict);
+  if (role === 'reviewer' && 'operationalFailureReason' in verdict &&
+      verdict.operationalFailureReason !== undefined) {
+    return {
+      kind: 'operational-failure',
+      stateStatus: 'operational-failure',
+      failureCategory: 'invalid-verdict',
+      diagnostic: sanitizeExecutionDiagnostic(verdict.operationalFailureReason),
+    };
+  }
+  const pass = role === 'reviewer'
+    ? isReviewerPass(verdict as NormalizedReviewerVerdict)
+    : isGatePass(verdict);
+  return {
+    kind: pass ? 'pass' : 'reject',
+    stateStatus: 'verdict',
+    verdict: {
+      outcome: verdict.outcome,
+      findingCount: verdict.findings.length,
+      ...(verdict.notes ? { summary: boundedJudgmentSummary(verdict.notes) } : {}),
+      normalizedVerdict: structuredClone(verdict) as unknown as Record<string, unknown>,
+    },
+  };
+}
+
+function reviewFailureCategory(reason: unknown): ReviewBatchFailureCategory {
+  if (reason instanceof ExecutionFailureError) {
+    if (reason.failure.failureStage === 'timeout') return 'timeout';
+    if (reason.failure.failureStage === 'executor-exit') return 'executor-exit';
+    if (reason.failure.failureStage === 'orchestration-adjacent' &&
+        /checkpoint/i.test(reason.failure.diagnostic)) return 'checkpoint';
+    return 'provider';
+  }
+  const message = String((reason as Error)?.message ?? reason).toLowerCase();
+  if (message.includes('checkpoint')) return 'checkpoint';
+  if (message.includes('timed out') || message.includes('timeout')) return 'timeout';
+  if (message.includes('exited') || message.includes('aborted_streaming')) return 'executor-exit';
+  return 'provider';
+}
+
+function reviewQuorumEvidence(state: ReviewBatchState): ReviewQuorumEvidence {
+  return {
+    status: state.quorum.status,
+    ...(state.quorum.satisfyingRole !== undefined
+      ? { satisfyingRole: state.quorum.satisfyingRole }
+      : {}),
+    ...(state.quorum.objectingRole !== undefined
+      ? { objectingRole: state.quorum.objectingRole }
+      : {}),
+    roles: Object.fromEntries(state.roles.map((role) => {
+      const latest = role.attempts.at(-1);
+      const status: ReviewQuorumRoleEvidence['status'] = role.status === 'verdict'
+        ? latest?.verdict?.outcome === 'fail' ? 'reject' : 'pass'
+        : role.status;
+      return [role.role, {
+        status,
+        attemptsConsumed: role.attemptsConsumed,
+        retryEligible: role.retryEligible,
+        ...(latest?.durationMs !== undefined ? { durationMs: latest.durationMs } : {}),
+        ...(latest?.failureCategory !== undefined
+          ? { failureCategory: latest.failureCategory }
+          : {}),
+        ...(latest?.diagnostic !== undefined ? { diagnostic: latest.diagnostic } : {}),
+      }];
+    })),
+  };
+}
+
+async function waitForReviewCleanup(
+  deps: TeamTaskDeps,
+  batchId: string,
+  active: Map<JudgmentRole, Promise<void>>,
+): Promise<void> {
+  let forceTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled([...active.values()]),
+      new Promise<void>((resolve) => {
+        forceTimer = setTimeout(() => {
+          deps.forceCancelJudgmentBatch?.(batchId, [...active.keys()]);
+          deadlineTimer = setTimeout(resolve, JUDGMENT_FORCE_SETTLE_GRACE_MS);
+        }, JUDGMENT_CANCEL_GRACE_MS);
+      }),
+    ]);
+  } finally {
+    if (forceTimer !== undefined) clearTimeout(forceTimer);
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  }
+}
+
+function emitReviewQuorumProgress(
+  input: TeamTaskRunInput,
+  data: Record<string, unknown>,
+): void {
+  try {
+    input.emit?.({ kind: 'activity', data });
+  } catch {
+    // Observability cannot change review coordination.
+  }
 }
 
 export function buildGateRejectionFeedback(input: {
@@ -3162,10 +4363,8 @@ function isGatePass(verdict: GateVerdict | undefined): boolean {
 function conditionalGateBlockReason(
   task: SizedTask,
   designer: GateVerdict | undefined,
-  security: GateVerdict | undefined,
 ): string | undefined {
   if (task.designerNeeded && !isGatePass(designer)) return 'designer review failed';
-  if (task.securityNeeded && !isGatePass(security)) return 'security review failed';
   return undefined;
 }
 
@@ -3325,7 +4524,9 @@ function buildWorkflowGateVerdicts(
   security: GateVerdict | undefined,
 ): WorkflowGateVerdicts | undefined {
   const verdicts: WorkflowGateVerdicts = {};
-  if (reviewer !== undefined) verdicts.reviewer = toPublicGateVerdict(reviewer);
+  if (reviewer !== undefined && reviewer.operationalFailureReason === undefined) {
+    verdicts.reviewer = toPublicGateVerdict(reviewer);
+  }
   if (techLeadDiff !== undefined) verdicts.techLeadDiff = toPublicGateVerdict(techLeadDiff);
   if (designer !== undefined) verdicts.designer = toPublicGateVerdict(designer);
   if (security !== undefined) verdicts.security = toPublicGateVerdict(security);
@@ -3448,6 +4649,16 @@ function reviewerVerificationAllowsCloseout(
   }
   const maxSeverity = maxOpenFindingSeverity(ledger);
   return maxSeverity === undefined || severityRank[maxSeverity] <= severityRank.low;
+}
+
+function resolveQuorumReviewedFindings(
+  ledger: FindingsLedgerEntry[],
+  reviewedFindings: FindingsLedgerEntry[],
+): void {
+  const reviewedIds = new Set(reviewedFindings.map(({ id }) => id));
+  for (const entry of ledger) {
+    if (reviewedIds.has(entry.id) && isUnresolvedFinding(entry)) entry.status = 'resolved';
+  }
 }
 
 function buildFindingId(

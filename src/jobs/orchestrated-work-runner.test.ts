@@ -961,13 +961,26 @@ describe('orchestratedWorkApplier', () => {
     });
 
     it('finalized → completed terminal event tagged orchestrated', async () => {
-      inject({ kind: 'finalized', outcome: 'branch-complete' });
+      const reviewQuorum = {
+        status: 'satisfied' as const,
+        satisfyingRole: 'security' as const,
+        roles: {
+          security: {
+            status: 'pass' as const,
+            attemptsConsumed: 1,
+            retryEligible: false,
+            durationMs: 125,
+          },
+        },
+      };
+      inject({ kind: 'finalized', outcome: 'branch-complete', reviewQuorum });
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
       const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal?.kind).toBe('completed');
       const data = terminal?.data as Record<string, unknown>;
       expect(data['dispatchMode']).toBe('orchestrated');
       expect(data['projectSlug']).toBe('demo');
+      expect(data['reviewQuorum']).toEqual(reviewQuorum);
       expect(created).toBe(true);
       expect(destroyed).toBe(true);
     });

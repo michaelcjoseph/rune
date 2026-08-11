@@ -81,7 +81,12 @@ import { appendTerminalBugsToBacklog } from '../intent/terminal-bug-backlog.js';
 import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
-import type { ReviewSurfaceFailure, TaskEvidence } from '../intent/team-task-workflow.js';
+import {
+  parseReviewQuorumEvidence,
+  parseReviewQuorumFailure,
+  type ReviewSurfaceFailure,
+  type TaskEvidence,
+} from '../intent/team-task-workflow.js';
 import type { TaskValidationFailure } from '../intent/task-validation.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
@@ -1245,6 +1250,16 @@ function buildOrchestrationDeps(args: {
         executionCheckpoint,
       });
     },
+    persistReviewBatch: async (reviewBatch) => {
+      const cursor = readOrchestratedRunCursor(args.workRunsDir, descriptor.id);
+      if (cursor === null) throw new Error('resumable orchestration cursor is unavailable');
+      writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, {
+        ...cursor,
+        reviewBatch,
+      });
+    },
+    readReviewBatch: () =>
+      readOrchestratedRunCursor(args.workRunsDir, descriptor.id)?.reviewBatch,
     persistTaskValidationFailure: async (failure) => {
       appendDurableValidationFailure(
         args.workRunsDir,
@@ -1328,6 +1343,8 @@ function buildOrchestrationDeps(args: {
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
     currentExecutionCheckpoint: () =>
       readOrchestratedRunCursor(args.workRunsDir, descriptor.id)?.executionCheckpoint,
+    currentReviewBatch: () =>
+      readOrchestratedRunCursor(args.workRunsDir, descriptor.id)?.reviewBatch,
     appendTerminalBugEntries: async (entries) => {
       // File to the CANONICAL product repo's bugs.md, NEVER the throwaway
       // worktree: a non-merge run (hold/partial/parked) GCs its branch, and an
@@ -3751,6 +3768,8 @@ function buildOrchestratedSummary(args: {
       : { outcome: orchestratedOutcome(result, terminal), reason: '' };
   const cancellation = workRunCancellation(data['cancellation']);
   const judgmentOutcomes = workRunJudgmentOutcomes(data['judgmentOutcomes']);
+  const reviewQuorum = parseReviewQuorumEvidence(data['reviewQuorum']);
+  const reviewQuorumFailure = parseReviewQuorumFailure(data['reviewQuorumFailure']);
   return {
     id,
     project,
@@ -3772,6 +3791,8 @@ function buildOrchestratedSummary(args: {
     ...(typeof data['gateHeldReason'] === 'string' ? { gateHeldReason: data['gateHeldReason'] } : {}),
     ...(cancellation !== undefined ? { cancellation } : {}),
     ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
+    ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+    ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
     trigger,
     ...(disposition !== undefined ? { disposition } : {}),
     ...(contextFailure !== undefined ? { contextFailure } : {}),
@@ -3806,7 +3827,7 @@ function workRunJudgmentOutcomes(
     const role = record['role'];
     const status = record['status'];
     if (
-      (role !== 'qa' && role !== 'reviewer' && role !== 'tech-lead' && role !== 'designer') ||
+      (role !== 'qa' && role !== 'reviewer' && role !== 'tech-lead' && role !== 'designer' && role !== 'security') ||
       (status !== 'pass' && status !== 'reject' && status !== 'failed' && status !== 'cancelled')
     ) {
       return undefined;
@@ -3954,6 +3975,7 @@ function mapResultToTerminal(
         ? { relatedTestDiagnostics: result.relatedTestDiagnostics }
         : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
+      ...(result.reviewQuorum !== undefined ? { reviewQuorum: result.reviewQuorum } : {}),
     });
   }
   if (result.kind === 'held') {
@@ -3961,12 +3983,14 @@ function mapResultToTerminal(
     const contextFailure = result.contextFailure;
     const relatedTestDiagnostic = result.relatedTestDiagnostic;
     const adjudicationFailure = result.adjudicationFailure;
+    const reviewQuorumFailure = result.reviewQuorumFailure;
     return term(
       mutationId,
       executionFailure === undefined &&
           contextFailure === undefined &&
           relatedTestDiagnostic === undefined &&
-          adjudicationFailure === undefined
+          adjudicationFailure === undefined &&
+          reviewQuorumFailure === undefined
         ? 'completed'
         : 'failed',
       {
@@ -3985,11 +4009,15 @@ function mapResultToTerminal(
       ...(contextFailure !== undefined ? { contextFailure } : {}),
       ...(relatedTestDiagnostic !== undefined ? { relatedTestDiagnostic } : {}),
       ...(adjudicationFailure !== undefined ? { adjudicationFailure } : {}),
+      ...(result.reviewQuorum !== undefined ? { reviewQuorum: result.reviewQuorum } : {}),
+      ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
     });
   }
   if (result.kind === 'cancelled') {
     const nested = result.cancellation;
     const judgmentOutcomes = result.judgmentOutcomes;
+    const reviewQuorum = result.reviewQuorum;
+    const reviewQuorumFailure = result.reviewQuorumFailure;
     const nestedReason = nested === undefined
       ? undefined
       : scrubPathsInText(
@@ -4003,6 +4031,8 @@ function mapResultToTerminal(
         reason: nestedReason ?? 'cancelled',
         ...(nested !== undefined ? { cancellation: nested } : {}),
         ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
+        ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+        ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
         ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
       });
     }
@@ -4013,6 +4043,8 @@ function mapResultToTerminal(
       reason: nestedReason ?? 'system-cancelled; stopped at orchestration boundary',
       ...(nested !== undefined ? { cancellation: nested } : {}),
       ...(judgmentOutcomes !== undefined ? { judgmentOutcomes } : {}),
+      ...(reviewQuorum !== undefined ? { reviewQuorum } : {}),
+      ...(reviewQuorumFailure !== undefined ? { reviewQuorumFailure } : {}),
       baseBranch,
       ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
     });
@@ -4031,6 +4063,10 @@ function mapResultToTerminal(
         ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
         : {}),
       ...(result.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
+      ...(result.reviewQuorum !== undefined ? { reviewQuorum: result.reviewQuorum } : {}),
+      ...(result.reviewQuorumFailure !== undefined
+        ? { reviewQuorumFailure: result.reviewQuorumFailure }
+        : {}),
     });
   }
   // blocked
@@ -4041,6 +4077,10 @@ function mapResultToTerminal(
       ? { relatedTestDiagnostic: result.relatedTestDiagnostic }
       : {}),
     ...(result.adjudicationUpheldFail === true ? { adjudicationUpheldFail: true } : {}),
+    ...(result.reviewQuorum !== undefined ? { reviewQuorum: result.reviewQuorum } : {}),
+    ...(result.reviewQuorumFailure !== undefined
+      ? { reviewQuorumFailure: result.reviewQuorumFailure }
+      : {}),
   });
 }
 

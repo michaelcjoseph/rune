@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import type { OrchestrationRunCursor } from '../intent/project-orchestrator.js';
+import type { ReviewBatchState } from '../intent/review-batch-state.js';
 import { buildInvariantChecklistEvidence } from '../intent/invariant-review.js';
 
 type AttestedTaskRunRecord = Omit<TaskRunRecord, 'fullSuiteAttestation' | 'validationReceipt'> & {
@@ -153,6 +154,45 @@ function cursor(overrides: Partial<OrchestrationRunCursor> = {}): OrchestrationR
       nextTaskId: 'resume-boot',
     },
     ...overrides,
+  };
+}
+
+function reviewBatch(): ReviewBatchState {
+  return {
+    version: 1,
+    batchId: 'review-batch-store',
+    taskId: 'persist-records-and-cursor',
+    taskBaseTree: '1'.repeat(40),
+    currentReviewTree: '2'.repeat(40),
+    canonicalHash: 'canonical-hash',
+    round: 1,
+    workflowAttempt: 1,
+    createdAt: '2026-08-10T12:00:00.000Z',
+    updatedAt: '2026-08-10T12:00:01.000Z',
+    quorum: { status: 'pending' },
+    roles: [{
+      role: 'reviewer',
+      quorumEligible: true,
+      required: false,
+      status: 'pending',
+      attemptsConsumed: 0,
+      retryEligible: true,
+      attempts: [],
+    }, {
+      role: 'tech-lead',
+      quorumEligible: true,
+      required: false,
+      status: 'pending',
+      attemptsConsumed: 0,
+      retryEligible: true,
+      attempts: [],
+    }],
+    resumeContext: {
+      artifactPass: 'first-pass',
+      tests: ['review-quorum'],
+      qa: { kind: 'tests-written', testIds: ['review-quorum'] },
+      coderHandoffNotes: [],
+    },
   };
 }
 
@@ -463,6 +503,25 @@ describe('orchestrated run store', () => {
     });
     await store.writeOrchestratedRunCursor!(tmpDir, 'mut-orch-1', checkpointed);
     await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toEqual(checkpointed);
+  });
+
+  it('round-trips a versioned review batch while legacy cursors remain readable', async () => {
+    const legacy = cursor();
+    await store.writeOrchestratedRunCursor!(tmpDir, legacy.runId, legacy);
+    expect(await readCursor(tmpDir, legacy.runId)).toEqual(legacy);
+
+    const batch = reviewBatch();
+    const checkpointed = cursor({
+      cursor: {
+        completedTaskIds: [],
+        currentTaskId: batch.taskId,
+        nextTaskId: batch.taskId,
+      },
+      taskBase: { taskId: batch.taskId, treeOid: batch.taskBaseTree },
+      reviewBatch: batch,
+    });
+    await store.writeOrchestratedRunCursor!(tmpDir, checkpointed.runId, checkpointed);
+    expect(await readCursor(tmpDir, checkpointed.runId)).toEqual(checkpointed);
   });
 
   it('round-trips a task base while rejecting malformed or cross-task identities', async () => {

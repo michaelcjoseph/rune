@@ -387,4 +387,69 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
     expect(out['03-other']!.mutationId).toBe(liveId);
     expect(out['03-other']!.outcome).toBeNull();
   });
+
+  it('projects batch quorum without recasting an operational role failure as rejection', () => {
+    const id = 'terminal-review-quorum-001';
+    const reviewQuorum = {
+      status: 'satisfied',
+      satisfyingRole: 'security',
+      roles: {
+        reviewer: {
+          status: 'operational-failure',
+          attemptsConsumed: 2,
+          retryEligible: false,
+          durationMs: 270_500,
+          failureCategory: 'executor-exit',
+          diagnostic: 'aborted_streaming',
+        },
+        security: {
+          status: 'pass',
+          attemptsConsumed: 1,
+          retryEligible: false,
+          durationMs: 900,
+        },
+      },
+    };
+    mkdirSync(join(dir, id), { recursive: true });
+    writeFileSync(join(dir, id, 'summary.json'), JSON.stringify({
+      id,
+      project: '02-growth',
+      product: 'aura',
+      outcome: 'branch-complete',
+      reason: 'review quorum satisfied',
+      exit: { exitCode: 0, signal: null, cancelled: false, durationMs: 10, exitFact: 'clean-exit' },
+      workProduct: {
+        commitCount: 1,
+        commitShas: ['deadbeef'],
+        filesChanged: ['src/a.ts'],
+        diffstat: '',
+        dirty: false,
+        untracked: false,
+        transitions: { tasksNewlyChecked: 1, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+      },
+      baseSha: 'base',
+      branch: 'rune-work/demo',
+      startedAt: '2026-08-10T00:00:00.000Z',
+      endedAt: '2026-08-10T00:00:01.000Z',
+      transcriptPath: '',
+      forensicsPath: '',
+      reviewQuorum,
+    }));
+    writeFileSync(indexFile, `${JSON.stringify({
+      id,
+      project: '02-growth',
+      outcome: 'branch-complete',
+      durationMs: 10,
+      startedAt: '2026-08-10T00:00:00.000Z',
+      endedAt: '2026-08-10T00:00:01.000Z',
+    })}\n`);
+
+    expect(readWorkRunProjections(dir, indexFile)['02-growth']).toMatchObject({
+      reviewQuorum: {
+        status: 'satisfied',
+        satisfyingRole: 'security',
+        roles: { reviewer: { status: 'operational-failure' } },
+      },
+    });
+  });
 });

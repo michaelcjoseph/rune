@@ -35,6 +35,7 @@ import type {
   GateRejectionFeedback,
   ObjectionFinding,
   ObjectionSeverity,
+  ReviewQuorumFailure,
   TaskEvidence,
 } from './team-task-workflow.js';
 import type { SelectedTask } from './orch-task-select.js';
@@ -80,6 +81,19 @@ function readyEvidence(task: SelectedTask): TaskEvidence {
     handoffNotes: [`did ${task.text}`],
   };
 }
+
+const SATISFIED_REVIEW_QUORUM = {
+  status: 'satisfied' as const,
+  satisfyingRole: 'security' as const,
+  roles: {
+    security: {
+      status: 'pass' as const,
+      attemptsConsumed: 1,
+      retryEligible: false,
+      durationMs: 125,
+    },
+  },
+};
 
 function redCloseout(
   outputTail = 'FAIL src/streak.test.ts > renders the card\nAssertionError: expected 3 to be 2',
@@ -689,6 +703,38 @@ describe('project-orchestrator — operational terminal', () => {
       kind: 'held',
       reason: 'purple banana',
       executionFailure: { failureStage: 'provider', role: 'coder' },
+    });
+  });
+
+  it('routes a review-quorum-only operational failure to a held operational hold, not a plain block', async () => {
+    const reviewQuorumFailure: ReviewQuorumFailure = {
+      category: 'review-paths-exhausted',
+      failedRoles: ['reviewer', 'tech-lead'],
+      diagnostic: 'every eligible review path failed for this task',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'failed',
+        rolesInvoked: ['reviewer', 'tech-lead'],
+        findingsLedger: [],
+        loopExitReason: 'operational',
+        objectionOpen: false,
+        handoffNotes: [],
+        failureReason: 'review quorum operational hold',
+        reviewQuorumFailure,
+      }),
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    // No executionFailure/adjudicationFailure/invariantReviewFailure is present —
+    // reviewQuorumFailure alone must still be enough to route to an operational
+    // hold instead of falling through to the plain-block branch.
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: 'review quorum operational hold',
+      reviewQuorumFailure,
     });
   });
 
@@ -1396,6 +1442,7 @@ describe('project-orchestrator — retry feedback', () => {
             objections: [terminalFinding],
           },
           findingsLedger: [terminalFinding],
+          reviewQuorum: SATISFIED_REVIEW_QUORUM,
         };
       },
     }, [
@@ -1417,6 +1464,7 @@ describe('project-orchestrator — retry feedback', () => {
       reason: /non-reversible|high|terminal residue|hold/i,
       worktreePath,
     });
+    expect(res).toMatchObject({ reviewQuorum: SATISFIED_REVIEW_QUORUM });
     expect(workflowCalls).toBe(1);
     expect(bugEntries).toEqual([
       {
@@ -1800,6 +1848,72 @@ describe('project-orchestrator — durable run state', () => {
     expect(reconstructed.completedTaskIds).toEqual([]);
     expect(reconstructed.nextTask?.id).toBe('build-the-streak-core');
     expect(reconstructed.drift).toBe(false);
+  });
+
+  it('includes the durable review batch on the task-start cursor only when it belongs to the task about to run', async () => {
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
+    const persistedCursors: Record<string, unknown>[] = [];
+    const matchingBatch = { taskId: 'build-the-streak-core', batchId: 'fixture-batch' };
+    const h = makeHarness({
+      currentReviewBatch: () => matchingBatch as unknown as ReturnType<
+        NonNullable<OrchestrationDeps['currentReviewBatch']>
+      >,
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['qa'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: [],
+        blockedReason: 'stop before closeout',
+      }),
+    });
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      writeRunCursor: async (cursor: unknown) => {
+        persistedCursors.push(cursor as Record<string, unknown>);
+      },
+    };
+
+    await runProjectOrchestration(deps);
+
+    expect(persistedCursors).toHaveLength(1);
+    expect(persistedCursors[0]).toMatchObject({ reviewBatch: matchingBatch });
+  });
+
+  it('omits the durable review batch from the cursor when it belongs to a different task', async () => {
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
+    const persistedCursors: Record<string, unknown>[] = [];
+    const staleBatch = { taskId: 'a-previous-task-attempt', batchId: 'stale-batch' };
+    const h = makeHarness({
+      currentReviewBatch: () => staleBatch as unknown as ReturnType<
+        NonNullable<OrchestrationDeps['currentReviewBatch']>
+      >,
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['qa'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: [],
+        blockedReason: 'stop before closeout',
+      }),
+    });
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      writeRunCursor: async (cursor: unknown) => {
+        persistedCursors.push(cursor as Record<string, unknown>);
+      },
+    };
+
+    await runProjectOrchestration(deps);
+
+    expect(persistedCursors).toHaveLength(1);
+    expect(persistedCursors[0]).not.toHaveProperty('reviewBatch');
   });
 
   it('refreshes the task-start cursor each iteration; closeout cursors keep currentTaskId null', async () => {
@@ -2712,6 +2826,76 @@ describe('project-orchestrator — terminal bug recording', () => {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — finalizer handoff', () => {
+  it('carries the final completed task quorum into a successful terminal result', async () => {
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        reviewQuorum: SATISFIED_REVIEW_QUORUM,
+      }),
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'finalized',
+      reviewQuorum: SATISFIED_REVIEW_QUORUM,
+    });
+  });
+
+  it('preserves completed quorum when the post-closeout checkpoint write fails', async () => {
+    let cursorWrites = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        reviewQuorum: SATISFIED_REVIEW_QUORUM,
+      }),
+      writeRunCursor: async () => {
+        cursorWrites += 1;
+        if (cursorWrites > 1) throw new Error('cursor disk unavailable');
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('cursor disk unavailable'),
+      reviewQuorum: SATISFIED_REVIEW_QUORUM,
+    });
+  });
+
+  it('preserves completed quorum when post-closeout bug recording fails', async () => {
+    const finding: FindingsLedgerEntry = {
+      id: 'finding-quorum-recording',
+      sourceGate: 'security',
+      class: 'security',
+      severity: 'medium',
+      location: 'src/review.ts:17',
+      rationale: 'follow-up evidence remains relevant after successful quorum',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        findingsLedger: [finding],
+        reviewQuorum: SATISFIED_REVIEW_QUORUM,
+      }),
+      appendTerminalBugEntries: async () => {
+        throw new Error('bug ledger unavailable');
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'held',
+      reason: expect.stringContaining('bug ledger unavailable'),
+      reviewQuorum: SATISFIED_REVIEW_QUORUM,
+    });
+  });
+
   it('hands branch/run facts to the finalizer when all tasks are checked', async () => {
     let handoffBranch: string | undefined;
     const h = makeHarness({
@@ -2727,9 +2911,14 @@ describe('project-orchestrator — finalizer handoff', () => {
 
   it('holds (records payload, no self-merge) when the finalizer is unavailable', async () => {
     const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        ...readyEvidence(task),
+        reviewQuorum: SATISFIED_REVIEW_QUORUM,
+      }),
       finalize: async () => ({ kind: 'unavailable', reason: 'finalizer not wired' }),
     });
     const res = await runProjectOrchestration(h.deps);
+    expect(res).toMatchObject({ reviewQuorum: SATISFIED_REVIEW_QUORUM });
     expect(res.kind).toBe('held');
     if (res.kind === 'held') {
       expect(res.handoff.branch).toBe('rune-work/14-x');

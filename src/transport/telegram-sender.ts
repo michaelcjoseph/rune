@@ -302,6 +302,18 @@ function formatPmAcceptanceProgress(event: BusMutationEvent): string | null {
   return parts.length > 1 ? parts.join(' · ') : null;
 }
 
+function formatReviewQuorumProgress(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const kind = typeof data['event'] === 'string' ? data['event'] : '';
+  if (!kind.startsWith('review-quorum-') && kind !== 'review-role-operational-failure') {
+    return null;
+  }
+  const line = typeof data['line'] === 'string'
+    ? redactSecrets(scrubGenericAbsolutePaths(scrubAbsolutePaths(data['line'])))
+    : '';
+  return line === '' ? null : `🧭 ${line}`;
+}
+
 /** Terminal message for a `writing` mutation (/blog, /writing-critique). The
  *  generic fallback would render "✅ /work --auto … finished" — wrong surface
  *  language for a writing run. Failure reasons arrive pre-scrubbed (the
@@ -473,7 +485,8 @@ export class TelegramSender implements MessageSender {
     if (event.mutationKind === 'orchestrated-work' && event.subKind === 'progress') {
       const text = formatMergeSuccessProgress(event)
         ?? formatCloseoutCommitProgress(event)
-        ?? formatPmAcceptanceProgress(event);
+        ?? formatPmAcceptanceProgress(event)
+        ?? formatReviewQuorumProgress(event);
       if (text) {
         void this.deliver(event.userId, text, undefined, {
           kind: 'orchestrated-progress',
