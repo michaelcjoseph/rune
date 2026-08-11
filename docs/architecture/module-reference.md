@@ -368,7 +368,7 @@ One file per slash command:
 
 ## Root tooling, `cli/`, `scripts/`, `policies/`
 
-- **`vitest.config.cjs`** — CommonJS Vitest config, deliberately avoiding Vite's ESM config-bundle write under shared `node_modules/.vite-temp`; preserves the suite include/setup/timeout/reporters/coverage contract and sets top-level `cacheDir` from `RUNE_VITEST_CACHE_DIR`, falling back to `node_modules/.vite` for ordinary local runs.
+- **`vitest.config.cjs`** — CommonJS Vitest config, deliberately avoiding Vite's ESM config-bundle write under shared `node_modules/.vite-temp`; preserves the suite include/setup/timeout/reporters/coverage contract and sets top-level `cacheDir` from `RUNE_VITEST_CACHE_DIR`, falling back to `node_modules/.vite` for ordinary local runs. Declares the reserved `validation-loopback`/`validation-sandbox-integration` tags with `strictTags: true` — the same tag vocabulary `validation-profiles.ts` uses for `strict-tags-v1` closeout sharding. `npm run test:fast`/`npm run test:sandbox` (`package.json`) apply Vitest's own `--tags-filter` against these tags for a plain, unattested local subset; `npm test` alone runs everything and is what `policies/products.json` still configures for closeout/merge-gate coverage.
 - **`cli/rune.ts`** — CLI entry point for local interactive use.
 - **`scripts/run-evals.ts`** (+ `.test.ts`) — Dev tool: parse eval YAMLs, invoke agents via `runAgent()`, report pass/fail.
 - **`scripts/register-ts.mjs`** (+ `.test.ts`) — Local Node runtime TypeScript loader using `module.registerHooks()`: resolves repo-local `.js` ESM imports to sibling `.ts`/`.tsx`/`.mts`/`.cts` files and transforms TypeScript through `esbuild` for app/script entrypoints.

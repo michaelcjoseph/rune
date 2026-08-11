@@ -9,6 +9,8 @@
     "build": "tsc --noEmit",
     "cli": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs cli/rune.ts",
     "test": "vitest run",
+    "test:fast": "vitest run --tags-filter='!validation-loopback && !validation-sandbox-integration'",
+    "test:sandbox": "vitest run --tags-filter='validation-sandbox-integration && !validation-loopback'",
     "test:watch": "vitest",
     "evals": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-evals.ts",
     "intent-scan": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-intent-scan.ts",

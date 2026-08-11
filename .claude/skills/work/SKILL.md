@@ -159,11 +159,13 @@ After implementation is complete, stage all changes but do NOT commit yet. This 
 Use the `Agent` tool with `subagent_type: "test-specialist"` to confirm the test-first tests from step 8 now pass and no regressions were introduced:
 
 ```
-Run the full test suite after implementing the [task name] task in project
-[project]. The tests for this task were written test-first in step 8 and were
-failing before implementation — confirm they now pass. The following files were
-changed: [list changed files]. Fix any regressions (previously-passing tests
-that now fail) and any broken test code. Do NOT implement unrelated features to
+Run the full test suite (`npm test` — NOT `npm run test:fast`, which skips the
+sandbox/attestation shard and cannot prove that boundary) after implementing
+the [task name] task in project [project]. Report which script you ran. The
+tests for this task were written test-first in step 8 and were failing before
+implementation — confirm they now pass. The following files were changed:
+[list changed files]. Fix any regressions (previously-passing tests that now
+fail) and any broken test code. Do NOT implement unrelated features to
 satisfy tests that are red only because their feature is not built yet.
 ```
 

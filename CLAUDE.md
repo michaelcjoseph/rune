@@ -128,6 +128,8 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 
 ### Dev rules
 
+- **Which test script to run, and what you may claim from it.** `npm run test:fast` (~16s, 6,052 tests) is the inner loop — use it while iterating. It skips the `validation-loopback` and `validation-sandbox-integration` tagged modules, so **it never proves the sandbox/attestation boundary**. Before handing off a task, and always when the diff touches `work-run-gate-runtime.ts`, `validation-sandbox-broker.ts`, `validation-profiles.ts`, `artifact-mcp.ts`, or any Seatbelt/attestation path, run the full `npm test`. Never report "tests pass" from a shard as if it were full coverage — name the script you ran. `validationCommands` in `policies/products.json` still lists plain `npm test`, so closeout and the merge gate keep full coverage regardless of which shard a local run used; do not "optimize" that entry to a shard.
+- **Tagging a new test module.** A module that spawns a real sandbox, broker, or nested process needs `// @module-tag validation-sandbox-integration` on line 1; one that binds a local port needs `// @module-tag validation-loopback`. Untagged is the default. `strictTags` is on and the trusted reporter rejects conflicting tags as a collection error, so a mistagged module fails closed rather than running in no profile.
 - **Adding a nightly step:** update `nightly.test.ts`'s step-count + ordered step-name snapshot (and any positional `steps[i]` index), and check `nightly.nosleep.test.ts`'s narrow `node:child_process` mock (it stubs `spawn` only — a step that transitively imports `execFile` makes the whole module fail to import as "0 test").
 - **Structural changes** (new module/command/agent/env var/script) → run the `docs-sync` agent: it maintains `docs/architecture/module-reference.md` and the area-level module map + command list here, never a per-file tree in this file.
 
@@ -138,7 +140,9 @@ npm run dev          # node --watch + local TS loader
 npm run start        # production
 npm run mcp:start    # standalone MCP daemon
 npm run build        # type-check only (no emit)
-npm run test         # vitest run
+npm run test         # FULL suite — the only run that proves the sandbox boundary
+npm run test:fast    # inner-loop shard: excludes loopback + sandbox-integration tags
+npm run test:sandbox # sandbox-integration shard only (slow: real nested vitest spawns)
 npm run cli          # local CLI interface
 npm run evals        # run agent eval YAMLs
 npm run intent-scan       # Ask-Twice intent scan

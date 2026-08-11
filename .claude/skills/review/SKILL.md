@@ -128,7 +128,11 @@ Run `git diff HEAD` yourself to see the full diff for tracked changes.
      Match the project's existing test layout, assertion style, and
      mocking patterns. Do NOT modify unrelated existing tests, and do
      NOT modify non-test source files.
-  3. Run the full test suite.
+  3. Run the full test suite. In this repo that is `npm test` — NOT
+     `npm run test:fast`, which skips the `validation-loopback` and
+     `validation-sandbox-integration` shards and so cannot prove the
+     sandbox/attestation boundary. State which script you ran; never
+     report a shard's result as full coverage.
   4. If your new tests fail, fix bugs in the test code only (setup,
      imports, mock wiring, fixture data). NEVER weaken assertions
      to make a failing test pass — that's the failure mode this
@@ -160,7 +164,8 @@ Run `git diff HEAD` yourself to see the full diff for tracked changes.
      passing test.
 
   Return:
-  - PASS or FAIL with counts (N passing, M failing)
+  - PASS or FAIL with counts (N passing, M failing) and the exact test
+    script you ran
   - New test files created (paths only, or "none")
   - Coverage summary: per changed function/feature, behaviors
     covered vs uncovered
@@ -323,7 +328,7 @@ Print the report in this format:
 > Each agent's native verdict line is shown here for reference only — it does not influence the overall verdict (which is computed from normalized findings in step 4). If an agent is UNAVAILABLE, replace its body with `UNAVAILABLE — <one-line reason>`.
 
 ### test-specialist — <PASS / FAIL>
-- Suite: <N passing / M failing>
+- Suite: <N passing / M failing> via `<script run>`
 - New tests: <paths or "none"> *(not reviewed in this pass — will be on next `/review`)*
 - Coverage: <N behaviors tested, M uncovered>
 - Uncovered: <list of behaviors not exercised by tests, or "none">
