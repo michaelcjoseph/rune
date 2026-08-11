@@ -2,6 +2,8 @@
 
 Always-on personal second brain server. TypeScript/Node.js. A single Node.js process that connects a Telegram bot to the **pkms vault** (`~/workspace/pkms`) via the Claude Code CLI, and doubles as an autonomous product-team orchestration platform.
 
+Always use ASD-STE100 Simplified Technical English. Follow Zinsser's four principles of quality writing: Simplicity, Brevity, Clarity, Humanity. Strive to make your writing unsummarizable, in the sense that it has so little fluff left in it that if you take any words out, as summaries by definition do, you lose a lot of interesting ideas.
+
 > **Maintenance note:** A line earns its place in this file only if it changes what Claude *does* in a typical session — a convention/invariant that prevents wrong code, a map that orients navigation, or a pointer to where detail lives. Forensic history ("project 13 Phase 1c"), exhaustive parameter/endpoint enumeration, and per-file mechanics belong in `docs/architecture/`, not here. Keep this file lean (~15KB); it is loaded into every session and every spawned subagent.
 
 ## Architecture
